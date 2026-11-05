@@ -7,7 +7,8 @@
     "./bun": "./src/bun/index.ts",
     "./cloudflare": "./src/cloudflare/index.ts",
     "./journal": "./src/shared/sql-journal.ts",
-    "./workspace": "./src/shared/workspace/index.ts"
+    "./workspace": "./src/shared/workspace/index.ts",
+    "./alchemy": "./src/alchemy/index.ts"
   },
   "dependencies": {
     "@clavia/tardigrade-bun": "workspace:*",
@@ -22,7 +23,9 @@
     "@effect/sql-sqlite-do": "4.1.2",
     "effect": "4.1.2",
     "just-bash": "3.6.0",
-    "@clavia/tardigrade-store": "workspace:*"
+    "@clavia/tardigrade-store": "workspace:*",
+    "@clavia/tardigrade-domain": "workspace:*",
+    "@alchemy.run/cloudflare": "2.0.0-beta.85"
   },
   "devDependencies": {
     "@cfworker/json-schema": "^4.1.1",

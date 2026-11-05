@@ -4,7 +4,7 @@ import { createBunHost, methodHttp, localWorkspace } from "tardie/platform/bun"
 import definition from "./actor"
 import { services } from "./services"
 
-const configPath = process.env.TARDIGRADE_CONFIG_PATH ?? "wrangler.jsonc"
+const configPath = process.env.TARDIGRADE_CONFIG_PATH ?? "tardigrade.json"
 const Config = Schema.Struct({ vars: Schema.Struct({ TARDIGRADE_CONFIG: Schema.Struct({ models: Schema.Unknown }) }) })
 const config = Schema.decodeUnknownSync(Config)(Bun.JSONC.parse(await Bun.file(configPath).text()))
 const host = await Effect.runPromise(createBunHost({

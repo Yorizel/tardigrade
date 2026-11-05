@@ -94,7 +94,7 @@ test("generated counter quickstart runs without model setup and recovers its cou
     child = undefined
   }
   try {
-    await run("init", "counter", "--json")
+    await run("init", "counter", "--template", "quickstart", "--json")
     cwd = join(root, "counter")
     expect(await readFile(join(cwd, "SKILL.md"), "utf8")).toContain("decrement")
     await bundleEntry(cwd, "worker.ts")

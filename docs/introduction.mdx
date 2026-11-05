@@ -190,7 +190,7 @@ bun run server.ts
 
 ### Cloud
 
-Run Tardigrade actors as Durable Objects on [Cloudflare](/docs/platforms/cloudflare) or self-host on your own cloud using [Celld](/docs/platforms/celld). Both use the same Worker entrypoint and configuration.
+Run Tardigrade actors as Durable Objects on [Cloudflare](/docs/platforms/cloudflare). The generated Alchemy stack owns infrastructure; the Worker entrypoint supplies the actor and thread implementations.
 
 ```ts title="worker.ts"
 import { Context } from "effect"
@@ -208,43 +208,15 @@ export const ThreadDO = worker.ThreadObject
 export default { fetch: worker.fetch }
 ```
 
-<Tip title="wrangler.jsonc">
-
-```json
-{
-  "name": "counter",
-  "main": "worker.ts",
-  "compatibility_date": "2026-11-01",
-  "compatibility_flags": ["nodejs_compat"],
-  "durable_objects": {
-    "bindings": [
-      { "name": "ACTORS", "class_name": "ActorDO" },
-      { "name": "THREADS", "class_name": "ThreadDO" }
-    ]
-  },
-  "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["ActorDO", "ThreadDO"] }
-  ]
-}
-```
-
-</Tip>
-
-Deploy to Cloudflare with the [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/install-and-update/):
+`tdg init` generates `alchemy.run.ts` with native Alchemy Worker and Durable Object declarations. The stack binds `ACTORS` and `THREADS`; Alchemy manages their SQLite namespace migrations. Model settings live in `tardigrade.json`, and credentials live in `.env` or the process environment.
 
 ```sh
-bun add -d wrangler
-bunx wrangler deploy
+bun run dev:cloudflare
+bun run plan:cloudflare --stage prod
+bun run deploy:cloudflare --stage prod
 ```
 
-For self-hosting, install the [Celld CLI](https://github.com/denoland/celld#install) and deploy to your fleet's storage bucket. Celld uses `esbuild` to bundle the Worker:
-
-```sh
-bun add -g esbuild
-celld deploy . --bucket s3://YOUR-BUCKET
-```
-
-[Start your Celld nodes](/docs/platforms/celld#configure-nodes) against the same bucket to serve the actor.
+See the [Cloudflare guide](/docs/platforms/cloudflare) for credentials, deployment state, and recovery.
 
 ## Explore
 

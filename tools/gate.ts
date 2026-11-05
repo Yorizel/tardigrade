@@ -12,8 +12,8 @@ type Task = {
 const root = `${realpathSync(fileURLToPath(new URL("../", import.meta.url)))}/`
 const pkg = (name: string) => `${root}packages/${name}`
 const deprecated = ["core", "agent", "host", "channels", "client", "http"].map((name) => `deprecated/${name}`)
-const packages = ["tardie", "core", "code", "agent", "libraries", "platform", "examples", "apps/cli", "model", "store", ...deprecated]
-const testedPackages = ["tardie", "code", "model", "core"]
+const packages = ["domain", "tardie", "core", "code", "agent", "libraries", "platform", "examples", "apps/cli", "model", "store", ...deprecated]
+const testedPackages = ["domain", "tardie", "code", "model", "core"]
 const packageId = (name: string) => name.replaceAll("/", "-")
 const platformPkg = (name: string) => `${root}platform/${name}`
 const platforms = ["bun", "worker-loader", "cloudflare"]
@@ -70,7 +70,7 @@ const tasks: ReadonlyArray<Task> = [
   { id: "pack:tardie", cmd: ["bun", "run", "tools/publish.ts", "--pack-only"] },
   { id: "test:publish-paths", cmd: ["bun", "test", "tools/publish-paths.test.ts"] },
   { id: "test:code-graph", cmd: ["bun", "test", "tools/code-graph/analyze.test.ts"] },
-  { id: "lint", cmd: ["bun", "--bun", "node_modules/.bin/oxlint"] },
+  { id: "lint", cmd: ["bun", "run", "lint"] },
   // Prose carries house rules the code linter does not know, so it has its own check.
   { id: "lint:docs", cmd: ["bun", "run", "tools/docs-lint.ts"] },
   { id: "lint:effect:policy", cmd: ["bun", "run", "tools/effect-lint-policy.ts"] },

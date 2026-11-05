@@ -114,7 +114,7 @@ describe("config", () => {
     } catch (error) {
       message = error instanceof Error ? error.message : String(error)
     }
-    expect(message).toContain("wrangler.jsonc")
+    expect(message).toContain("tardigrade.json")
     expect(message).toContain('"default":{"provider":"openai","model_id":"gpt-5.2"}')
     expect(message).toContain('"protocol":"<protocol>"')
     expect(message).toContain('"env":["<api-key-env>"]')

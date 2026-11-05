@@ -37,7 +37,7 @@ const configuredSet = new Set(configured)
 const shippedSet = new Set(shipped)
 const missing = shipped.filter((rule) => !configuredSet.has(rule))
 const unknown = configured.filter((rule) => !shippedSet.has(rule))
-const gateSeverities = new Set(["error", "off", "warning"])
+const gateSeverities = new Set(["error"])
 const nonGating = Object.entries(configuredRules)
   .filter(([, severity]) => typeof severity !== "string" || !gateSeverities.has(severity))
   .map(([rule, severity]) => `${rule}:${String(severity)}`)
@@ -51,4 +51,4 @@ if (missing.length > 0 || unknown.length > 0 || nonGating.length > 0) {
   throw new Error(`Effect lint policy does not match the installed rule catalog\n${details.join("\n")}`)
 }
 
-console.log(`Effect lint policy names all ${shipped.length} installed rules at gating severities`)
+console.log(`Effect lint policy names all ${shipped.length} installed rules at error severity`)

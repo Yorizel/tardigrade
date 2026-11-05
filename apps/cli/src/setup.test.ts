@@ -213,7 +213,7 @@ describe("writeSetup", () => {
       providersPath: join(root, "generated/providers.ts")
     })
     expect((await stat(files.secretsPath)).mode & 0o777).toBe(SECRETS_MODE)
-    expect(await readFile(gitignorePathIn(root), "utf8")).toContain(".dev.vars*")
+    expect(await readFile(gitignorePathIn(root), "utf8")).toContain(".env*")
   })
 
   test("configuration is JSONC and the credential is the only environment entry", async () => {
@@ -242,7 +242,7 @@ describe("writeSetup", () => {
     await writeFile(projectConfigPathIn(root), "{\n  // Keep this setting.\n  \"later\": true\n}\n")
     await write()
     expect(await readFile(envPathIn(root), "utf8")).toContain("# application\nAPP_NAME=release\n")
-    expect(await readFile(gitignorePathIn(root), "utf8")).toBe("dist/\n.dev.vars*\n")
+    expect(await readFile(gitignorePathIn(root), "utf8")).toBe("dist/\n.env*\n")
     const config = await readFile(projectConfigPathIn(root), "utf8")
     expect(config).toContain("// Keep this setting.")
     expect(config).toContain('"later": true')
@@ -400,7 +400,7 @@ test("provider updates preserve custom model definitions", async () => {
   const first = { ...answers, models: { local: { metadata: { contextWindowTokens: 32768, toolCall: true } } } }
   await write(first)
   await Effect.runPromise(writeProviderSetup(root, [{ ...answers, models: { another: { metadata: { contextWindowTokens: 8192 } } } }]).pipe(Effect.provide(BunFileSystem.layer)))
-  const document = parse(await readFile(join(root, "wrangler.jsonc"), "utf8"))
+  const document = parse(await readFile(join(root, "tardigrade.json"), "utf8"))
   expect(document.vars.TARDIGRADE_CONFIG.models.providers.openai.models).toEqual({
     local: { metadata: { contextWindowTokens: 32768, toolCall: true } },
     another: { metadata: { contextWindowTokens: 8192 } }

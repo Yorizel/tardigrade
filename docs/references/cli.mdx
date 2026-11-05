@@ -82,7 +82,7 @@ A custom provider declares its endpoint and protocol:
 tdg setup provider private-gateway '{"baseUrl":"https://models.example.com/v1","protocol":"openai-responses","env":["PRIVATE_MODEL_KEY"]}'
 ```
 
-Interactive setup stores local credentials in `.dev.vars` with mode 0600 and adds `.dev.vars*` to `.gitignore`. It never prints a stored credential. Project configuration stays in `wrangler.jsonc` and `celld.jsonc`. Every successful setup command refreshes `models.lock.json` and `generated/providers.ts`. The generated registry imports configured model implementations; `services.ts` remains editable. Use `tdg models lock` when CI or an operator needs to refresh the lock without changing provider configuration.
+Interactive setup stores local credentials in `.env` with mode 0600 and adds `.env*` to `.gitignore`. It never prints a stored credential. Project configuration stays in `tardigrade.json`. Every successful setup command refreshes `models.lock.json` and `generated/providers.ts`. The generated registry imports configured model implementations; `services.ts` remains editable. Use `tdg models lock` when CI or an operator needs to refresh the lock without changing provider configuration.
 
 Setup preserves unrelated platform settings, JSONC comments, local secret entries, and other provider connections. The model services select the provider implementation from the configured protocol. Configuration rejects unsupported protocols.
 
@@ -95,11 +95,11 @@ A command flag takes precedence over an environment variable. An environment var
 | Server to call | `--url` | | `http://localhost:4242` |
 | Bearer token | `--token` | `TARDIGRADE_TOKEN` | none |
 | Actor instance | `--actor` | | `main` |
-| Project configuration | | `TARDIGRADE_CONFIG_PATH` | `wrangler.jsonc` |
+| Project configuration | | `TARDIGRADE_CONFIG_PATH` | `tardigrade.json` |
 | Model catalog cache | | `TARDIGRADE_MODEL_CATALOG_CACHE` | `.tardigrade/models.json` |
-| Provider credentials | | Variables named by each provider's `env` list | Values saved by interactive setup in `.dev.vars` |
+| Provider credentials | | Variables named by each provider's `env` list | Values saved by interactive setup in `.env` |
 
-The generated `bun run dev` script starts `server.ts`. The counter stores instance databases in `.tardigrade/`; the agent template loads `.dev.vars` and uses `.tardigrade/`. Both store each instance's thread databases in a sibling `.sqlite.threads/` directory. Keep these directories present until the server stops. A deployment reads credentials from its platform secret store. Edit `server.ts` to supply application Effect services or change the server composition.
+The generated `bun run dev` script starts `server.ts`. The counter stores instance databases in `.tardigrade/`; the agent template loads `.env` and uses `.tardigrade/`. Both store each instance's thread databases in a sibling `.sqlite.threads/` directory. Keep these directories present until the server stops. A deployment reads credentials from its platform secret store. Edit `server.ts` to supply application Effect services or change the server composition.
 
 ## Validate and run locally
 
@@ -115,7 +115,7 @@ bun run dev
 
 ## Discover providers and models
 
-If your model is absent from the catalog, the interactive prompt asks for its context window, optional output limit, and tool support. Setup saves these values in the provider's model settings in `wrangler.jsonc` and includes them in `models.lock.json`.
+If your model is absent from the catalog, the interactive prompt asks for its context window, optional output limit, and tool support. Setup saves these values in the provider's model settings in `tardigrade.json` and includes them in `models.lock.json`.
 
 To create a project with a custom model, include `models` in the provider configuration:
 
@@ -158,9 +158,8 @@ tdg events root --types TurnFailed --actor researcher
 Deploy the generated Worker through either supported platform CLI:
 
 ```bash
-bunx wrangler deploy
-celld deploy --config celld.jsonc --dry-run
-celld deploy --config celld.jsonc
+bun run plan:cloudflare --stage prod
+bun run deploy:cloudflare --stage prod
 ```
 
-Set the provider variables named by each connection in the platform secret store before the actor handles model calls. See the [Cloudflare guide](../platforms/cloudflare.mdx) for Worker configuration and the [Celld guide](../platforms/celld.mdx) for fleet storage, variables, and rollout behavior.
+Supply the provider variables named by each connection through `.env` or the process environment. Alchemy binds them as Worker secrets. See the [Cloudflare guide](../platforms/cloudflare.mdx) for the stack, deployment state, and recovery behavior.

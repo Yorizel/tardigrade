@@ -164,5 +164,7 @@
   "./platform/journal": "./src/platform/shared/sql-journal.ts",
   "./libraries/filesystem": "./src/libraries/filesystem/index.ts",
   "./platform/workspace": "./src/platform/shared/workspace/index.ts",
-  "./store": "./src/store/index.ts"
+  "./store": "./src/store/index.ts",
+  "./domain": "./src/domain/index.ts",
+  "./platform/alchemy": "./src/platform/alchemy/index.ts"
 }

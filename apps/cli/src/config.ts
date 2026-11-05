@@ -51,7 +51,7 @@ export class ProjectFileError extends Data.TaggedError("ProjectFileError")<{
 }> {}
 
 // parseProjectConfig validates JSONC syntax and configuration that can start a host.
-export const parseProjectConfig = (raw: string, path = "wrangler.jsonc"): ProjectConfig => {
+export const parseProjectConfig = (raw: string, path = "tardigrade.json"): ProjectConfig => {
   const errors: Array<ParseError> = []
   const value = parse(raw, errors, { allowTrailingComma: true }) as unknown
   if (errors.length > 0) {

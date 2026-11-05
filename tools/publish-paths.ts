@@ -1,5 +1,5 @@
 import { cp, mkdir, rm } from "node:fs/promises"
-import { INIT_TEMPLATES } from "../apps/cli/src/template"
+import { ALCHEMY_TEMPLATE_FILES, INIT_TEMPLATES } from "../apps/cli/src/template"
 import { dirname, join, relative } from "node:path"
 
 // rewriteComponentRuntimeImports preserves private relative imports when packages share a staged source root (publish-paths.test.ts).
@@ -16,7 +16,12 @@ export const stageInitTemplates = async (root: string, stage: string): Promise<v
   await Promise.all(INIT_TEMPLATES.map(async template => {
     const target = join(destination, template)
     await mkdir(target, { recursive: true })
-    const files = template === "quickstart" ? ["actor.ts", "SKILL.md.template", "server.ts.template", "worker.ts.template"] : template === "agent" ? ["actor.ts", "services.ts.template", "server.ts.template", "worker.ts.template", "Dockerfile.template"] : ["actor.ts"]
+    const files = {
+      alchemy: ALCHEMY_TEMPLATE_FILES,
+      quickstart: ["actor.ts", "SKILL.md.template", "server.ts.template", "worker.ts.template"],
+      agent: ["actor.ts", "services.ts.template", "server.ts.template", "worker.ts.template", "Dockerfile.template"],
+      rlm: ["actor.ts"],
+    }[template]
     for (const file of files) await cp(join(root, "examples", template, file), join(target, file))
   }))
 }

@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { expect, test } from "bun:test"
+import { ALCHEMY_TEMPLATE_FILES } from "../apps/cli/src/template"
 import { rewriteComponentRuntimeImports, stageInitTemplates } from "./publish-paths"
 
 test("private runtime imports resolve inside the assembled package", () => {
@@ -28,10 +29,14 @@ test("template staging excludes local state and secrets, including stale output"
       await writeFile(join(source, ".env"), "SECRET=fixture")
       await writeFile(join(source, ".tardigrade", "actor.sqlite"), "private conversation")
     }
+    await mkdir(join(root, "examples", "alchemy"), { recursive: true })
+    for (const file of ALCHEMY_TEMPLATE_FILES) await writeFile(join(root, "examples", "alchemy", file), "native template")
+    await writeFile(join(root, "examples", "alchemy", ".env"), "SECRET=private")
     await mkdir(join(stage, "examples", "old-template"), { recursive: true })
     await writeFile(join(stage, "examples", "old-template", ".dev.vars"), "SECRET=stale")
     await stageInitTemplates(root, stage)
-    expect((await readdir(join(stage, "examples"))).sort()).toEqual(["agent", "quickstart", "rlm"])
+    expect((await readdir(join(stage, "examples"))).sort()).toEqual(["agent", "alchemy", "quickstart", "rlm"])
+    expect((await readdir(join(stage, "examples", "alchemy"))).sort()).toEqual([...ALCHEMY_TEMPLATE_FILES].sort())
     for (const template of ["quickstart", "agent", "rlm"]) {
       const target = join(stage, "examples", template)
       expect((await readdir(target)).sort()).toEqual(template === "quickstart" ? ["SKILL.md.template", "actor.ts", "server.ts.template", "worker.ts.template"] : template === "agent" ? ["Dockerfile.template", "actor.ts", "server.ts.template", "services.ts.template", "worker.ts.template"] : ["actor.ts"])

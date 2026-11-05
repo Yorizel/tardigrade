@@ -13,6 +13,8 @@
 
 # Tardigrade
 
+This fork defaults to a native Alchemy Domain agent scaffold. Domain owns thread state, commands, events, durable execution, approvals, and uncertain tool outcomes; Alchemy owns its Cloudflare hosting. See [the native runtime guide](docs/platforms/alchemy.mdx) for setup and migration boundaries. The original actor graph, CodeMode, sandbox, and subagent runtimes remain available through explicit legacy templates and have not been migrated.
+
 Tardigrade is a TypeScript framework for building durable, event-driven actors. It is built on [Effect TS](https://effect.website/) and takes a functional approach to managing agent state and effects, drawing inspiration from [Elm](https://elm-lang.org/), and [Jotai](https://jotai.org/).
 
 <p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/event-log-equation-dark.svg"><img src="assets/event-log-equation.svg" alt="{ view, effects } = f(event log)" width="240" height="34"></picture></p>
@@ -26,7 +28,7 @@ Start with a [counter actor](#counter-actor) to learn the primitives, or build a
 Create a counter project with the CLI:
 
 ```sh
-bunx tardie init counter
+bunx tardie init counter --template quickstart
 cd counter
 ```
 
@@ -199,21 +201,15 @@ ActorWorker -> ActorDO [supervisor DB]
 
 The [introduction](docs/introduction.mdx#cloud) shows a complete counter deployment with Durable Object bindings and migrations.
 
-Run locally with `bunx wrangler dev`; see [local setup](docs/platforms/cloudflare.mdx#verify-locally).
-
-[Cloudflare](https://developers.cloudflare.com/workers/wrangler/commands/#deploy):
+Generated projects keep model settings in `tardigrade.json` and credentials in `.env`. `tdg setup` writes the local credential file with mode 0600. Alchemy binds configured provider credentials as secrets through native `Config.Redacted` values.
 
 ```sh
-bunx wrangler deploy
+bun run dev:cloudflare
+bun run plan:cloudflare
+bun run deploy:cloudflare --stage prod
 ```
 
-Or deploy to a Celld fleet, using its storage bucket:
-
-```sh
-celld deploy --config celld.jsonc --bucket s3://actors
-```
-
-See the [Cloudflare](docs/platforms/cloudflare.mdx) and [Celld](docs/platforms/celld.mdx) guides for configuration and credentials. For a Bun process, see the [Bun example](packages/examples/bun.ts) and [service wiring](packages/examples/services.ts).
+Alchemy owns SQLite namespace migrations and applies D1 catalog migrations during deployment. The actor and thread classes use Alchemy's supported async Worker integration. The same actor graph runs locally through the Bun host. See the [Cloudflare guide](docs/platforms/cloudflare.mdx) for configuration and recovery.
 
 ## Contributing
 

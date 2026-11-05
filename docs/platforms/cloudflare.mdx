@@ -27,54 +27,42 @@ export default worker
 
 `services` comes from the generated `services.ts` and supplies model and tool implementations. `actorContext` selects the services visible to agent setup. `createActorWorker` supplies the Worker router, `ActorObject` directory class, and `ThreadObject` runtime class. Export both classes and bind both namespaces. `createActorObject` and `createThreadObject` supply the classes separately for custom Worker routing. Thread object names encode the full actor, instance, and thread coordinate through `cloudflareThreadName`.
 
+## Configure
+
+`tdg init` generates `alchemy.run.ts`, `worker.ts`, and `tardigrade.json`. The stack declares the Worker, binds `ACTORS` to `ActorDO` and `THREADS` to `ThreadDO`, and lets Alchemy own their SQLite namespace migrations. Agent projects also declare the workspace container image and its `SANDBOX` namespace. RLM projects declare the model catalog D1 database with its migrations and the Worker Loader binding.
+
+Model connections belong to `tardigrade.json`; model metadata belongs to `models.lock.json`. `tdg setup` updates those settings and saves prompted credentials to `.env` with mode 0600. Alchemy reads `.env` and the process environment, then binds each configured provider credential with native `Config.Redacted`. Set `TARDIGRADE_TOKEN` in the environment to require a bearer token on actor routes.
+
+The stack uses `Alchemy.localState()`. Keep its `.alchemy` directory between deployments of a stage. An existing Wrangler deployment requires an explicit ownership and data migration before adopting this stack; generating a project does not transfer existing namespaces.
+
 ## Verify locally
 
-Start with a project from the [Build an agent guide](/docs/build-an-agent), then install Wrangler in that project. Use a release that supports the `compatibility_date` in `wrangler.jsonc`; [updating Wrangler](https://developers.cloudflare.com/workers/wrangler/install-and-update/) also updates its local runtime:
-
-```bash
-bun add --dev wrangler@latest
-```
-
-Add each configured provider credential to `.dev.vars`. Interactive `tdg setup` saves credentials there; credentials supplied only through the environment must also be available to Wrangler. Authentication is optional: set `TARDIGRADE_TOKEN` to enable it.
-
-Start the Worker:
+Start with a project from the [Build an agent guide](/docs/build-an-agent):
 
 ```bash
 bun run dev:cloudflare
 ```
 
-When authentication is enabled, export `TARDIGRADE_TOKEN` in the calling shell with the value saved in `.dev.vars`; the CLI reads it automatically. Wrangler reads that file for the Worker; it does not export its values to another shell. Use the URL printed by Wrangler when allocating and calling a thread. `/healthz` is public; when authentication is enabled, the remaining commands require the token from `.dev.vars`:
+Use the URL printed by Alchemy when allocating and calling a thread. `/healthz` is public. When authentication is enabled, export the same `TARDIGRADE_TOKEN` in the calling shell; reading `.env` for the Worker does not export its values to other shells.
 
 ```bash
-curl http://localhost:8787/healthz
-tdg thread create --name quickstart --url http://localhost:8787
-tdg call message '{"text":"What is the weather in Singapore?"}' --thread quickstart --url http://localhost:8787
+curl "$ACTOR_URL/healthz"
+tdg thread create --name quickstart --url "$ACTOR_URL"
+tdg call message '{"text":"What is the weather in Singapore?"}' --thread quickstart --url "$ACTOR_URL"
 ```
-
-## Configure
-
-`tdg init` creates `wrangler.jsonc` and the Worker entry for your actor. Run `tdg setup` to select a model and write its visible configuration to the project.
-
-The generated manifest binds `ACTORS` to `ActorDO` and `THREADS` to `ThreadDO`, and declares both classes in its SQLite migration. Model metadata comes from `models.lock.json`, bundled with the Worker.
-
-Store the Tardigrade token and each model provider credential as Wrangler secrets:
-
-```bash
-bunx wrangler secret put TARDIGRADE_TOKEN
-bunx wrangler secret put OPENAI_API_KEY
-```
-
-Use the credential name configured for your provider in place of `OPENAI_API_KEY`.
 
 ## Deploy
 
-```bash variant="single"
-bunx wrangler deploy
+The Alchemy CLI and Cloudflare provider are direct dependencies of generated projects. Authenticate through an Alchemy profile, inspect the plan, and deploy the same stage:
+
+```bash
+bun run plan:cloudflare --stage prod
+bun run deploy:cloudflare --stage prod
 ```
 
-The deployed Worker exposes the same thread creation, method invocation, cancellation, and event routes used during local development.
+The deployed Worker exposes the same thread creation, method invocation, cancellation, and event routes used during local development. `bun run destroy:cloudflare --stage prod` removes that stage's resources, including its actor data.
 
-Independent routing requires directory entries with independent placement. Colocated journals require an explicit data migration before these factories can route them. For an existing Worker namespace, register `ThreadDO` in a new SQLite migration tag and add its `THREADS` binding.
+Independent routing requires directory entries with independent placement. Colocated journals require an explicit data migration before these factories can route them.
 
 ## Recovery
 

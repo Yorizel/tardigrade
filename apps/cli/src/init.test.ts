@@ -3,9 +3,8 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { join } from "node:path"
 
 import { buildActor } from "./build"
-import { CELLD_PROJECT_CONFIG_PATH } from "./celld"
 import { CLOUDFLARE_MODEL_CATALOG_MIGRATION } from "@clavia/tardigrade-cloudflare/catalog-migration"
-import { DEFAULT_ACTOR_ENTRY, DEFAULT_INIT_ACTOR_NAME, DEFAULT_MODEL_LOCK, DEFAULT_PACKAGE_MANIFEST, DEFAULT_SERVER_ENTRY, DEFAULT_WORKER_ENTRY, defaultInitDirectory, initActor, initSummary, terminalColorsEnabled } from "./init"
+import { DEFAULT_ACTOR_ENTRY, DEFAULT_ALCHEMY_ENTRY, DEFAULT_INIT_ACTOR_NAME, DEFAULT_MODEL_LOCK, DEFAULT_PACKAGE_MANIFEST, DEFAULT_SERVER_ENTRY, DEFAULT_WORKER_ENTRY, defaultInitDirectory, initActor, initSummary, terminalColorsEnabled } from "./init"
 
 let root = ""
 afterEach(async () => {
@@ -20,21 +19,38 @@ const temporaryRoot = async (): Promise<string> => {
 }
 
 describe("initActor", () => {
+  test("defaults to an actual native Domain scaffold", async () => {
+    const cwd = await temporaryRoot()
+    const initialized = await initActor("native-agent", { cwd })
+    expect(initialized.template).toBe("alchemy")
+    expect(initialized.modelLock).toBeUndefined()
+    const worker = await readFile(initialized.worker, "utf8")
+    expect(worker).toContain("DomainCloudflare.layerDurableObjects()")
+    expect(worker).toContain("ActorModel.layer(ActorHandlers)")
+    expect(worker).not.toContain("createActorWorker")
+    expect(await readFile(initialized.entry, "utf8")).toContain("disableToolCallResolution: true")
+    expect(await readFile(initialized.manifest, "utf8")).toContain("TARDIGRADE_ACTOR=native-agent")
+    const packageManifest = JSON.parse(await readFile(initialized.packageManifest, "utf8"))
+    expect(packageManifest.scripts.dev).toBe("alchemy dev")
+    expect(packageManifest.dependencies["@alchemy.run/domain"]).toBe("2.0.0-beta.85")
+    await expect(readFile(join(initialized.directory, "wrangler.jsonc"), "utf8")).rejects.toThrow()
+  })
+
   test("uses a visible quickstart name", () => {
     expect(DEFAULT_INIT_ACTOR_NAME).toBe("my-agent")
   })
 
   test("creates a buildable named quickstart", async () => {
     const cwd = await temporaryRoot()
-    const initialized = await initActor("reviewer", { cwd, now: new Date("2026-08-24T00:00:00Z"), packageVersion: "0.7.1-test", modelProvider: "openrouter" })
+    const initialized = await initActor("reviewer", { cwd, template: "quickstart", now: new Date("2026-08-24T00:00:00Z"), packageVersion: "0.7.1-test", modelProvider: "openrouter" })
     const source = await readFile(initialized.entry, "utf8")
     const server = await readFile(initialized.server, "utf8")
     const worker = await readFile(initialized.worker, "utf8")
     const manifestSource = await readFile(initialized.manifest, "utf8")
     const manifest = JSON.parse(manifestSource) as Record<string, unknown>
-    const celldManifest = JSON.parse(await readFile(initialized.celldManifest, "utf8")) as Record<string, unknown>
+    const alchemy = await readFile(initialized.alchemy, "utf8")
     const packageManifest = JSON.parse(await readFile(initialized.packageManifest, "utf8")) as Record<string, unknown>
-    const modelLock = JSON.parse(await readFile(initialized.modelLock, "utf8")) as Record<string, unknown>
+    const modelLock = JSON.parse(await readFile(join(initialized.directory, DEFAULT_MODEL_LOCK), "utf8")) as Record<string, unknown>
     await symlink(new URL("../../../node_modules", import.meta.url).pathname, join(initialized.directory, "node_modules"), "dir")
     const built = await buildActor(initialized.entry, { cwd: initialized.directory, out: "output" })
 
@@ -42,7 +58,7 @@ describe("initActor", () => {
     expect(initialized.entry).toBe(join(cwd, "reviewer", DEFAULT_ACTOR_ENTRY))
     expect(initialized.server).toBe(join(cwd, "reviewer", DEFAULT_SERVER_ENTRY))
     expect(initialized.worker).toBe(join(cwd, "reviewer", DEFAULT_WORKER_ENTRY))
-    expect(initialized.celldManifest).toBe(join(cwd, "reviewer", CELLD_PROJECT_CONFIG_PATH))
+    expect(initialized.alchemy).toBe(join(cwd, "reviewer", DEFAULT_ALCHEMY_ENTRY))
     expect(initialized.packageManifest).toBe(join(cwd, "reviewer", DEFAULT_PACKAGE_MANIFEST))
     expect(initialized.modelLock).toBe(join(cwd, "reviewer", DEFAULT_MODEL_LOCK))
     expect(initialized.catalogMigration).toBeUndefined()
@@ -58,41 +74,28 @@ describe("initActor", () => {
     expect(worker).toContain('from "tardie/platform/cloudflare"')
     expect(await readFile(join(initialized.directory, "SKILL.md"), "utf8")).toContain("tdg call increment null")
     await expect(readFile(join(initialized.directory, "services.ts"), "utf8")).rejects.toThrow()
-    expect(manifest).toMatchObject({
-      name: "reviewer",
-      main: "worker.ts",
-      compatibility_date: "2026-08-24",
-      durable_objects: { bindings: [
-        { name: "ACTORS", class_name: "ActorDO" },
-        { name: "THREADS", class_name: "ThreadDO" }
-      ] },
-      migrations: [{ tag: "v1", new_sqlite_classes: ["ActorDO", "ThreadDO"] }]
-    })
-    expect(manifest["d1_databases"]).toBeUndefined()
-    expect(Object.keys(celldManifest).sort()).toEqual([
-      "$schema",
-      "compatibility_date",
-      "compatibility_flags",
-      "durable_objects",
-      "main",
-      "migrations",
-      "name",
-      "vars"
-    ])
-    expect((celldManifest["vars"] as Record<string, string>)["TARDIGRADE_CONFIG"]).toBe("{}")
-    expect((celldManifest["vars"] as Record<string, string>)["TARDIGRADE_SANDBOX_TRANSPORT"]).toBe("replay")
-    expect((celldManifest["vars"] as Record<string, string>)["TARDIGRADE_BACKGROUND_TASK_OWNER"]).toBe("request")
+    expect(manifest).toEqual({ vars: { TARDIGRADE_CONFIG: {} } })
+    expect(alchemy).toContain('Alchemy.Stack(')
+    expect(alchemy).toContain('"reviewer"')
+    expect(alchemy).toContain('date: "2026-08-24"')
+    expect(alchemy).toContain('Cloudflare.DurableObject<InstanceType<typeof ActorDO>>("ACTORS", { className: "ActorDO" })')
+    expect(alchemy).toContain('Cloudflare.DurableObject<InstanceType<typeof ThreadDO>>("THREADS", { className: "ThreadDO" })')
+    await expect(readFile(join(initialized.directory, "wrangler.jsonc"), "utf8")).rejects.toThrow()
+    await expect(readFile(join(initialized.directory, "celld.jsonc"), "utf8")).rejects.toThrow()
     expect(packageManifest).toMatchObject({
       private: true,
       type: "module",
       scripts: {
         dev: "bun --watch server.ts",
-        "dev:cloudflare": "bunx wrangler dev",
-        "deploy:cloudflare": "bunx wrangler deploy",
-        "deploy:celld": "celld deploy --config celld.jsonc"
+        "dev:cloudflare": "alchemy dev",
+        "plan:cloudflare": "alchemy plan",
+        "deploy:cloudflare": "alchemy deploy",
+        "destroy:cloudflare": "alchemy destroy"
       },
       dependencies: {
         "@effect/platform-bun": expect.any(String),
+        alchemy: "2.0.0-beta.85",
+        "@alchemy.run/cloudflare": "2.0.0-beta.85",
         effect: expect.any(String),
         tardie: "0.7.1-test"
       },
@@ -105,20 +108,47 @@ describe("initActor", () => {
     expect(built.manifest.name).toBe("reviewer")
   })
 
+  for (const template of ["quickstart", "agent", "rlm"] as const) {
+    test(`typechecks the generated ${template} Alchemy stack`, async () => {
+      const cwd = await temporaryRoot()
+      const initialized = await initActor("native-host", { cwd, template })
+      const repository = new URL("../../../", import.meta.url).pathname
+      await symlink(join(repository, "node_modules"), join(initialized.directory, "node_modules"), "dir")
+      await writeFile(join(initialized.directory, "tsconfig.json"), JSON.stringify({
+        compilerOptions: {
+          strict: true,
+          exactOptionalPropertyTypes: true,
+          noEmit: true,
+          skipLibCheck: true,
+          module: "esnext",
+          moduleResolution: "bundler",
+          target: "es2023",
+          resolveJsonModule: true,
+          types: ["bun", "@cloudflare/workers-types"],
+        },
+        include: ["*.ts", "generated/*.ts"],
+      }))
+      const child = Bun.spawn([process.execPath, "--bun", join(repository, "node_modules/.bin/tsc"), "-p", join(initialized.directory, "tsconfig.json")], { stdout: "pipe", stderr: "pipe" })
+      const output = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
+      expect(output.slice(1).join("\n").trim()).toBe("")
+      expect(output[0]).toBe(0)
+    }, 30_000)
+  }
+
   test("requires ownership of a new target", async () => {
     const cwd = await temporaryRoot()
     const directory = join(cwd, "reviewer")
-    const held = join(directory, "wrangler.jsonc")
+    const held = join(directory, "tardigrade.json")
     await mkdir(directory)
     await writeFile(held, "keep me", "utf8")
 
-    await expect(initActor("reviewer", { cwd })).rejects.toThrow("target already exists")
+    await expect(initActor("reviewer", { cwd, template: "quickstart" })).rejects.toThrow("target already exists")
     expect(await readFile(held, "utf8")).toBe("keep me")
   })
 
   test("writes into a stated directory", async () => {
     const cwd = await temporaryRoot()
-    const initialized = await initActor("reviewer", { cwd, directory: "actors/custom" })
+    const initialized = await initActor("reviewer", { cwd, template: "quickstart", directory: "actors/custom" })
 
     expect(initialized.entry).toBe(join(cwd, "actors", "custom", DEFAULT_ACTOR_ENTRY))
   })
@@ -129,6 +159,9 @@ describe("initActor", () => {
 
     expect(await readFile(initialized.entry, "utf8")).toContain("codeMode([")
     expect(await readFile(initialized.catalogMigration!, "utf8")).toBe(CLOUDFLARE_MODEL_CATALOG_MIGRATION)
+    const alchemy = await readFile(initialized.alchemy, "utf8")
+    expect(alchemy).toContain('Cloudflare.D1.Database("Catalog", { migrations: "./migrations" })')
+    expect(alchemy).toContain('Cloudflare.WorkerLoader("LOADER")')
   })
 
 })
@@ -137,10 +170,12 @@ describe("initSummary", () => {
   test("prints the complete local path", async () => {
     const cwd = await temporaryRoot()
     const initialized = await initActor("reviewer", { cwd, template: "agent" })
+    const alchemy = await readFile(initialized.alchemy, "utf8")
+    expect(alchemy).toContain('Cloudflare.Container("current"')
+    expect(alchemy).toContain('containers: [workspace]')
     const summary = initSummary(initialized, {
       configPath: initialized.manifest,
-      celldConfigPath: initialized.celldManifest,
-      secretsPath: join(initialized.directory, ".dev.vars")
+      secretsPath: join(initialized.directory, ".env")
     }, {
       provider: "openrouter",
       baseUrl: "https://openrouter.ai/api/v1",
@@ -158,11 +193,11 @@ describe("initSummary", () => {
                 generated/providers.ts
                 worker.ts
                 container/Dockerfile
-                wrangler.jsonc
-                celld.jsonc
+                tardigrade.json
+                alchemy.run.ts
                 package.json
                 models.lock.json
-    credential  OPENROUTER_API_KEY (.dev.vars)
+    credential  OPENROUTER_API_KEY (.env)
 
   → next
     cd reviewer
@@ -173,8 +208,7 @@ describe("initSummary", () => {
     tdg call message '{"text":"List the files here and summarize the README."}' --thread main
 
   ↗ deploy
-    Cloudflare  bunx wrangler deploy
-    Celld       celld deploy --config celld.jsonc
+    Cloudflare  bun run deploy:cloudflare
 
   ? help
     https://discord.gg/Z74jwRxz4k

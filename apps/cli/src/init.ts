@@ -1,11 +1,11 @@
+import { ACTOR_NAME_PATTERN } from "tardie/deprecated"
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { relative, resolve } from "node:path"
 import { DEFAULT_PROJECT_CONFIG_PATH } from "@clavia/tardigrade-server/config"
 import { CLOUDFLARE_MODEL_CATALOG_MIGRATION } from "@clavia/tardigrade-cloudflare/catalog-migration"
 import { modelProviderModuleOf, type ModelProtocol } from "@clavia/tardigrade-model/providers/directory"
 
-import { CELLD_PROJECT_CONFIG_PATH, celldConfigOf } from "./celld"
-import { actorTemplate, DEFAULT_INIT_TEMPLATE, type InitTemplate } from "./template"
+import { actorTemplate, ALCHEMY_TEMPLATE_FILES, DEFAULT_INIT_TEMPLATE, type InitTemplate } from "./template"
 import type { SetupAnswers, SetupFiles } from "./setup"
 import { dependencyVersionIn, versionIn } from "./version"
 import { callCommand, RLM_ONBOARDING_BRIEF, shellWord } from "./workflow"
@@ -16,6 +16,7 @@ export const DEFAULT_ACTOR_ENTRY = "actor.ts"
 export const DEFAULT_INIT_ACTOR_NAME = "my-agent"
 export const DEFAULT_SERVER_ENTRY = "server.ts"
 export const DEFAULT_WORKER_ENTRY = "worker.ts"
+export const DEFAULT_ALCHEMY_ENTRY = "alchemy.run.ts"
 export const DEFAULT_PACKAGE_MANIFEST = "package.json"
 export const DEFAULT_MODEL_LOCK = MODEL_LOCK_FILE
 export const DEFAULT_CATALOG_MIGRATION = "migrations/0001_catalog.sql"
@@ -40,46 +41,84 @@ export interface InitializedActor {
   readonly server: string
   readonly worker: string
   readonly manifest: string
-  readonly celldManifest: string
+  readonly alchemy: string
   readonly packageManifest: string
-  readonly modelLock: string
+  readonly modelLock?: string
   readonly catalogMigration?: string
 }
 
 export const defaultInitDirectory = (name: string): string => name
 
-const manifestTemplate = (name: string, now: Date): string => `${JSON.stringify({
-  $schema: "./node_modules/wrangler/config-schema.json",
-  name,
-  main: DEFAULT_WORKER_ENTRY,
-  compatibility_date: now.toISOString().slice(0, 10),
-  compatibility_flags: ["nodejs_compat"],
-  durable_objects: {
-    bindings: [
-      { name: "ACTORS", class_name: "ActorDO" },
-      { name: "THREADS", class_name: "ThreadDO" }
-    ]
-  },
-  worker_loaders: [{ binding: "LOADER" }],
-  migrations: [{ tag: "v1", new_sqlite_classes: ["ActorDO", "ThreadDO"] }],
-  d1_databases: [{
-    binding: "CATALOG_DB",
-    database_name: `${name}-catalog`,
-    migrations_dir: "migrations"
-  }],
-  observability: { enabled: true },
-  limits: { cpu_ms: 300_000 },
-  vars: {
-    TARDIGRADE_ALARM_DELAY_MILLIS: "120000",
-    TARDIGRADE_COMPACTION_FIRE_RATIO: "0.8",
-    TARDIGRADE_COMPACTION_KEEP_RATIO: "0.5",
-    TARDIGRADE_MAX_CONCURRENT_THREADS: "4",
-    TARDIGRADE_MODEL_CATALOG_URL: "https://models.dev/api.json",
-    TARDIGRADE_MODEL_CATALOG_LOAD_POLICY: "refresh",
-    TARDIGRADE_MODEL_CATALOG_TIMEOUT_MILLIS: "10000",
-    TARDIGRADE_CONFIG: {}
+const manifestTemplate = (template: Exclude<InitTemplate, "alchemy">): string => {
+  const vars = {
+    quickstart: { TARDIGRADE_CONFIG: {} },
+    agent: { TARDIGRADE_CONFIG: {} },
+    rlm: {
+      TARDIGRADE_ALARM_DELAY_MILLIS: "120000",
+      TARDIGRADE_COMPACTION_FIRE_RATIO: "0.8",
+      TARDIGRADE_COMPACTION_KEEP_RATIO: "0.5",
+      TARDIGRADE_MAX_CONCURRENT_THREADS: "4",
+      TARDIGRADE_MODEL_CATALOG_URL: "https://models.dev/api.json",
+      TARDIGRADE_MODEL_CATALOG_LOAD_POLICY: "refresh",
+      TARDIGRADE_MODEL_CATALOG_TIMEOUT_MILLIS: "10000",
+      TARDIGRADE_CONFIG: {},
+    },
   }
-}, undefined, 2)}\n`
+  return `${JSON.stringify({ vars: vars[template] }, null, 2)}\n`
+}
+
+const alchemyTemplate = (name: string, template: Exclude<InitTemplate, "alchemy">, now: Date): string => {
+  const imports = {
+    quickstart: 'import type { ActorDO, ThreadDO } from "./worker"',
+    agent: 'import type { ActorDO, ThreadDO, Sandbox } from "./worker"',
+    rlm: 'import type { ActorDO, ThreadDO } from "./worker"',
+  }
+  const resources = {
+    quickstart: "",
+    agent: `    const workspace = Cloudflare.Container("current", {
+      schedulingPolicy: "durable_object",
+      context: "./container",
+      dockerfile: "Dockerfile",
+    })\n`,
+    rlm: '    const catalog = yield* Cloudflare.D1.Database("Catalog", { migrations: "./migrations" })\n',
+  }
+  const bindings = {
+    quickstart: "",
+    agent: '        SANDBOX: Cloudflare.DurableObject<InstanceType<typeof Sandbox>>("SANDBOX", { className: "Sandbox", containers: [workspace] }),\n',
+    rlm: '        LOADER: Cloudflare.WorkerLoader("LOADER"),\n        CATALOG_DB: catalog,\n',
+  }
+  return `import * as Alchemy from "alchemy"
+import * as Cloudflare from "@alchemy.run/cloudflare"
+import { Config, Effect, Option } from "effect"
+import { readProjectConfig } from "tardie/deprecated/cli/config"
+import project from "./${DEFAULT_PROJECT_CONFIG_PATH}"
+${imports[template]}
+
+export default Alchemy.Stack(
+  ${JSON.stringify(name)},
+  { providers: Cloudflare.providers(), state: Alchemy.localState() },
+  Effect.gen(function* () {
+    const config = yield* readProjectConfig(import.meta.dirname).pipe(Effect.orDie)
+    const token = yield* Config.option(Config.Redacted("TARDIGRADE_TOKEN"))
+    const credentials = Object.fromEntries(Object.values(config.models.providers).flatMap(provider => provider.env.map(name => [name, Config.Redacted(name)])))
+${resources[template]}    const worker = yield* Cloudflare.Worker("Actor", {
+      main: "./worker.ts",
+      compatibility: { date: ${JSON.stringify(now.toISOString().slice(0,10))}, flags: ["nodejs_compat"] },
+      observability: { enabled: true },
+      limits: { cpuMs: 300_000 },
+      env: {
+        ...project.vars,
+        ...credentials,
+        ...Option.match(token, { onNone: () => ({}), onSome: TARDIGRADE_TOKEN => ({ TARDIGRADE_TOKEN }) }),
+        ACTORS: Cloudflare.DurableObject<InstanceType<typeof ActorDO>>("ACTORS", { className: "ActorDO" }),
+        THREADS: Cloudflare.DurableObject<InstanceType<typeof ThreadDO>>("THREADS", { className: "ThreadDO" }),
+${bindings[template]}      },
+    })
+    return { url: worker.url }
+  }),
+)
+`
+}
 
 const workerTemplate = (provider: string): string => `import { providerLayer } from "tardie/model/providers/${provider}"
 import definition from "./actor"
@@ -137,18 +176,23 @@ const packageTemplate = (
   version: string,
   effectVersion: string,
   platformBunVersion: string,
+  alchemyVersion: string,
+  cloudflareVersion: string,
   template: InitTemplate
 ): string => `${JSON.stringify({
   private: true,
   type: "module",
   scripts: {
-    dev: template === "quickstart" ? `bun --watch ${DEFAULT_SERVER_ENTRY}` : `bun --env-file=.dev.vars --watch ${DEFAULT_SERVER_ENTRY}`,
-    "dev:cloudflare": "bunx wrangler dev",
-    "deploy:cloudflare": "bunx wrangler deploy",
-    "deploy:celld": `celld deploy --config ${CELLD_PROJECT_CONFIG_PATH}`
+    dev: template === "quickstart" ? `bun --watch ${DEFAULT_SERVER_ENTRY}` : `bun --env-file=.env --watch ${DEFAULT_SERVER_ENTRY}`,
+    "dev:cloudflare": "alchemy dev",
+    "plan:cloudflare": "alchemy plan",
+    "deploy:cloudflare": "alchemy deploy",
+    "destroy:cloudflare": "alchemy destroy"
   },
   dependencies: {
     "@effect/platform-bun": platformBunVersion,
+    "@alchemy.run/cloudflare": cloudflareVersion,
+    alchemy: alchemyVersion,
     effect: effectVersion,
     tardie: version
   },
@@ -158,34 +202,56 @@ const packageTemplate = (
   }
 }, undefined, 2)}\n`
 
+const initAlchemyActor = async (name: string, options: InitActorOptions): Promise<InitializedActor> => {
+  if (!ACTOR_NAME_PATTERN.test(name)) throw new Error("actor name is invalid")
+  if (options.modelProvider !== undefined || options.modelProtocol !== undefined || options.modelLock !== undefined) throw new Error("The Alchemy template configures native provider Layers in AgentExecution.ts and settings in .env")
+  const directory = resolve(options.cwd ?? process.cwd(), options.directory ?? name)
+  const packageVersion = options.packageVersion ?? await versionIn(import.meta.url)
+  const dependencies = Object.fromEntries(await Promise.all(["alchemy", "@alchemy.run/cloudflare", "@alchemy.run/domain", "@effect/platform-bun", "@effect/ai-openai", "effect"].map(async dependency => [dependency, await dependencyVersionIn(dependency, import.meta.url)] as const)))
+  if (packageVersion.endsWith("-unknown") || Object.values(dependencies).some(version => version.endsWith("-unknown"))) throw new Error("cannot determine native project dependency versions")
+  const created = await mkdir(directory, { recursive: true })
+  if (created === undefined) throw new Error(`init target already exists at ${directory}. Choose a new directory.`)
+  try {
+    for (const file of ALCHEMY_TEMPLATE_FILES) {
+      const content = await readFile(new URL(`../../examples/alchemy/${file}`, import.meta.url), "utf8").catch(() => readFile(new URL(`../../../examples/alchemy/${file}`, import.meta.url), "utf8"))
+      if (file === ".env.example") {
+        await writeFile(resolve(directory, file), content.replace("TARDIGRADE_ACTOR=assistant", `TARDIGRADE_ACTOR=${name}`), "utf8")
+      } else if (file === "worker.ts") {
+        await writeFile(resolve(directory, file), content.replace('date: "2026-11-05"', `date: ${JSON.stringify((options.now ?? new Date()).toISOString().slice(0, 10))}`), "utf8")
+      } else if (file === "alchemy.run.ts") {
+        await writeFile(resolve(directory, file), content.replace('"tardigrade",', `${JSON.stringify(name)},`), "utf8")
+      } else {
+        await writeFile(resolve(directory, file), content, "utf8")
+      }
+    }
+    await writeFile(resolve(directory, ".gitignore"), ".env\n.env.*\n!.env.example\n.alchemy/\nnode_modules/\n", "utf8")
+    await writeFile(resolve(directory, DEFAULT_PACKAGE_MANIFEST), `${JSON.stringify({ private: true, type: "module", scripts: { dev: "alchemy dev", "dev:cloudflare": "alchemy dev", "dev:memory": "bun --env-file=.env server.ts", "plan:cloudflare": "alchemy plan", "deploy:cloudflare": "alchemy deploy", "destroy:cloudflare": "alchemy destroy", cli: "bun --env-file=.env client.ts" }, dependencies: { ...dependencies, tardie: packageVersion } }, null, 2)}\n`, "utf8")
+    return { name, directory, entry: resolve(directory, "AgentExecution.ts"), server: resolve(directory, "server.ts"), worker: resolve(directory, "worker.ts"), alchemy: resolve(directory, "alchemy.run.ts"), manifest: resolve(directory, ".env.example"), packageManifest: resolve(directory, DEFAULT_PACKAGE_MANIFEST), template: "alchemy" }
+  } catch (error) {
+    await rm(directory, { recursive: true, force: true })
+    throw error
+  }
+}
+
 export const initActor = async (name: string, options: InitActorOptions): Promise<InitializedActor> => {
+  const template = options.template ?? DEFAULT_INIT_TEMPLATE
+  if (template === "alchemy") return initAlchemyActor(name, options)
   const cwd = options.cwd ?? process.cwd()
   const directory = resolve(cwd, options.directory ?? defaultInitDirectory(name))
   const entry = resolve(directory, DEFAULT_ACTOR_ENTRY)
   const server = resolve(directory, DEFAULT_SERVER_ENTRY)
   const worker = resolve(directory, DEFAULT_WORKER_ENTRY)
   const manifest = resolve(directory, DEFAULT_PROJECT_CONFIG_PATH)
-  const celldManifest = resolve(directory, CELLD_PROJECT_CONFIG_PATH)
+  const alchemy = resolve(directory, DEFAULT_ALCHEMY_ENTRY)
   const packageManifest = resolve(directory, DEFAULT_PACKAGE_MANIFEST)
   const modelLock = resolve(directory, DEFAULT_MODEL_LOCK)
   const catalogMigration = resolve(directory, DEFAULT_CATALOG_MIGRATION)
   const source = await actorTemplate({
     name,
-    ...(options.template === undefined ? {} : { template: options.template })
+    template,
   })
-  const template = options.template ?? DEFAULT_INIT_TEMPLATE
   const modern = template !== "rlm"
-  const manifestValue = JSON.parse(manifestTemplate(name, options.now ?? new Date()))
-  if (modern) {
-    delete manifestValue.worker_loaders
-    delete manifestValue.d1_databases
-    manifestValue.vars = { TARDIGRADE_CONFIG: {} }
-    if (template === "agent") {
-      manifestValue.durable_objects.bindings.push({ name: "SANDBOX", class_name: "Sandbox" })
-      manifestValue.migrations[0]!.new_sqlite_classes.push("Sandbox")
-    }
-  }
-  const manifestSource = `${JSON.stringify({ ...manifestValue, ...(template === "agent" ? { containers: [{ class_name: "Sandbox", scheduling_policy: "durable_object", images: { current: { dockerfile: "container/Dockerfile", build_context: "container" } } }] } : {}) }, null, 2)}\n`
+  const manifestSource = manifestTemplate(template)
   const templateFile = (file: string) => readFile(new URL(`../../examples/${template}/${file}.template`, import.meta.url), "utf8").catch(() => readFile(new URL(`../../../examples/${template}/${file}.template`, import.meta.url), "utf8"))
   const packageVersion = options.packageVersion ?? await versionIn(import.meta.url)
   if (packageVersion.endsWith("-unknown")) throw new Error("cannot determine the installed Tardigrade version")
@@ -193,6 +259,12 @@ export const initActor = async (name: string, options: InitActorOptions): Promis
   const platformBunVersion = await dependencyVersionIn("@effect/platform-bun", import.meta.url)
   if (effectVersion.endsWith("-unknown") || platformBunVersion.endsWith("-unknown")) {
     throw new Error("cannot determine the installed Effect versions")
+  }
+
+  const alchemyVersion = await dependencyVersionIn("alchemy", import.meta.url)
+  const cloudflareVersion = await dependencyVersionIn("@alchemy.run/cloudflare", import.meta.url)
+  if (alchemyVersion.endsWith("-unknown") || cloudflareVersion.endsWith("-unknown")) {
+    throw new Error("cannot determine the installed Alchemy versions")
   }
 
   const created = await mkdir(directory, { recursive: true })
@@ -211,8 +283,8 @@ export const initActor = async (name: string, options: InitActorOptions): Promis
       await writeFile(resolve(directory, PROVIDER_REGISTRY_FILE), providerRegistrySource(options.modelLock?.providers ?? {}), "utf8")
     }
     await writeFile(manifest, manifestSource, "utf8")
-    await writeFile(celldManifest, celldConfigOf(manifestSource, manifest).source, "utf8")
-    await writeFile(packageManifest, packageTemplate(packageVersion, effectVersion, platformBunVersion, template), "utf8")
+    await writeFile(alchemy, alchemyTemplate(name, template, options.now ?? new Date()), "utf8")
+    await writeFile(packageManifest, packageTemplate(packageVersion, effectVersion, platformBunVersion, alchemyVersion, cloudflareVersion, template), "utf8")
     await writeFile(modelLock, `${JSON.stringify(options.modelLock ?? emptyModelLock(), null, 2)}\n`, "utf8")
     if (!modern) {
       await mkdir(resolve(directory, "migrations"))
@@ -223,7 +295,7 @@ export const initActor = async (name: string, options: InitActorOptions): Promis
     throw error
   }
 
-  return { name, directory, entry, server, worker, manifest, celldManifest, packageManifest, modelLock, ...(!modern ? { catalogMigration } : {}), template: options.template ?? DEFAULT_INIT_TEMPLATE }
+  return { name, directory, entry, server, worker, manifest, alchemy, packageManifest, modelLock, ...(!modern ? { catalogMigration } : {}), template: options.template ?? DEFAULT_INIT_TEMPLATE }
 }
 
 const shownPath = (cwd: string, path: string): string => {
@@ -253,6 +325,7 @@ export const initSummary = (
   answers: SetupAnswers | undefined,
   options: InitSummaryOptions = {}
 ): string => {
+  if (actor.template === "alchemy") return `Created ${actor.name} in ${actor.directory}\nNative Domain model: Thread aggregate, RunExecution policy, ExecuteRun saga.\nCopy .env.example to .env and supply the required settings.\nRun bun run dev; use bun run cli --help for native commands.\n`
   const colors = options.colors ?? false
   const cwd = options.cwd ?? process.cwd()
   const directory = shownPath(cwd, actor.directory)
@@ -268,9 +341,9 @@ export const initSummary = (
     summaryField("", shownPath(actor.directory, actor.worker), colors),
     ...(actor.template === "agent" ? [summaryField("", "container/Dockerfile", colors)] : []),
     summaryField("", shownPath(actor.directory, actor.manifest), colors),
-    summaryField("", shownPath(actor.directory, actor.celldManifest), colors),
+    summaryField("", shownPath(actor.directory, actor.alchemy), colors),
     summaryField("", shownPath(actor.directory, actor.packageManifest), colors),
-    summaryField("", shownPath(actor.directory, actor.modelLock), colors),
+    ...(actor.modelLock === undefined ? [] : [summaryField("", shownPath(actor.directory, actor.modelLock), colors)]),
     ...(actor.catalogMigration ? [summaryField("", shownPath(actor.directory, actor.catalogMigration), colors)] : []),
     ...(actor.template === "quickstart" ? [summaryField("", "SKILL.md", colors)] : []),
     ...(credential === undefined ? [] : [summaryField("credential", credential, colors)]),
@@ -285,8 +358,7 @@ export const initSummary = (
     actor.template === "quickstart" ? "  tdg call increment null --thread main" : actor.template === "agent" ? '  tdg call message \'{"text":"List the files here and summarize the README."}\' --thread main' : `  ${callCommand(RLM_ONBOARDING_BRIEF)}`,
     "",
     styled("↗ deploy", "1;36", colors),
-    summaryField("Cloudflare", "bunx wrangler deploy", colors),
-    summaryField("Celld", `celld deploy --config ${shellWord(shownPath(actor.directory, actor.celldManifest))}`, colors),
+    summaryField("Cloudflare", "bun run deploy:cloudflare", colors),
     "",
     styled("? help", "1;36", colors),
     `  ${DISCORD_INVITE_URL}`

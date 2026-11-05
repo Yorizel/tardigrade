@@ -17,7 +17,7 @@ test("Bun model services use locked definitions through startup and restart with
   const fetch = spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected registry access"))
   const directory = await mkdtemp(join(tmpdir(), "model-services-"))
   try {
-    const configFile = join(directory, "wrangler.jsonc")
+    const configFile = join(directory, "tardigrade.json")
     await writeFile(configFile, JSON.stringify({ vars: { TARDIGRADE_CONFIG: { models: {
       allow: "*",
       providers: { openai: { protocol: "openai-responses", baseUrl: "https://example.test/v1", env: ["OLD_MANIFEST_KEY"] } },
@@ -98,7 +98,7 @@ test("Bun upcasts a legacy lock at startup without changing the saved file", asy
     const models = modelConfigOf({ allow: "*", default: { provider: "custom", model_id: "small" }, providers: {
       custom: { protocol: "openai-chat-completions", baseUrl: "https://custom.test/v1", env: ["CUSTOM_KEY"] }
     } })
-    const configFile = join(directory, "wrangler.jsonc")
+    const configFile = join(directory, "tardigrade.json")
     await writeFile(configFile, JSON.stringify({ vars: { TARDIGRADE_CONFIG: { models } } }))
     const legacy = { schema: 1, configDigest: await sha256Of(canonicalModelConfig(models)), catalog: {
       source: "custom", revision: "saved", refreshedAt: 1, status: "cached",

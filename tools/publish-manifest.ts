@@ -18,6 +18,7 @@ import core from "../packages/core/package.json"
 import agent from "../packages/agent/package.json"
 import libraries from "../packages/libraries/package.json"
 import store from "../packages/store/package.json"
+import domain from "../packages/domain/package.json"
 
 interface DependencyManifest {
   readonly name: string
@@ -27,6 +28,7 @@ interface DependencyManifest {
 }
 
 export const publishSources = [
+  { dir: "packages/domain", namespace: "domain", pkg: domain },
   { dir: "packages/store", namespace: "store", pkg: store },
   { dir: "packages/agent", namespace: "agent", pkg: agent },
   { dir: "packages/libraries", namespace: "libraries", pkg: libraries },
@@ -49,6 +51,10 @@ export const publishSources = [
 ] as const
 
 export const REQUIRED_PUBLISH_DEPENDENCIES = [
+  "alchemy",
+  "@alchemy.run/cloudflare",
+  "@alchemy.run/domain",
+  "@effect/ai-openai",
   "just-bash",
   "@cloudflare/sandbox",
   "@cfworker/json-schema",

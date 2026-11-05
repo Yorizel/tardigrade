@@ -26,8 +26,8 @@ describe("actorTemplate", () => {
     const built = await build(source)
 
     expect(built.manifest.name).toBe("reviewer")
-    expect(DEFAULT_INIT_TEMPLATE).toBe("quickstart")
-    expect(INIT_TEMPLATES).toEqual(["quickstart", "agent", "rlm"])
+    expect(DEFAULT_INIT_TEMPLATE).toBe("alchemy")
+    expect(INIT_TEMPLATES).toEqual(["alchemy", "quickstart", "agent", "rlm"])
     expect(source).toContain('const actorName = "reviewer"')
     expect(source).toContain("defineActor(actorName, Effect.sync")
     expect(source).toContain("Incremented")

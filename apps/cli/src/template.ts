@@ -6,14 +6,16 @@ import { fileURLToPath } from "node:url"
 export interface ActorTemplateOptions {
   readonly name: string
   readonly instructions?: string
-  readonly template?: InitTemplate
+  readonly template?: Exclude<InitTemplate, "alchemy">
 }
 
-export const INIT_TEMPLATES = ["quickstart", "agent", "rlm"] as const
-export type InitTemplate = typeof INIT_TEMPLATES[number]
-export const DEFAULT_INIT_TEMPLATE: InitTemplate = "quickstart"
+export const ALCHEMY_TEMPLATE_FILES = ["AgentExecution.ts", "alchemy.run.ts", "worker.ts", "server.ts", "client.ts", ".env.example", "SKILL.md"] as const
 
-export const actorTemplateCandidates = (template: InitTemplate): ReadonlyArray<string> => [
+export const INIT_TEMPLATES = ["alchemy", "quickstart", "agent", "rlm"] as const
+export type InitTemplate = typeof INIT_TEMPLATES[number]
+export const DEFAULT_INIT_TEMPLATE: InitTemplate = "alchemy"
+
+export const actorTemplateCandidates = (template: Exclude<InitTemplate, "alchemy">): ReadonlyArray<string> => [
   `../../examples/${template}/actor.ts`,
   `../../../examples/${template}/actor.ts`
 ]
@@ -63,7 +65,7 @@ export const loadActorTemplate = async (candidates: ReadonlyArray<string>): Prom
 
 export const actorTemplate = async (
   options: ActorTemplateOptions,
-  candidates: ReadonlyArray<string> = actorTemplateCandidates(options.template ?? DEFAULT_INIT_TEMPLATE).map((candidate) =>
+  candidates: ReadonlyArray<string> = actorTemplateCandidates(options.template ?? "quickstart").map((candidate) =>
     fileURLToPath(new URL(candidate, import.meta.url))
   )
 ): Promise<string> => renderActorTemplate(await loadActorTemplate(candidates), options)

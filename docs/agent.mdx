@@ -80,7 +80,7 @@ import agent from "./actor"
 import { services } from "./services"
 
 const Config = Schema.Struct({ vars: Schema.Struct({ TARDIGRADE_CONFIG: Schema.Struct({ models: Schema.Unknown }) }) })
-const config = Schema.decodeUnknownSync(Config)(Bun.JSONC.parse(await Bun.file("wrangler.jsonc").text()))
+const config = Schema.decodeUnknownSync(Config)(Bun.JSONC.parse(await Bun.file("tardigrade.json").text()))
 
 const workspace = localWorkspace({ directory: "." })
 
@@ -213,35 +213,13 @@ WORKDIR /workspace
 ENTRYPOINT ["sleep", "infinity"]
 ```
 
-Add the Durable Object bindings and container image to `wrangler.jsonc`:
+The generated `alchemy.run.ts` declares the actor and thread namespaces, the workspace container image named `current`, and the `SANDBOX` namespace. Alchemy builds the Dockerfile, binds the image to the workspace Durable Object, and owns namespace migrations. See the [Cloudflare guide](/docs/platforms/cloudflare).
 
-```jsonc title="wrangler.jsonc"
-{
-  "durable_objects": {
-    "bindings": [
-      { "name": "ACTORS", "class_name": "ActorDO" },
-      { "name": "THREADS", "class_name": "ThreadDO" },
-      { "name": "SANDBOX", "class_name": "Sandbox" }
-    ]
-  },
-  "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["ActorDO", "ThreadDO", "Sandbox"] }
-  ],
-  "containers": [
-    {
-      "class_name": "Sandbox",
-      "scheduling_policy": "durable_object",
-      "images": { "current": { "dockerfile": "container/Dockerfile", "build_context": "container" } }
-    }
-  ]
-}
-```
-
-Set the credential configured during initialization, such as `OPENAI_API_KEY`:
+Supply the credential configured during initialization through `.env` or the process environment, then deploy:
 
 ```bash
-bunx wrangler secret put OPENAI_API_KEY
-bun run deploy:cloudflare
+bun run plan:cloudflare --stage prod
+bun run deploy:cloudflare --stage prod
 ```
 
 #### Mounted storage

@@ -395,7 +395,7 @@ export const setupCommand = Command.make("setup", {
   )
   yield* Console.log(setupOutput(false, {}, setupPlanSummary(files, plan), modelLock))
 })).pipe(
-  Command.withDescription("Configure project providers and a default model in the platform manifests. Entered credentials are stored in .dev.vars at 0600."),
+  Command.withDescription("Configure project providers and a default model in tardigrade.json. Entered credentials are stored in .env at 0600."),
   Command.withExamples([{
     command: "tdg setup --provider openrouter --provider-config '{\"env\":[\"OPENROUTER_API_KEY\"]}' --default-model anthropic/claude-sonnet-4.6",
     description: "Configure the first provider and default atomically"
@@ -441,8 +441,8 @@ export const initCommand = Command.make("init", {
     if (existsSync(initializedRoot)) {
       return yield* userErrorOf(`init target already exists at ${initializedRoot}. Choose a new directory.`)
     }
-    if (flags.template === "quickstart") {
-      if (stated(flags.provider) || stated(flags.providerConfig) || stated(flags.defaultModel)) return yield* userErrorOf("The quickstart counter needs no model. Use --template agent to configure a model provider.")
+    if (flags.template === "quickstart" || flags.template === "alchemy") {
+      if (stated(flags.provider) || stated(flags.providerConfig) || stated(flags.defaultModel)) return yield* userErrorOf("This template configures its provider in the generated source. Use --template agent for the legacy guided model setup.")
       const initialized = yield* Effect.tryPromise({
         try: () => initActor(name, { cwd: cli.cwd, ...(directory === undefined ? {} : { directory }), template: flags.template }),
         catch: userErrorOf,

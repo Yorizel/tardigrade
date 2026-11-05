@@ -13,7 +13,7 @@ order: 1
 1. The latest [Tardie CLI](/docs/cli)
 2. An LLM API key from a provider of your choice
 
-For deployment, install either the [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/install-and-update/) for Cloudflare or the [Celld CLI](https://celld.dev/docs/) for your own cloud.
+Generated projects include the Alchemy CLI and Cloudflare provider for deployment. Container workspaces require Docker to build their image.
 
 ### Initialize your project
 
@@ -36,9 +36,9 @@ After the setup, you should see the following files:
   - `services.ts` Model and library implementations
   - `generated/providers.ts` Configured model implementations
   - `server.ts` Bun server entry
-  - `worker.ts` Cloudflare and Celld Worker entry
-  - `wrangler.jsonc` Cloudflare Worker configuration
-  - `celld.jsonc` Self-hosted Celld configuration
+  - `worker.ts` Cloudflare Worker entry
+  - `alchemy.run.ts` Alchemy infrastructure stack
+  - `tardigrade.json` Model connection settings
   - `models.lock.json` Resolved model metadata
   - `package.json` Dependencies and module metadata
 </Filesystem>
@@ -184,22 +184,16 @@ tdg call message '{"text":"How about San Francisco?"}' --thread quickstart
 
 ### Deploy your agent
 
-Set your provider credential as a Worker secret before deploying. For example, with OpenRouter:
+Supply your configured provider credential through `.env` or the process environment. Alchemy binds it as a Worker secret. For example, with OpenRouter:
 
 ```bash variant="single"
-bunx wrangler secret put OPENROUTER_API_KEY
+export OPENROUTER_API_KEY=your-provider-key
 ```
 
 The generated Worker uses an `ActorDO` binding and the same actor, service layer, and model lock as the Bun server. Deploy it:
 
 ```bash variant="single"
 bun run deploy:cloudflare
-```
-
-To deploy it on your own cloud, use Celld:
-
-```bash variant="single"
-bun run deploy:celld
 ```
 
 ### Send a message to your cloud agent

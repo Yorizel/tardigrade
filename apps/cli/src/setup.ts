@@ -36,7 +36,7 @@ import { PROVIDER_REGISTRY_FILE, providerRegistrySource } from "./provider-regis
 
 // SECRETS_MODE leaves the environment file readable and writable by its owner alone.
 export const SECRETS_MODE = 0o600
-export const ENV_FILE = ".dev.vars"
+export const ENV_FILE = ".env"
 export const GITIGNORE_FILE = ".gitignore"
 
 export const envPathIn = (root: string): string => `${root.replace(/\/$/, "")}/${ENV_FILE}`
@@ -694,9 +694,9 @@ const withAssignments = (raw: string, values: Readonly<Record<string, string>>):
 const withSecretsIgnored = (raw: string): string => {
   const normalized = raw.replace(/\r\n/g, "\n")
   const lines = normalized.split("\n")
-  if (lines.some((line) => line.trim() === ".dev.vars" || line.trim() === ".dev.vars*")) return normalized
+  if (lines.some((line) => line.trim() === ".env" || line.trim() === ".env*")) return normalized
   const prefix = normalized.length === 0 || normalized.endsWith("\n") ? normalized : `${normalized}\n`
-  return `${prefix}.dev.vars*\n`
+  return `${prefix}.env*\n`
 }
 
 const readOrEmpty = (fs: FileSystemService, path: string): Effect.Effect<string, PlatformError> =>

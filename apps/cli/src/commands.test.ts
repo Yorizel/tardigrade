@@ -258,8 +258,8 @@ describe("parsing", () => {
     expect(root).not.toContain("run ")
     expect(root).not.toContain("send")
     const help = (await drive(["setup", "--help"])).lines.join("\n")
-    expect(help).toContain("platform manifests")
-    expect(help).toContain(".dev.vars")
+    expect(help).toContain("tardigrade.json")
+    expect(help).toContain(".env")
     expect(help).toContain("0600")
     expect(help).toContain("provider")
     expect(help).toContain("default")
@@ -293,8 +293,8 @@ describe("parsing", () => {
         "anthropic/claude-sonnet-4-6"
       ], { cwd })
       expect(configured.failed).toBe(false)
-      await expect(readFile(join(cwd, ".dev.vars"), "utf8")).rejects.toThrow()
-      const config = await readFile(join(cwd, "wrangler.jsonc"), "utf8")
+      await expect(readFile(join(cwd, ".env"), "utf8")).rejects.toThrow()
+      const config = await readFile(join(cwd, "tardigrade.json"), "utf8")
       const modelLock = JSON.parse(await readFile(join(cwd, "models.lock.json"), "utf8")) as Record<string, unknown>
       expect(config).toContain('"provider": "openrouter"')
       expect(config).toContain('"model_id": "anthropic/claude-sonnet-4-6"')
@@ -318,7 +318,7 @@ describe("parsing", () => {
         "anthropic/claude-sonnet-4-6"
       ], { cwd })
       expect(initial.failed).toBe(false)
-      const configPath = join(cwd, "wrangler.jsonc")
+      const configPath = join(cwd, "tardigrade.json")
       const lockPath = join(cwd, "models.lock.json")
       const before = await Promise.all([readFile(configPath, "utf8"), readFile(lockPath, "utf8")])
 
@@ -380,13 +380,13 @@ describe("parsing", () => {
         "--json"
       ], { cwd })
       const directory = join(cwd, "researcher")
-      const config = await readFile(join(directory, "wrangler.jsonc"), "utf8")
+      const config = await readFile(join(directory, "tardigrade.json"), "utf8")
 
       expect(ran.failed).toBe(false)
       expect(config).toContain('"provider": "openrouter"')
       expect(config).toContain('"model_id": "anthropic/claude-sonnet-4-6"')
       expect(ran.recorded.installed).toEqual([directory])
-      await expect(readFile(join(directory, ".dev.vars"), "utf8")).rejects.toThrow()
+      await expect(readFile(join(directory, ".env"), "utf8")).rejects.toThrow()
       expect(ran.lines.join("\n")).toContain('"credential": "environment"')
     } finally {
       await rm(cwd, { recursive: true, force: true })
@@ -412,7 +412,7 @@ describe("parsing", () => {
   test("init leaves an existing target unchanged", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "tdg-init-existing-"))
     const directory = join(cwd, "researcher")
-    const held = join(directory, "wrangler.jsonc")
+    const held = join(directory, "tardigrade.json")
     try {
       await mkdir(directory)
       await writeFile(held, "keep me\n")

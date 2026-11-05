@@ -1,0 +1,43 @@
+---
+title: Alchemy Domain
+description: Run agents with native Domain state and durable execution.
+route: /docs/platforms/alchemy
+section: Platforms
+sectionOrder: 3
+order: 1
+---
+
+The default `tdg init` template hosts agent state and durable processes in Alchemy Domain. `Thread` is the aggregate, `RunExecution` reacts to its facts, `ExecuteRun` is the saga, and `ActorApi` exposes authorized commands and reads. Cloudflare hosting uses `DomainCloudflare.layerDurableObjects()`; the original Tardigrade journal, scheduler, watchdog, and raw actor Durable Objects are outside this template's call path.
+
+## Create and run
+
+```sh
+tdg init assistant
+cd assistant
+cp .env.example .env
+bun run dev
+```
+
+Supply the model ID, provider credential, bearer token, and subject in `.env` before starting. There is no fallback model or account. Alchemy reads configuration during Worker initialization and owns its secret bindings. The reference adapter uses the native Effect AI OpenAI Responses provider and a current-time tool. An application supplies other models and tools by implementing the native `AgentExecution` external system.
+
+`bun run cli --help` lists the commands derived from `ActorApi`. The public commands open a thread, request a run, approve a pending step, cancel a run, and reconcile an unknown result. Reads expose the thread's state and native event stream to its owner. Command IDs provide native transport idempotency; run IDs and monotonic step IDs enforce the model's additional invariants.
+
+`bun run dev` runs Cloudflare locally through Alchemy. `bun run dev:memory` runs the same model in a Bun process with `Domain.InMemory`; its data ends with the process. `bun run plan:cloudflare --stage prod` previews the stack and `bun run deploy:cloudflare --stage prod` deploys it. Keep the stack's `.alchemy` state between deployments. Generating this template does not transfer data from an existing Tardigrade deployment.
+
+## Execution and recovery
+
+Each thread has one active run. Native commands persist admission, step preparation, approval, dispatch, usage, and terminal outcomes. Every model/tool boundary has a native Activity result. The saga reads durable snapshots and reuses recorded Activity results on replay. The policy schedules a native expiry command and interrupts the saga after cancellation, failure, or an uncertain outcome.
+
+A tool cannot dispatch before its prepared step is approved. The reference adapter advertises tools to the model with `disableToolCallResolution: true`; execution happens separately through the toolkit handler after the aggregate admits dispatch. Provider-executed tools are refused by the reference adapter. Application adapters are trusted code and must classify their tool effects accurately.
+
+When dispatch was recorded but the external response was not, recovery records `unknown` and blocks another run. This includes a lost model response. A native reconciliation command requires an explicit outcome and evidence; it closes the affected run as failed before admitting new work. External execution does not have an exactly-once guarantee. Cancellation prevents subsequent dispatch and successful late settlement; it cannot undo an external mutation.
+
+Turn and tool counters are precharged before dispatch. Reported token usage is accumulated once per settled step, and the model refuses subsequent work after exhaustion. The reference provider also receives the remaining token allowance as its output limit. Provider input tokens and lost responses can still incur charges beyond that output allowance; the limit is not a billing reservation. Deadlines use the native command clock and scheduled expiry.
+
+The native event log retains execution evidence. Model context retains completed runs; failed and cancelled runs do not become the next run's context. A step whose output exceeds the message allowance retains its evidence in the event log and fails the run without enlarging the context beyond its configured limit.
+
+## Boundaries
+
+The native template uses a new Domain protocol. It does not promise compatibility with the original method HTTP protocol, arbitrary actor graph execution, deferred callbacks, Code Mode, sandbox workspaces, or subagents. The original atom DSL and explicit `quickstart`, `agent`, and `rlm` templates remain available with their original state owners. They are separate execution paths and are not a completed Domain migration.
+
+The reference bearer adapter authenticates one explicitly configured subject. Applications with several users provide their own session middleware using `CurrentCaller`; identity must remain request-local. `Session` guards every public mutation and validates aggregate reads against the stored owner. Internal execution commands are excluded from `ActorApi`.

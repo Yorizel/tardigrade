@@ -27,9 +27,9 @@ export const DEFAULT_ACTORS = ".tardigrade/actors"
 export const DEFAULT_ACTOR_DATA = ".tardigrade/data"
 
 // DEFAULT_PROJECT_CONFIG_PATH is the project configuration read by the direct server.
-export const DEFAULT_PROJECT_CONFIG_PATH = "wrangler.jsonc"
+export const DEFAULT_PROJECT_CONFIG_PATH = "tardigrade.json"
 
-// TARDIGRADE_CONFIG_VAR names the structured Wrangler variable that carries Tardigrade settings.
+// TARDIGRADE_CONFIG_VAR names the structured environment variable that carries Tardigrade settings.
 export const TARDIGRADE_CONFIG_VAR = "TARDIGRADE_CONFIG"
 
 // DEFAULT_MODEL_CATALOG_CACHE is the last validated public snapshot used when a refresh fails.
@@ -48,7 +48,7 @@ export interface ModelCatalogConfig {
 
 // ModelProviderConfig is one private provider connection. Public model metadata belongs to the
 // catalog snapshot, so changing models does not change connection configuration.
-// ProjectConfig holds Tardigrade configuration loaded from the Wrangler manifest.
+// ProjectConfig holds Tardigrade configuration loaded from the project settings.
 export interface ProjectConfig {
   readonly models: ModelConfig
 }
@@ -121,7 +121,7 @@ const legacyModelError = (env: Env): Error | undefined => {
   }
   return new Error(
     `${present.join(", ")} ${present.length === 1 ? "is" : "are"} no longer accepted. ` +
-    `Run \`tdg setup\`, or put ${JSON.stringify(replacement)} in wrangler.jsonc. ` +
+    `Run \`tdg setup\`, or put ${JSON.stringify(replacement)} in tardigrade.json. ` +
     "Replace <protocol>, set <api-key-env> as a secret environment variable, and remove the legacy variables. The legacy API key was not printed."
   )
 }
@@ -142,7 +142,7 @@ export const projectModelsOf = (value: unknown): unknown => {
   return config["models"] ?? DEFAULT_MODEL_POLICY
 }
 
-// projectConfigOf resolves runnable settings from a Wrangler manifest (config.test.ts).
+// projectConfigOf resolves runnable settings from a project settings (config.test.ts).
 export const projectConfigOf = (value: unknown): ProjectConfig => {
   const models = projectModelsOf(value)
   return { models: modelConfigOf(models) }

@@ -19,4 +19,4 @@ tdg events main
 
 Keep state transitions in durable atoms and declare external work through acts. Supply I/O implementations through the host's services.
 
-`worker.ts` hosts the same actor on Cloudflare or Celld. Deploy with `bun run deploy:cloudflare` or `bun run deploy:celld --bucket s3://YOUR-BUCKET`.
+`worker.ts` hosts the same actor on Cloudflare. `alchemy.run.ts` owns the Worker and its Durable Object namespaces. Preview with `bun run plan:cloudflare` and deploy with `bun run deploy:cloudflare`.

@@ -18,7 +18,7 @@
     "cli:build": "bun run pack",
     "cli:check": "bun run gate --only=lint:effect:apps:cli,typecheck:app-cli,test:app-cli",
     "gate": "bun run tools/gate.ts",
-    "lint": "oxlint",
+    "lint": "effect-tsgo --tsrs-lint=0.21.0-ts7.1.0-beta oxlint --type-aware --max-warnings=0",
     "lint:effect": "bun run gate --only=lint:effect",
     "tla": "bun run tools/tla.ts",
     "typecheck": "tsc --noEmit && bun run --filter './packages/*' typecheck && bun run --filter './packages/deprecated/*' typecheck && bun run --filter './packages/apps/*' typecheck",
@@ -31,21 +31,30 @@
     "graph:check": "bun run tools/code-graph.ts --check",
     "chat": "bun run packages/apps/cli/src/main.ts",
     "exports": "bun run tools/public-exports.ts",
-    "postinstall": "bun run exports"
+    "postinstall": "bun run exports",
+    "lint:tsgo": "effect-tsgo oxlint --type-aware --max-warnings=0",
+    "typecheck:tsrs": "effect-tsgo tsrs@0.21.0-ts7.1.0-beta --noEmit",
+    "lint:audit": "effect-tsgo --tsrs-lint=0.21.0-ts7.1.0-beta oxlint --type-aware --max-warnings=0 --config .oxlintrc.audit.json"
   },
   "dependencies": {
     "@types/node": "^24",
     "typescript": "7.0.2"
   },
   "devDependencies": {
+    "@alchemy.run/cloudflare": "2.0.0-beta.85",
+    "@alchemy.run/domain": "2.0.0-beta.85",
+    "@aurelienbbn/oxlint-plugin-alchemy": "0.1.1",
+    "@effect/ai-openai": "4.1.2",
     "@effect/platform-bun": "4.1.2",
-    "@effect/tsgo": "0.36.5",
+    "@effect/tsgo": "0.67.3",
     "@types/bun": "^1.3.4",
+    "alchemy": "2.0.0-beta.85",
     "beautiful-mermaid": "^1.1.3",
     "effect": "4.1.2",
     "knip": "^6.15.0",
-    "oxlint": "^1.69.0",
-    "oxc-parser": "0.143.0"
+    "oxc-parser": "0.143.0",
+    "oxlint": "1.91.0",
+    "oxlint-tsgolint": "7.0.2005"
   },
   "private": true
 }

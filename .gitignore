@@ -15,6 +15,7 @@ coverage/
 .turbo/
 .vite/
 .wrangler/
+.alchemy/
 .eslintcache
 .oxlintcache
 packages/deprecated/core/tla/states/
@@ -50,3 +51,5 @@ packages/tardie/src/generated/
 
 # Local directory benchmark
 /packages/platform/bench/directory/
+
+!examples/alchemy/.env.example
