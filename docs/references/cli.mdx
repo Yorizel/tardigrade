@@ -14,10 +14,12 @@ articleClass: cli-article
 
 Use `bunx tardie <command>` to run a command without installing it. Tardigrade requires Bun 1.4 or later.
 
+Native projects expose commands through their generated `bun run cli`. The older method, thread and artifact commands listed below serve the remaining legacy actor path. `tdg init` selects a template for either path.
+
 ## Commands
 
 <div className="cli-command-list">
-  <div className="cli-command-row"><code>tdg init &lt;name&gt;</code><p>Create a counter actor or choose an agent template</p></div>
+  <div className="cli-command-row"><code>tdg init &lt;name&gt;</code><p>Create a native Domain agent or select a template</p></div>
   <div className="cli-command-row"><code>tdg setup</code><p>Add provider connections and choose the default model</p></div>
   <div className="cli-command-row"><code>tdg setup provider</code><p>Add or update one provider connection</p></div>
   <div className="cli-command-row"><code>tdg setup default</code><p>Choose the default model from configured providers</p></div>
@@ -39,10 +41,12 @@ Commands that print data accept `--json` where their help lists it. Remote comma
 Create the counter from the [introduction](/docs/welcome) without model credentials:
 
 ```sh
-tdg init counter
+tdg init counter --template quickstart
 ```
 
-Run interactive initialization to create a directory, choose the first provider and model, and write the generated actor:
+The Counter uses its generated native `bun run cli` for commands and reads. Set token and subject in `.env`, run `bun run dev` for Alchemy Cloudflare or `bun run dev:memory` for ephemeral state. It has no model lock or local atom journal. The default `tdg init assistant` instead generates the native AI stack described in the [Alchemy guide](/docs/platforms/alchemy).
+
+The remaining guided provider and artifact commands below belong to the explicit legacy agent template. Run interactive initialization to create its directory, choose a provider and model, and write the actor:
 
 ```bash
 tdg init tardie-agent --template agent
@@ -99,7 +103,7 @@ A command flag takes precedence over an environment variable. An environment var
 | Model catalog cache | | `TARDIGRADE_MODEL_CATALOG_CACHE` | `.tardigrade/models.json` |
 | Provider credentials | | Variables named by each provider's `env` list | Values saved by interactive setup in `.env` |
 
-The generated `bun run dev` script starts `server.ts`. The counter stores instance databases in `.tardigrade/`; the agent template loads `.env` and uses `.tardigrade/`. Both store each instance's thread databases in a sibling `.sqlite.threads/` directory. Keep these directories present until the server stops. A deployment reads credentials from its platform secret store. Edit `server.ts` to supply application Effect services or change the server composition.
+The legacy agent template's `bun run dev` script loads `.env`, starts `server.ts` and stores instance databases in `.tardigrade/`. Its thread databases live in a sibling `.sqlite.threads/` directory. Keep these directories present until the server stops. A deployment reads credentials from its platform secret store. Edit `server.ts` to supply application Effect services or change the server composition.
 
 ## Validate and run locally
 

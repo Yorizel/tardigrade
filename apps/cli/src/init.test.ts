@@ -50,71 +50,41 @@ describe("initActor", () => {
     expect(DEFAULT_INIT_ACTOR_NAME).toBe("my-agent")
   })
 
-  test("creates a buildable named quickstart", async () => {
+  test("creates a native named quickstart without a model catalog", async () => {
     const cwd = await temporaryRoot()
-    const initialized = await initActor("reviewer", { cwd, template: "quickstart", now: new Date("2026-08-24T00:00:00Z"), packageVersion: "0.7.1-test", modelProvider: "openrouter" })
-    const source = await readFile(initialized.entry, "utf8")
-    const server = await readFile(initialized.server, "utf8")
-    const worker = await readFile(initialized.worker, "utf8")
-    const manifestSource = await readFile(initialized.manifest, "utf8")
-    const manifest = JSON.parse(manifestSource) as Record<string, unknown>
-    const alchemy = await readFile(initialized.alchemy, "utf8")
-    const packageManifest = JSON.parse(await readFile(initialized.packageManifest, "utf8")) as Record<string, unknown>
-    const modelLock = JSON.parse(await readFile(join(initialized.directory, DEFAULT_MODEL_LOCK), "utf8")) as Record<string, unknown>
-    await symlink(new URL("../../../node_modules", import.meta.url).pathname, join(initialized.directory, "node_modules"), "dir")
-    const built = await buildActor(initialized.entry, { cwd: initialized.directory, out: "output" })
-
-    expect(defaultInitDirectory("reviewer")).toBe("reviewer")
+    const initialized = await initActor("reviewer", { cwd, template: "quickstart", now: new Date("2026-08-24T00:00:00Z"), packageVersion: "0.7.1-test" })
     expect(initialized.entry).toBe(join(cwd, "reviewer", DEFAULT_ACTOR_ENTRY))
     expect(initialized.server).toBe(join(cwd, "reviewer", DEFAULT_SERVER_ENTRY))
     expect(initialized.worker).toBe(join(cwd, "reviewer", DEFAULT_WORKER_ENTRY))
     expect(initialized.alchemy).toBe(join(cwd, "reviewer", DEFAULT_ALCHEMY_ENTRY))
     expect(initialized.packageManifest).toBe(join(cwd, "reviewer", DEFAULT_PACKAGE_MANIFEST))
-    expect(initialized.modelLock).toBe(join(cwd, "reviewer", DEFAULT_MODEL_LOCK))
+    expect(initialized.modelLock).toBeUndefined()
+    const source = await readFile(initialized.entry, "utf8")
     expect(source).toContain('const actorName = "reviewer"')
-    expect(source).toContain("defineActor(actorName, Effect.sync")
-    expect(server).toContain('import definition, { notifyLayer } from "./actor"')
-    expect(server).toContain("Effect.runPromise(createBunHost({")
-    expect(server).toContain("methodHttp(host")
-    expect(server).toContain("host.close")
-    expect(server).toContain('?? ".tardigrade"')
-    expect(worker).toContain("createActorWorker({")
-    expect(worker).toContain("worker.ThreadObject")
-    expect(worker).toContain('from "tardie/platform/cloudflare"')
-    expect(await readFile(join(initialized.directory, "SKILL.md"), "utf8")).toContain("tdg call increment null")
-    await expect(readFile(join(initialized.directory, "services.ts"), "utf8")).rejects.toThrow()
-    expect(manifest).toEqual({ vars: { TARDIGRADE_CONFIG: {} } })
-    expect(alchemy).toContain('Alchemy.Stack(')
-    expect(alchemy).toContain('"reviewer"')
-    expect(alchemy).toContain('date: "2026-08-24"')
-    expect(alchemy).toContain('Cloudflare.DurableObject<InstanceType<typeof ActorDO>>("ACTORS", { className: "ActorDO" })')
-    expect(alchemy).toContain('Cloudflare.DurableObject<InstanceType<typeof ThreadDO>>("THREADS", { className: "ThreadDO" })')
-    await expect(readFile(join(initialized.directory, "wrangler.jsonc"), "utf8")).rejects.toThrow()
-    await expect(readFile(join(initialized.directory, "celld.jsonc"), "utf8")).rejects.toThrow()
-    expect(packageManifest).toMatchObject({
-      private: true,
-      type: "module",
-      scripts: {
-        dev: "bun --watch server.ts",
-        "dev:cloudflare": "alchemy dev",
-        "plan:cloudflare": "alchemy plan",
-        "deploy:cloudflare": "alchemy deploy",
-        "destroy:cloudflare": "alchemy destroy"
-      },
-      dependencies: {
-        "@effect/platform-bun": expect.any(String),
-        alchemy: "2.0.0-beta.85",
-        "@alchemy.run/cloudflare": "2.0.0-beta.85",
-        effect: expect.any(String),
-        tardie: "0.7.1-test"
-      },
-      overrides: {
-        "@effect/platform-node-shared": expect.any(String),
-        effect: expect.any(String)
-      }
-    })
-    expect(modelLock).toMatchObject({ schema: 2, providers: {}, models: [] })
-    expect(built.manifest.name).toBe("reviewer")
+    expect(source).toContain('Domain.Aggregate("Counter"')
+    expect(source).toContain("Activity.make")
+    expect(source).not.toContain("defineActor")
+    const server = await readFile(initialized.server, "utf8")
+    expect(server).toContain("WorkflowEngine.layerMemory")
+    expect(server).not.toContain("createBunHost")
+    const worker = await readFile(initialized.worker, "utf8")
+    expect(worker).toContain("DomainCloudflare.layerDurableObjects()")
+    expect(worker).toContain('date: "2026-08-24"')
+    const alchemy = await readFile(initialized.alchemy, "utf8")
+    expect(alchemy).toContain('"reviewer",')
+    expect(alchemy).not.toContain("ACTORS:")
+    expect(await readFile(join(initialized.directory, "client.ts"), "utf8")).toContain("toCli(CounterApi")
+    expect(await readFile(join(initialized.directory, "SKILL.md"), "utf8")).toContain("ephemeral")
+    expect(await readFile(initialized.manifest, "utf8")).toContain("TARDIGRADE_SUBJECT=")
+    await expect(readFile(join(initialized.directory, DEFAULT_MODEL_LOCK), "utf8")).rejects.toThrow()
+    await expect(readFile(join(initialized.directory, "tardigrade.json"), "utf8")).rejects.toThrow()
+    const manifest = JSON.parse(await readFile(initialized.packageManifest, "utf8"))
+    expect(manifest.scripts.dev).toBe("alchemy dev")
+    expect(manifest.scripts["dev:memory"]).toBe("bun --env-file=.env server.ts")
+    expect(manifest.dependencies.tardie).toBe("0.7.1-test")
+    expect(manifest.dependencies["@alchemy.run/domain"]).toBe("2.0.0-beta.85")
+    expect(defaultInitDirectory("reviewer")).toBe("reviewer")
+    await expect(initActor("invalid-model", { cwd, template: "quickstart", modelProvider: "openrouter" })).rejects.toThrow("no model provider")
   })
 
   for (const template of ["alchemy", "quickstart", "agent", "rlm"] as const) {

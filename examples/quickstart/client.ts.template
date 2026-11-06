@@ -1,0 +1,16 @@
+import * as Domain from "@alchemy.run/domain"
+import { toCli } from "@alchemy.run/domain/Cli"
+import { BunRuntime, BunServices } from "@effect/platform-bun"
+import { Config, Effect, Layer, Redacted, Schema } from "effect"
+import { Command } from "effect/cli"
+import { FetchHttpClient } from "effect/http"
+import { CounterApi } from "./actor"
+
+Effect.gen(function* () {
+  const url = yield* Config.NonEmptyString("TARDIGRADE_URL")
+  const command = toCli(CounterApi, {
+    name: "counter",
+    headers: Config.schema(Schema.Redacted(Schema.NonEmptyString), "TARDIGRADE_TOKEN").pipe(Effect.map(token => ({ authorization: `Bearer ${Redacted.value(token)}` }))),
+  })
+  yield* Command.run(command, { version: "0.1.0" }).pipe(Effect.provide(Domain.protocolHttp(url)))
+}).pipe(Effect.provide(Layer.mergeAll(BunServices.layer, FetchHttpClient.layer)), BunRuntime.runMain)

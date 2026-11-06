@@ -11,6 +11,8 @@ export interface ActorTemplateOptions {
 
 export const ALCHEMY_TEMPLATE_FILES = ["AgentExecution.ts", "alchemy.run.ts", "worker.ts", "server.ts", "runner.ts", "client.ts", ".env.example", "SKILL.md"] as const
 
+export const QUICKSTART_TEMPLATE_FILES = ["actor.ts", "SKILL.md", "server.ts", "worker.ts", "client.ts", "alchemy.run.ts", ".env.example"] as const
+
 export const INIT_TEMPLATES = ["alchemy", "quickstart", "agent", "rlm"] as const
 export type InitTemplate = typeof INIT_TEMPLATES[number]
 export const DEFAULT_INIT_TEMPLATE: InitTemplate = "alchemy"

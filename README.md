@@ -21,121 +21,27 @@ Tardigrade is a TypeScript framework for building durable, event-driven actors. 
 
 ## Quickstart
 
-Start with a [counter actor](#counter-actor) to learn the primitives, or build an [agent actor](#agent-actor) with tools and context compaction.
+Start with a [native counter](#counter-actor) to learn Domain commands and workflows. The [explicit agent template](#agent-actor) still uses the legacy runtime. Until this fork is published, use its packed artifact for both the CLI and the generated project's `tardie` dependency; registry installation alone does not select this fork.
 
 ### Counter actor
 
-Create a counter project with the CLI:
+The quickstart defines a native Alchemy Domain Counter with Increment and Decrement commands, authenticated owner reads and stable native command receipts. Positive even counts start an Effect workflow with a checkpointed notification Activity. No model credentials are required.
 
 ```sh
 bunx tardie init counter --template quickstart
 cd counter
+cp .env.example .env
 ```
 
-To add Tardigrade to an existing project, run `bun add tardie`.
+Set the token and subject in `.env`, then run `bun run dev` for Alchemy Cloudflare. The generated Worker uses native Domain Durable Objects and native Effect workflow storage. `bun run dev:memory` provides an explicitly ephemeral development alternative. Use the generated command line:
 
-### Store state in a durable atom
-
-Durable atoms reduce an immutable event log into state. This counter starts at zero and handles increment and decrement events.
-
-```ts
-import { Schema } from "effect"
-import { durableAtom, event } from "tardie/core"
-
-const Incremented = event({ type: "Incremented" })
-const Decremented = event({ type: "Decremented" })
-
-const makeCount = () => durableAtom({
-  name: "count",
-  input: Schema.Union([Incremented, Decremented]),
-  schema: Schema.Int,
-  initial: 0,
-  reduce: (count, event) => event.type === "Decremented" ? count - 1 : count + 1,
-})
+```sh
+bun run cli increment --json '{"target":"main","input":{},"commandId":"first"}'
+bun run cli decrement --json '{"target":"main","input":{},"commandId":"second"}'
+bun run cli counter get --key main
 ```
 
-### Propose actions with an effect atom
-
-Effect atoms derive a view and propose actions from current state. The counter proposes a notification when its value is positive and even.
-
-```ts
-import { Effect } from "effect"
-import { act, effectAtom, type Atom } from "tardie/core"
-
-const Notify = act({
-  name: "notify",
-  input: Schema.Int,
-  success: Schema.Null,
-  failure: Schema.String,
-})
-
-export const notifyLayer = Notify.layer(count =>
-  Effect.log(`${count} is even`).pipe(Effect.as(null))
-)
-
-const notify = (count: Atom<number>) => effectAtom(get => ({
-  view: get(count),
-  events: {},
-  acts: get(count) > 0 && get(count) % 2 === 0
-    ? { notify: Notify.request({ input: get(count) }) }
-    : {},
-}))
-```
-
-Supply `notifyLayer` to the host to execute the notification effect.
-
-### Define methods
-
-Methods give callers typed inputs and outputs. Each method appends an event and returns the resulting count.
-
-```ts
-import { actorMethod } from "tardie/core"
-
-const counterMethods = (count: Atom<number>) => ({
-  increment: actorMethod({
-    inputSchema: Schema.Null,
-    outputSchema: Schema.Int,
-    onReceive: Incremented.from(() => ({})),
-    result: (_input, get) => ({
-      status: "completed",
-      output: get(count),
-    }),
-  }),
-  decrement: actorMethod({
-    inputSchema: Schema.Null,
-    outputSchema: Schema.Int,
-    onReceive: Decremented.from(() => ({})),
-    result: (_input, get) => ({
-      status: "completed",
-      output: get(count),
-    }),
-  }),
-})
-```
-
-### Compose atoms into an actor
-
-An actor combines an atom with methods for interaction.
-
-```ts
-import { defineActor } from "tardie/core"
-
-export const counter = defineActor("counter", Effect.sync(() => {
-  const count = makeCount()
-  const notifications = notify(count)
-
-  return {
-    atom: notifications,
-    methods: counterMethods(count),
-  }
-}))
-```
-
-```text
-event log -> count -> notify -> counter
-```
-
-See the [introduction](docs/introduction.mdx#run-tardigrade) to run the counter locally or deploy it.
+The same counter ID retains its owner. Reusing a command ID returns its original receipt. External notifications can repeat if a crash occurs between their external effect and the Activity checkpoint. Existing atom journals need an explicit import before switching their writer. See the [introduction](docs/introduction.mdx#run-tardigrade) and [native runtime guide](docs/platforms/alchemy.mdx) for hosting boundaries.
 
 ### Agent actor
 
@@ -199,7 +105,7 @@ ActorWorker -> ActorDO [supervisor DB]
                    └── C [ThreadDO, thread DB, parent: B]
 ```
 
-The [introduction](docs/introduction.mdx#cloud) shows a complete counter deployment with Durable Object bindings and migrations.
+The [introduction](docs/introduction.mdx#cloud) describes the native Counter deployment. The following ActorDO and ThreadDO configuration belongs to the remaining legacy agent path.
 
 Generated projects keep model settings in `tardigrade.json` and credentials in `.env`. `tdg setup` writes the local credential file with mode 0600. Alchemy binds configured provider credentials as secrets through native `Config.Redacted` values.
 

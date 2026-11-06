@@ -1,5 +1,5 @@
 import { cp, mkdir, rm } from "node:fs/promises"
-import { ALCHEMY_TEMPLATE_FILES, INIT_TEMPLATES } from "../apps/cli/src/template"
+import { ALCHEMY_TEMPLATE_FILES, INIT_TEMPLATES, QUICKSTART_TEMPLATE_FILES } from "../apps/cli/src/template"
 import { dirname, join, relative } from "node:path"
 
 // rewriteComponentRuntimeImports preserves private relative imports when packages share a staged source root (publish-paths.test.ts).
@@ -18,7 +18,7 @@ export const stageInitTemplates = async (root: string, stage: string): Promise<v
     await mkdir(target, { recursive: true })
     const files = {
       alchemy: ALCHEMY_TEMPLATE_FILES,
-      quickstart: ["actor.ts", "SKILL.md.template", "server.ts.template", "worker.ts.template"],
+      quickstart: QUICKSTART_TEMPLATE_FILES.map(file => file === "actor.ts" ? file : `${file}.template`),
       agent: ["actor.ts", "services.ts.template", "server.ts.template", "worker.ts.template", "Dockerfile.template"],
       rlm: ["preset.ts"],
     }[template]

@@ -442,7 +442,10 @@ export const initCommand = Command.make("init", {
       return yield* userErrorOf(`init target already exists at ${initializedRoot}. Choose a new directory.`)
     }
     if (flags.template === "quickstart" || flags.template === "alchemy" || flags.template === "rlm") {
-      if (stated(flags.provider) || stated(flags.providerConfig) || stated(flags.defaultModel)) return yield* userErrorOf("This template configures its provider in the generated source. Use --template agent for the legacy guided model setup.")
+      if (stated(flags.provider) || stated(flags.providerConfig) || stated(flags.defaultModel)) {
+        if (flags.template === "quickstart") return yield* userErrorOf("The native Counter does not use a model provider or model setup options.")
+        return yield* userErrorOf("This template configures its provider in the generated source. Use --template agent for the legacy guided model setup.")
+      }
       const initialized = yield* Effect.tryPromise({
         try: () => initActor(name, { cwd: cli.cwd, ...(directory === undefined ? {} : { directory }), template: flags.template }),
         catch: userErrorOf,

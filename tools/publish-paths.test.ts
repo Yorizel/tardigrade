@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { expect, test } from "bun:test"
-import { ALCHEMY_TEMPLATE_FILES } from "../apps/cli/src/template"
+import { ALCHEMY_TEMPLATE_FILES, QUICKSTART_TEMPLATE_FILES } from "../apps/cli/src/template"
 import { rewriteComponentRuntimeImports, stageInitTemplates } from "./publish-paths"
 
 test("private runtime imports resolve inside the assembled package", () => {
@@ -24,7 +24,7 @@ test("template staging excludes local state and secrets, including stale output"
       const source = join(root, "examples", template)
       await mkdir(join(source, ".tardigrade"), { recursive: true })
       await writeFile(join(source, template === "rlm" ? "preset.ts" : "actor.ts"), `export default "${template}"`)
-      if (template !== "rlm") for (const file of [template === "quickstart" ? "SKILL.md.template" : "services.ts.template", "server.ts.template", "worker.ts.template"]) await writeFile(join(source, file), "export {}")
+      if (template !== "rlm") for (const file of template === "quickstart" ? QUICKSTART_TEMPLATE_FILES.filter(file => file !== "actor.ts").map(file => `${file}.template`) : ["services.ts.template", "server.ts.template", "worker.ts.template"]) await writeFile(join(source, file), "export {}")
       if (template === "agent") await writeFile(join(source, "Dockerfile.template"), "FROM fixture")
       await writeFile(join(source, ".env"), "SECRET=fixture")
       await writeFile(join(source, ".tardigrade", "actor.sqlite"), "private conversation")
@@ -41,7 +41,7 @@ test("template staging excludes local state and secrets, including stale output"
     expect((await readdir(join(stage, "examples", "alchemy"))).sort()).toEqual([...ALCHEMY_TEMPLATE_FILES].sort())
     for (const template of ["quickstart", "agent", "rlm"]) {
       const target = join(stage, "examples", template)
-      expect((await readdir(target)).sort()).toEqual(template === "quickstart" ? ["SKILL.md.template", "actor.ts", "server.ts.template", "worker.ts.template"] : template === "agent" ? ["Dockerfile.template", "actor.ts", "server.ts.template", "services.ts.template", "worker.ts.template"] : ["preset.ts"])
+      expect((await readdir(target)).sort()).toEqual(template === "quickstart" ? QUICKSTART_TEMPLATE_FILES.map(file => file === "actor.ts" ? file : `${file}.template`).sort() : template === "agent" ? ["Dockerfile.template", "actor.ts", "server.ts.template", "services.ts.template", "worker.ts.template"] : ["preset.ts"])
       expect(await readFile(join(target, template === "rlm" ? "preset.ts" : "actor.ts"), "utf8")).toBe(`export default "${template}"`)
     }
   } finally {

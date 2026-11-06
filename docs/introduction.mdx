@@ -8,219 +8,46 @@ sectionOrder: 1
 order: 1
 ---
 
-import tardie from "../assets/mascot/tardie-curious-right.svg"
-
-<div className="introduction-mascot"><img src={tardie} alt="Tardie, a curious tardigrade." width="160" height="98" /></div>
-
-<h1 className="introduction-lead">Tardigrade is a TypeScript framework for building durable, event-driven actors. Built on <a href="https://effect.website/">Effect</a>.</h1>
-
-## How it works
-
-Every event is written to an append-only log. Durable atoms reduce those events into state. Effect atoms propose effects based on current state. The runtime executes those effects and appends new events to the log.
-
-<EventLogWorldDiagram />
-
-## Why Tardigrade?
-
-<table className="introduction-benefits">
-  <tbody>
-    <tr><th scope="row">Durable</th><td>State is derived purely from an immutable event log. Actors survive crashes and resume automatically from where they stopped.</td></tr>
-    <tr><th scope="row">Composable</th><td>Build complex actors from very simple primitives. Actors are made of atoms and they infinitely compose with each other. </td></tr>
-    <tr><th scope="row">Scalable</th><td>Each actor runs on a single durable object. Scale from one to millions of actors seamlessly.</td></tr>
-    <tr><th scope="row">Native observability</th><td>With a log at the core, and behaviors defined as pure functions, you can easily inspect why your actors reached a particular state.</td></tr>
-  </tbody>
-</table>
-
-## Use Tardigrade
-
-To run and deploy an agent, follow the [Agent guide](/docs/agent).
-
-### Quickstart
-
-Install the latest [Tardie CLI](/docs/cli).
-
-<InstallCommand packageName="tardie@latest" global />
-
-Load the quickstart template. This initialises a simple counter actor along with a `SKILL.md` for your agent.
-
-```sh
-tdg init counter
-cd counter
-```
-
-### Store state in a durable atom
-
-An atom is the smallest state primitive in Tardigrade. When a new event is received, it reduces the event log into state that survives restarts.
-
-<CodePlayground>
-
-```ts
-import { Schema } from "effect"
-import { durableAtom, event } from "tardie/core"
-
-const Incremented = event({ type: "Incremented" })
-const Decremented = event({ type: "Decremented" })
-
-const makeCount = () => durableAtom({
-  name: "count",
-  input: Schema.Union([Incremented, Decremented]),
-  schema: Schema.Int,
-  initial: 0,
-  reduce: (count, event) => event.type === "Decremented" ? count - 1 : count + 1,
-})
-```
-
-</CodePlayground>
-
-### Perform actions using effect atoms
-
-Effect atoms react to state changes by proposing real world actions. The runtime executes these action using the implementation you supply.
-
-<CodePlayground kind="effect">
-
-```ts
-import { Effect } from "effect"
-import { act, effectAtom, type Atom } from "tardie/core"
-
-const Notify = act({
-  name: "notify",
-  input: Schema.Int,
-  success: Schema.Null,
-  failure: Schema.String,
-})
-
-export const notifyLayer = Notify.layer(count =>
-  Effect.log(`${count} is even`).pipe(Effect.as(null))
-)
-
-const notify = (count: Atom<number>) => effectAtom(get => ({
-  view: get(count),
-  events: {},
-  acts: get(count) > 0 && get(count) % 2 === 0
-    ? { notify: Notify.request({ input: get(count) }) }
-    : {},
-}))
-```
-
-</CodePlayground>
-
-Supply `notifyLayer` to the host to run the notification effect. In this example, the `notifyLayer` logs in the console whenever the count is an even number.
-
-### Define methods
-
-Methods are how the world interacts with your actor. It defines a typed input and output schema, and a way to declare the status of the method call for an observor.
-
-<CodePlayground kind="methods">
-
-```ts
-import { actorMethod } from "tardie/core"
-
-const counterMethods = (count: Atom<number>) => ({
-  increment: actorMethod({
-    inputSchema: Schema.Null,
-    outputSchema: Schema.Int,
-    onReceive: Incremented.from(() => ({})),
-    result: (_input, get) => ({
-      status: "completed",
-      output: get(count),
-    }),
-  }),
-  decrement: actorMethod({
-    inputSchema: Schema.Null,
-    outputSchema: Schema.Int,
-    onReceive: Decremented.from(() => ({})),
-    result: (_input, get) => ({
-      status: "completed",
-      output: get(count),
-    }),
-  }),
-})
-```
-
-</CodePlayground>
-
-### Compose atoms into an actor
-
-Return the composed atom along with methods for interaction to define your actor.
-
-```ts
-import { defineActor } from "tardie/core"
-
-export const counter = defineActor("counter", Effect.sync(() => {
-  const count = makeCount()
-  const notifications = notify(count)
-
-  return {
-    atom: notifications,
-    methods: counterMethods(count),
-  }
-}))
-```
+The native fork uses Alchemy Domain for business state and Effect Workflows for durable execution. Aggregates decide commands and record facts; policies react to committed events. Domain APIs enforce caller ownership and expose native receipts and reads. The AI runtime uses a separate Effect Cluster runner for provider calls, tools and QuickJS. See the [native runtime guide](/docs/platforms/alchemy) for the migration boundaries.
 
 ## Run Tardigrade
 
-Run Tardigrade locally or host it in a cloud of your choice as durable objects.
-
-### Local
-
-Run Tardigrade as a HTTP server by providing a storage location and service implementation for the actor's requirements.
-
-```ts title="server.ts"
-import { Context, Effect } from "effect"
-import { createBunHost, methodHttp } from "tardie/platform/bun"
-import { counter, notifyLayer } from "./actor"
-
-const host = await Effect.runPromise(createBunHost({
-  actor: counter,
-  actorContext: Context.pick(),
-  storage: ".tardigrade",
-  services: () => notifyLayer,
-}))
-
-Bun.serve({
-  hostname: "127.0.0.1",
-  port: 4242,
-  fetch: methodHttp(host),
-})
-```
+Create the non-AI Counter example:
 
 ```sh
-bun run server.ts
+tdg init counter --template quickstart
+cd counter
+cp .env.example .env
 ```
 
-### Cloud
+Set `TARDIGRADE_TOKEN` and `TARDIGRADE_SUBJECT` in `.env`. The generated `actor.ts` contains the Counter aggregate, Increment and Decrement commands, owner checks, events and native replies. A policy starts a native Effect workflow when the resulting count is positive and even. Its Activity invokes the configured notification external system. No model provider or model lock is involved.
 
-Run Tardigrade actors as Durable Objects on [Cloudflare](/docs/platforms/cloudflare). The generated Alchemy stack owns infrastructure; the Worker entrypoint supplies the actor and thread implementations.
+Run `bun run dev` for Alchemy Cloudflare. For an ephemeral Bun development server, run `bun run dev:memory`; both its counter state and workflow checkpoints end with the process. `PORT` controls the Bun server port and `TARDIGRADE_URL` selects the endpoint used by the client.
 
-```ts title="worker.ts"
-import { Context } from "effect"
-import { createActorWorker } from "tardie/platform/cloudflare"
-import { counter, notifyLayer } from "./actor"
-
-const worker = createActorWorker({
-  actor: counter,
-  actorContext: Context.pick(),
-  services: () => notifyLayer,
-})
-
-export const ActorDO = worker.ActorObject
-export const ThreadDO = worker.ThreadObject
-export default { fetch: worker.fetch }
-```
-
-`tdg init` generates `alchemy.run.ts` with native Alchemy Worker and Durable Object declarations. The stack binds `ACTORS` and `THREADS`; Alchemy manages their SQLite namespace migrations. Model settings live in `tardigrade.json`, and credentials live in `.env` or the process environment.
+Use the generated native CLI in another terminal:
 
 ```sh
-bun run dev:cloudflare
+bun run cli increment --json '{"target":"main","input":{},"commandId":"first"}'
+bun run cli increment --json '{"target":"main","input":{},"commandId":"second"}'
+bun run cli decrement --json '{"target":"main","input":{},"commandId":"third"}'
+bun run cli counter get --key main
+```
+
+The command replies contain counts 1, 2 and 1. Retry the same command ID to receive its original receipt. A different caller cannot read or mutate the counter or replay its receipt. Each counter ID starts at zero before its first accepted command. Counts use the safe integer range of native JavaScript numbers; incrementing or decrementing past that range is rejected.
+
+Notifications use the counter ID and committed event version as their workflow identity. Replaying a completed workflow reuses its Activity checkpoint. External delivery remains at least once: a crash after an external effect and before its checkpoint can repeat the effect. Applications whose external notification matters provide an idempotent adapter using that identity.
+
+## Cloud
+
+`worker.ts` hosts CounterApi through native Domain Durable Objects. `alchemy.run.ts` owns its Alchemy stack and storage declarations. `notifyLayer` supplies the notification implementation, and the native Effect workflow engine supplied by the Cloudflare platform owns its checkpoints.
+
+```sh
 bun run plan:cloudflare --stage prod
 bun run deploy:cloudflare --stage prod
 ```
 
-See the [Cloudflare guide](/docs/platforms/cloudflare) for credentials, deployment state, and recovery.
+Keep the stack's `.alchemy` state between deployments. Generating a native Counter does not import data from an existing atom journal; that journal needs an explicit data cutover before its old writer is removed. Local HTTP fixtures and typechecks do not prove a deployment or cloud recovery.
 
-## Explore
+## AI agents
 
-<div className="introduction-explore">
-  <a href="/docs/atoms"><span>Concepts</span><p>Explore atoms, actors, and how they compose.</p></a>
-  <a href="/docs/agent"><span>Agent</span><p>Build, run, and deploy your own agent.</p></a>
-</div>
+`tdg init assistant` generates the native Domain and Cluster agent stack. Configure its native provider Layer and required settings, then run the state server and runner as described in the [Alchemy guide](/docs/platforms/alchemy). The explicit `agent` template and the older actor graph remain legacy consumers while their migration is in progress. They retain their own state owners until their cutover.

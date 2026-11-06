@@ -5,7 +5,7 @@ import { relative, resolve } from "node:path"
 import { DEFAULT_PROJECT_CONFIG_PATH } from "@clavia/tardigrade-server/config"
 import type { ModelProtocol } from "@clavia/tardigrade-model/providers/directory"
 
-import { actorTemplate, ALCHEMY_TEMPLATE_FILES, DEFAULT_INIT_TEMPLATE, type InitTemplate } from "./template"
+import { actorTemplate, ALCHEMY_TEMPLATE_FILES, QUICKSTART_TEMPLATE_FILES, DEFAULT_INIT_TEMPLATE, type InitTemplate } from "./template"
 import type { SetupAnswers, SetupFiles } from "./setup"
 import { copyProjectPatches, dependencyVersionIn, projectPatchesFrom, versionIn } from "./version"
 import { shellWord } from "./workflow"
@@ -47,37 +47,13 @@ export interface InitializedActor {
 
 export const defaultInitDirectory = (name: string): string => name
 
-const manifestTemplate = (template: Exclude<InitTemplate, "alchemy" | "rlm">): string => {
-  const vars = {
-    quickstart: { TARDIGRADE_CONFIG: {} },
-    agent: { TARDIGRADE_CONFIG: {} },
-  }
-  return `${JSON.stringify({ vars: vars[template] }, null, 2)}\n`
-}
-
-const alchemyTemplate = (name: string, template: Exclude<InitTemplate, "alchemy" | "rlm">, now: Date): string => {
-  const imports = {
-    quickstart: 'import type { ActorDO, ThreadDO } from "./worker"',
-    agent: 'import type { ActorDO, ThreadDO, Sandbox } from "./worker"',
-  }
-  const resources = {
-    quickstart: "",
-    agent: `    const workspace = Cloudflare.Container("current", {
-      schedulingPolicy: "durable_object",
-      context: "./container",
-      dockerfile: "Dockerfile",
-    })\n`,
-  }
-  const bindings = {
-    quickstart: "",
-    agent: '        SANDBOX: Cloudflare.DurableObject<InstanceType<typeof Sandbox>>("SANDBOX", { className: "Sandbox", containers: [workspace] }),\n',
-  }
+const alchemyTemplate = (name: string, now: Date): string => {
   return `import * as Alchemy from "alchemy"
 import * as Cloudflare from "@alchemy.run/cloudflare"
 import { Config, Effect, Option } from "effect"
 import { readProjectConfig } from "tardie/deprecated/cli/config"
 import project from "./${DEFAULT_PROJECT_CONFIG_PATH}"
-${imports[template]}
+import type { ActorDO, ThreadDO, Sandbox } from "./worker"
 
 export default Alchemy.Stack(
   ${JSON.stringify(name)},
@@ -86,7 +62,12 @@ export default Alchemy.Stack(
     const config = yield* readProjectConfig(import.meta.dirname).pipe(Effect.orDie)
     const token = yield* Config.option(Config.Redacted("TARDIGRADE_TOKEN"))
     const credentials = Object.fromEntries(Object.values(config.models.providers).flatMap(provider => provider.env.map(name => [name, Config.Redacted(name)])))
-${resources[template]}    const worker = yield* Cloudflare.Worker("Actor", {
+    const workspace = Cloudflare.Container("current", {
+      schedulingPolicy: "durable_object",
+      context: "./container",
+      dockerfile: "Dockerfile",
+    })
+    const worker = yield* Cloudflare.Worker("Actor", {
       main: "./worker.ts",
       compatibility: { date: ${JSON.stringify(now.toISOString().slice(0,10))}, flags: ["nodejs_compat"] },
       observability: { enabled: true },
@@ -97,7 +78,8 @@ ${resources[template]}    const worker = yield* Cloudflare.Worker("Actor", {
         ...Option.match(token, { onNone: () => ({}), onSome: TARDIGRADE_TOKEN => ({ TARDIGRADE_TOKEN }) }),
         ACTORS: Cloudflare.DurableObject<InstanceType<typeof ActorDO>>("ACTORS", { className: "ActorDO" }),
         THREADS: Cloudflare.DurableObject<InstanceType<typeof ThreadDO>>("THREADS", { className: "ThreadDO" }),
-${bindings[template]}      },
+        SANDBOX: Cloudflare.DurableObject<InstanceType<typeof Sandbox>>("SANDBOX", { className: "Sandbox", containers: [workspace] }),
+      },
     })
     return { url: worker.url }
   }),
@@ -110,13 +92,12 @@ const packageTemplate = (
   effectVersion: string,
   platformBunVersion: string,
   alchemyVersion: string,
-  cloudflareVersion: string,
-  template: InitTemplate
+  cloudflareVersion: string
 ): string => `${JSON.stringify({
   private: true,
   type: "module",
   scripts: {
-    dev: template === "quickstart" ? `bun --watch ${DEFAULT_SERVER_ENTRY}` : `bun --env-file=.env --watch ${DEFAULT_SERVER_ENTRY}`,
+    dev: `bun --env-file=.env --watch ${DEFAULT_SERVER_ENTRY}`,
     "dev:cloudflare": "alchemy dev",
     "plan:cloudflare": "alchemy plan",
     "deploy:cloudflare": "alchemy deploy",
@@ -168,9 +149,45 @@ const initAlchemyActor = async (name: string, options: InitActorOptions): Promis
   }
 }
 
+const initCounter = async (name: string, options: InitActorOptions): Promise<InitializedActor> => {
+  if (options.modelProvider !== undefined || options.modelProtocol !== undefined || options.modelLock !== undefined) throw new Error("The native counter has no model provider or model lock")
+  const source = await actorTemplate({ name, template: "quickstart" })
+  const directory = resolve(options.cwd ?? process.cwd(), options.directory ?? name)
+  const packageVersion = options.packageVersion ?? await versionIn(import.meta.url)
+  const dependencies = Object.fromEntries(await Promise.all(["alchemy", "@alchemy.run/cloudflare", "@alchemy.run/domain", "@effect/platform-bun", "effect"].map(async dependency => [dependency, await dependencyVersionIn(dependency, import.meta.url)] as const)))
+  if (packageVersion.endsWith("-unknown") || Object.values(dependencies).some(version => version.endsWith("-unknown"))) throw new Error("cannot determine native counter dependency versions")
+  const patches = await projectPatchesFrom(import.meta.url)
+  const created = await mkdir(directory, { recursive: true })
+  if (created === undefined) throw new Error(`init target already exists at ${directory}. Choose a new directory.`)
+  try {
+    for (const file of QUICKSTART_TEMPLATE_FILES) {
+      if (file === "actor.ts") {
+        await writeFile(resolve(directory, file), source, "utf8")
+        continue
+      }
+      const content = await readFile(new URL(`../../examples/quickstart/${file}.template`, import.meta.url), "utf8").catch(() => readFile(new URL(`../../../examples/quickstart/${file}.template`, import.meta.url), "utf8"))
+      if (file === "worker.ts") {
+        await writeFile(resolve(directory, file), content.replace('date: "2026-11-06"', `date: ${JSON.stringify((options.now ?? new Date()).toISOString().slice(0, 10))}`), "utf8")
+      } else if (file === "alchemy.run.ts") {
+        await writeFile(resolve(directory, file), content.replace('"counter",', `${JSON.stringify(name)},`), "utf8")
+      } else {
+        await writeFile(resolve(directory, file), content, "utf8")
+      }
+    }
+    await copyProjectPatches(patches, directory)
+    await writeFile(resolve(directory, ".gitignore"), ".env\n.env.*\n!.env.example\n.alchemy/\nnode_modules/\n", "utf8")
+    await writeFile(resolve(directory, DEFAULT_PACKAGE_MANIFEST), `${JSON.stringify({ private: true, type: "module", scripts: { dev: "alchemy dev", "dev:cloudflare": "alchemy dev", "dev:memory": "bun --env-file=.env server.ts", "plan:cloudflare": "alchemy plan", "deploy:cloudflare": "alchemy deploy", "destroy:cloudflare": "alchemy destroy", cli: "bun --env-file=.env client.ts" }, dependencies: { ...dependencies, tardie: packageVersion }, patchedDependencies: patches.patchedDependencies }, null, 2)}\n`, "utf8")
+    return { name, directory, entry: resolve(directory, "actor.ts"), server: resolve(directory, "server.ts"), worker: resolve(directory, "worker.ts"), alchemy: resolve(directory, "alchemy.run.ts"), manifest: resolve(directory, ".env.example"), packageManifest: resolve(directory, DEFAULT_PACKAGE_MANIFEST), template: "quickstart" }
+  } catch (error) {
+    await rm(directory, { recursive: true, force: true })
+    throw error
+  }
+}
+
 export const initActor = async (name: string, options: InitActorOptions): Promise<InitializedActor> => {
   const template = options.template ?? DEFAULT_INIT_TEMPLATE
   if (template === "alchemy" || template === "rlm") return initAlchemyActor(name, options)
+  if (template === "quickstart") return initCounter(name, options)
   const cwd = options.cwd ?? process.cwd()
   const directory = resolve(cwd, options.directory ?? defaultInitDirectory(name))
   const entry = resolve(directory, DEFAULT_ACTOR_ENTRY)
@@ -184,7 +201,7 @@ export const initActor = async (name: string, options: InitActorOptions): Promis
     name,
     template,
   })
-  const manifestSource = manifestTemplate(template)
+  const manifestSource = `${JSON.stringify({ vars: { TARDIGRADE_CONFIG: {} } }, null, 2)}\n`
   const templateFile = (file: string) => readFile(new URL(`../../examples/${template}/${file}.template`, import.meta.url), "utf8").catch(() => readFile(new URL(`../../../examples/${template}/${file}.template`, import.meta.url), "utf8"))
   const packageVersion = options.packageVersion ?? await versionIn(import.meta.url)
   if (packageVersion.endsWith("-unknown")) throw new Error("cannot determine the installed Tardigrade version")
@@ -207,17 +224,14 @@ export const initActor = async (name: string, options: InitActorOptions): Promis
     await writeFile(entry, source, "utf8")
     await writeFile(server, await templateFile("server.ts"), "utf8")
     await writeFile(worker, await templateFile("worker.ts"), "utf8")
-    if (template === "quickstart") await writeFile(resolve(directory, "SKILL.md"), await templateFile("SKILL.md"), "utf8")
-    if (template === "agent") {
-      await writeFile(resolve(directory, "services.ts"), await templateFile("services.ts"), "utf8")
-      await mkdir(resolve(directory, "container"))
-      await writeFile(resolve(directory, "container/Dockerfile"), await templateFile("Dockerfile"), "utf8")
-      await mkdir(resolve(directory, "generated"))
-      await writeFile(resolve(directory, PROVIDER_REGISTRY_FILE), providerRegistrySource(options.modelLock?.providers ?? {}), "utf8")
-    }
+    await writeFile(resolve(directory, "services.ts"), await templateFile("services.ts"), "utf8")
+    await mkdir(resolve(directory, "container"))
+    await writeFile(resolve(directory, "container/Dockerfile"), await templateFile("Dockerfile"), "utf8")
+    await mkdir(resolve(directory, "generated"))
+    await writeFile(resolve(directory, PROVIDER_REGISTRY_FILE), providerRegistrySource(options.modelLock?.providers ?? {}), "utf8")
     await writeFile(manifest, manifestSource, "utf8")
-    await writeFile(alchemy, alchemyTemplate(name, template, options.now ?? new Date()), "utf8")
-    await writeFile(packageManifest, packageTemplate(packageVersion, effectVersion, platformBunVersion, alchemyVersion, cloudflareVersion, template), "utf8")
+    await writeFile(alchemy, alchemyTemplate(name, options.now ?? new Date()), "utf8")
+    await writeFile(packageManifest, packageTemplate(packageVersion, effectVersion, platformBunVersion, alchemyVersion, cloudflareVersion), "utf8")
     await writeFile(modelLock, `${JSON.stringify(options.modelLock ?? emptyModelLock(), null, 2)}\n`, "utf8")
 
   } catch (error) {
@@ -255,6 +269,7 @@ export const initSummary = (
   answers: SetupAnswers | undefined,
   options: InitSummaryOptions = {}
 ): string => {
+  if (actor.template === "quickstart") return `Created ${actor.name} in ${actor.directory}\nNative Domain Counter with authenticated commands and Effect notification workflows.\nCopy .env.example to .env and configure token and subject.\nRun bun run dev for Alchemy Cloudflare or bun run dev:memory for ephemeral state.\nUse bun run cli --help for native commands and reads.\n`
   if (actor.template === "alchemy" || actor.template === "rlm") return `Created ${actor.name} in ${actor.directory}\nNative Domain model: Thread aggregate, RunExecution policy, ExecuteRun saga.\nCopy .env.example to .env and supply the required settings.\nRun bun run dev and bun run dev:runner; use bun run cli --help for native commands.\n`
   const colors = options.colors ?? false
   const cwd = options.cwd ?? process.cwd()
@@ -274,7 +289,6 @@ export const initSummary = (
     summaryField("", shownPath(actor.directory, actor.alchemy), colors),
     summaryField("", shownPath(actor.directory, actor.packageManifest), colors),
     ...(actor.modelLock === undefined ? [] : [summaryField("", shownPath(actor.directory, actor.modelLock), colors)]),
-    ...(actor.template === "quickstart" ? [summaryField("", "SKILL.md", colors)] : []),
     ...(credential === undefined ? [] : [summaryField("credential", credential, colors)]),
     ...(answers?.region === undefined ? [] : [summaryField("region", answers.region, colors)]),
     "",
@@ -284,7 +298,7 @@ export const initSummary = (
     "",
     styled("→ call from another terminal", "1;36", colors),
     "  tdg thread create --name main",
-    actor.template === "quickstart" ? "  tdg call increment null --thread main" : '  tdg call message \'{"text":"List the files here and summarize the README."}\' --thread main',
+    '  tdg call message \'{"text":"List the files here and summarize the README."}\' --thread main',
     "",
     styled("↗ deploy", "1;36", colors),
     summaryField("Cloudflare", "bun run deploy:cloudflare", colors),

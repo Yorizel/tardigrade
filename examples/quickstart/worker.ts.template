@@ -1,14 +1,23 @@
-import { Context } from "effect"
-import { createActorWorker } from "tardie/platform/cloudflare"
-import definition, { notifyLayer } from "./actor"
+import * as Cloudflare from "@alchemy.run/cloudflare"
+import * as DomainCloudflare from "@alchemy.run/cloudflare/Domain"
+import { ReceiptOwnerGuardLive } from "tardie/domain"
+import { SessionLive } from "tardie/platform/alchemy"
+import { Effect, Layer } from "effect"
+import { HttpServerRequest, HttpServerResponse } from "effect/http"
+import { CounterApi, CounterModel, CounterNotificationsLive, NotifyCountLive, notifyLayer } from "./actor"
 
-const worker = createActorWorker({
-  actor: definition,
-  actorContext: Context.pick(),
-  services: () => notifyLayer,
-  http: (env: { readonly TARDIGRADE_TOKEN?: string }) => ({ ...(env.TARDIGRADE_TOKEN ? { token: env.TARDIGRADE_TOKEN } : {}) }),
-})
-
-export const ActorDO = worker.ActorObject
-export const ThreadDO = worker.ThreadObject
-export default { fetch: worker.fetch }
+export default class CounterWorker extends Cloudflare.Worker<CounterWorker>()(
+  "Counter",
+  { main: import.meta.url, compatibility: { date: "2026-11-06", flags: ["nodejs_compat"] } },
+  Effect.gen(function* () {
+    const api = yield* CounterApi.pipe(Effect.provide(SessionLive))
+    return { fetch: Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest
+      if (new URL(request.url, "http://localhost").pathname === "/healthz") return HttpServerResponse.text("ok")
+      return yield* api.fetch
+    }) }
+  }).pipe(Effect.provide(Layer.merge(CounterModel.layer(CounterNotificationsLive), ReceiptOwnerGuardLive).pipe(
+    Layer.provide(NotifyCountLive.pipe(Layer.provide(notifyLayer))),
+    Layer.provide(DomainCloudflare.layerDurableObjects()),
+  ))),
+) {}

@@ -55,65 +55,72 @@ const eventually = async (check: () => Promise<boolean>, timeout = 10_000) => {
   throw new Error("quickstart condition did not complete before its deadline")
 }
 
-test("generated counter quickstart runs without model setup and recovers its count", async () => {
+test("generated native counter serves authenticated HTTP commands and ephemeral state", async () => {
   await mkdir(join(repository, ".cache/cli-tests"), { recursive: true })
   const root = await mkdtemp(join(repository, ".cache/cli-tests/counter-"))
   const reservation = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response() })
   const port = reservation.port!
   await reservation.stop(true)
   const url = `http://127.0.0.1:${port}`
-  const env = { PATH: process.env.PATH!, PORT: String(port) }
-  let cwd = root
-  const run = async (...args: string[]) => {
-    const lines: string[] = []
-    const capture: Console.Console = Object.assign(Object.create(console), { log: (...values: unknown[]) => { lines.push(values.map(String).join(" ")) } })
-    await Command.runWith(tdg, { version: "test", renderErrors: false })(args).pipe(
-      Effect.provideService(Console.Console, capture),
-      Effect.provide(Layer.mergeAll(BunServices.layer, Layer.succeed(Cli, {
-        cwd, env, openClient: openCliClient, fetch: Object.assign(() => { throw new Error("Counter init must not fetch model configuration") }, { preconnect: globalThis.fetch.preconnect }),
-        installProject: bundleEntry, mintId: () => crypto.randomUUID(),
-      }))), Effect.runPromise,
-    )
-    return lines.join("\n")
-  }
-  const remote = (...args: string[]) => run(...args, "--url", url, "--json")
+  const env = { PATH: process.env.PATH!, PORT: String(port), TARDIGRADE_URL: url, TARDIGRADE_TOKEN: "counter-http-fixture", TARDIGRADE_SUBJECT: "alice" }
   let child: ReturnType<typeof Bun.spawn> | undefined
   let stdout: Promise<string> | undefined
   let stderr: Promise<string> | undefined
-  const start = async () => {
+  try {
+    const captured: string[] = []
+    const capture: Console.Console = Object.assign(Object.create(globalThis.console), { log: (...values: unknown[]) => { captured.push(values.map(String).join(" ")) } })
+    await Command.runWith(tdg, { version: "test", renderErrors: false })(["init", "counter", "--template", "quickstart", "--json"]).pipe(
+      Effect.provideService(Console.Console, capture),
+      Effect.provide(Layer.mergeAll(BunServices.layer, Layer.succeed(Cli, {
+        cwd: root, env, openClient: openCliClient,
+        fetch: Object.assign(() => { throw new Error("Counter initialization must not fetch model configuration") }, { preconnect: globalThis.fetch.preconnect }),
+        installProject: bundleEntry, mintId: () => crypto.randomUUID(),
+      }))), Effect.runPromise,
+    )
+    const cwd = join(root, "counter")
+    expect(captured.join("\n")).toContain('"template": "quickstart"')
+    await bundleEntry(cwd, "client.ts")
     const started = Bun.spawn([process.execPath, "build/server.js"], { cwd, env, stdout: "pipe", stderr: "pipe" })
     child = started
     stdout = new Response(started.stdout).text()
     stderr = new Response(started.stderr).text()
     await eventually(async () => {
-      if (child!.exitCode !== null) throw new Error(await stderr)
+      if (started.exitCode !== null) throw new Error(await stderr)
       return fetch(`${url}/healthz`).then(response => response.ok, () => false)
     })
-  }
-  const stop = async () => {
-    child?.kill("SIGTERM")
-    if (child) expect(await child.exited).toBe(0)
-    child = undefined
-  }
-  try {
-    await run("init", "counter", "--template", "quickstart", "--json")
-    cwd = join(root, "counter")
-    expect(await readFile(join(cwd, "SKILL.md"), "utf8")).toContain("decrement")
-    await bundleEntry(cwd, "worker.ts")
-    await start()
-    expect(JSON.parse(await remote("methods")).map((method: { name: string }) => method.name).sort()).toEqual(["decrement", "increment"])
-    await remote("thread", "create", "--name", "main")
-    for (const [method, output] of [["increment", 1], ["increment", 2], ["decrement", 1]] as const) {
-      expect(JSON.parse(await remote("call", method, "null", "--thread", "main"))).toMatchObject({ status: "completed", output })
+    const invoke = async (...args: string[]) => {
+      const process = Bun.spawn([Bun.which("bun")!, "build/client.js", ...args], { cwd, env, stdout: "pipe", stderr: "pipe" })
+      const [exit, output, error] = await Promise.all([process.exited, new Response(process.stdout).text(), new Response(process.stderr).text()])
+      if (exit !== 0) throw new Error(error)
+      return JSON.parse(output)
     }
-    const events = await remote("events", "main")
-    expect(events).toContain("Incremented")
-    expect(events).toContain("Decremented")
-    await stop()
+    const first = await invoke("increment", "--json", JSON.stringify({ target: "main", input: {}, commandId: "first" }))
+    expect(first.reply.count).toBe(1)
+    expect((await invoke("increment", "--json", JSON.stringify({ target: "main", input: {}, commandId: "second" }))).reply.count).toBe(2)
+    expect((await invoke("decrement", "--json", JSON.stringify({ target: "main", input: {}, commandId: "third" }))).reply.count).toBe(1)
+    expect(await invoke("increment", "--json", JSON.stringify({ target: "main", input: {}, commandId: "first" }))).toEqual(first)
+    expect(await invoke("counter", "get", "--key", "main")).toEqual({ _tag: "Open", owner: "alice", count: 1 })
+    child.kill("SIGTERM")
+    expect(await child.exited).toBe(130)
+    child = undefined
     expect(await stdout).toContain("2 is even")
-    await start()
-    expect(JSON.parse(await remote("call", "increment", "null", "--thread", "main"))).toMatchObject({ status: "completed", output: 2 })
-    await stop()
+    const restarted = Bun.spawn([process.execPath, "build/server.js"], { cwd, env, stdout: "pipe", stderr: "pipe" })
+    child = restarted
+    stdout = new Response(restarted.stdout).text()
+    stderr = new Response(restarted.stderr).text()
+    await eventually(async () => {
+      if (restarted.exitCode !== null) throw new Error(await stderr)
+      return fetch(`${url}/healthz`).then(response => response.ok, () => false)
+    })
+    expect((await invoke("increment", "--json", JSON.stringify({ target: "main", input: {}, commandId: "after-memory-restart" }))).reply.count).toBe(1)
+    const refused = Bun.spawn([Bun.which("bun")!, "build/client.js", "counter", "get", "--key", "main"], { cwd, env: { ...env, TARDIGRADE_TOKEN: "wrong-counter-token" }, stdout: "pipe", stderr: "pipe" })
+    const [refusedExit, refusedOutput, refusedError] = await Promise.all([refused.exited, new Response(refused.stdout).text(), new Response(refused.stderr).text()])
+    expect(refusedExit).toBe(1)
+    expect(refusedOutput).toBe("")
+    expect(refusedError).toContain("Unauthorized")
+    child.kill("SIGTERM")
+    expect(await child.exited).toBe(130)
+    child = undefined
   } finally {
     child?.kill("SIGKILL")
     if (child) await child.exited

@@ -1,22 +1,14 @@
 ---
-name: counter-actor
-description: Run and extend the Tardigrade counter actor.
+name: counter-domain
+description: Run and extend the native Domain counter.
 ---
 
-# Counter actor
+# Counter
 
-`actor.ts` defines a durable counter, increment and decrement methods, and a notification act for positive even counts. `notifyLayer` supplies the act implementation. No model provider or API key is required.
+`actor.ts` defines the Counter aggregate, Increment and Decrement commands, native replies, owner authorization and a committed-event notification policy. Positive even counts start a native Effect workflow and checkpoint its notification Activity. `notifyLayer` supplies the external notification implementation. There is no model provider or API key.
 
-Run locally with `bun run dev`. In another terminal:
+Copy `.env.example` to `.env` and set `TARDIGRADE_TOKEN` and `TARDIGRADE_SUBJECT`. Run `bun run dev` for the Alchemy Cloudflare platform. The counter uses native Domain Durable Objects and native Effect workflow checkpoints. `bun run dev:memory` runs the example with ephemeral memory state; its state and workflow results end with the process.
 
-```sh
-tdg thread create --name main
-tdg call increment null --thread main
-tdg call increment null --thread main
-tdg call decrement null --thread main
-tdg events main
-```
+Use `bun run cli --help` for commands and reads generated from CounterApi. Increment and Decrement use the same immutable counter ID. A caller-supplied command ID retries its original native receipt. Reads and receipt replay require the owning subject. Notifications have at-least-once external delivery; a process failure after an external effect and before its Activity checkpoint can repeat that effect.
 
-Keep state transitions in durable atoms and declare external work through acts. Supply I/O implementations through the host's services.
-
-`worker.ts` hosts the same actor on Cloudflare. `alchemy.run.ts` owns the Worker and its Durable Object namespaces. Preview with `bun run plan:cloudflare` and deploy with `bun run deploy:cloudflare`.
+Keep decisions in the aggregate and external work in the native workflow Activity. `worker.ts` and `alchemy.run.ts` own hosting. Preview with `bun run plan:cloudflare` and deploy with `bun run deploy:cloudflare`. Existing actor journals require an explicit import before cutover.

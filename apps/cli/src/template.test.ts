@@ -21,17 +21,15 @@ const build = async (source: string) => {
 }
 
 describe("actorTemplate", () => {
-  test("builds the quickstart template by default", async () => {
+  test("renders the native quickstart contract", async () => {
     const source = await actorTemplate({ name: "reviewer" })
-    const built = await build(source)
-
-    expect(built.manifest.name).toBe("reviewer")
     expect(DEFAULT_INIT_TEMPLATE).toBe("alchemy")
     expect(INIT_TEMPLATES).toEqual(["alchemy", "quickstart", "agent", "rlm"])
     expect(source).toContain('const actorName = "reviewer"')
-    expect(source).toContain("defineActor(actorName, Effect.sync")
+    expect(source).toContain('Domain.Aggregate("Counter"')
     expect(source).toContain("Incremented")
     expect(source).toContain("Decremented")
+    expect(source).not.toContain("defineActor")
   })
 
   test("keeps custom instructions valid inside the editable template literal", async () => {
