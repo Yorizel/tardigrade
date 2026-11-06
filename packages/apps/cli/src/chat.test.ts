@@ -1,3 +1,4 @@
+import { RunReceiptGuardLive } from "@clavia/tardigrade-domain/RunReceiptGuard.middleware"
 import { expect, test } from "bun:test"
 import * as Domain from "@alchemy.run/domain"
 import { BunHttpServer, BunServices } from "@effect/platform-bun"
@@ -23,7 +24,7 @@ class CliApi extends Domain.Api("Tardigrade", {
   aggregates: ["Thread"], views: ["ThreadDirectory"], streams: [],
 }) {}
 const authorization = { authorization: "Bearer cli-test-token" }
-const session = Layer.merge(ReceiptOwnerGuardLive, Layer.succeed(Session, (effect, { headers }) => {
+const session = Layer.mergeAll(RunReceiptGuardLive, ReceiptOwnerGuardLive, Layer.succeed(Session, (effect, { headers }) => {
   if (!Option.contains(Headers.get(headers, "authorization"), authorization.authorization)) return Effect.fail(Unauthorized.make())
   return effect.pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
 }))

@@ -60,7 +60,7 @@ const ToolCodeResult = Schema.Struct({ outcome: CodeOutcome, logs: Schema.Array(
 const childOutput = OutputDeclaration.make({ name: "finding", schema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"], additionalProperties: false } })
 const parentOutput = OutputDeclaration.make({ name: "summary", schema: { type: "object", properties: { summary: { type: "string" } }, required: ["summary"], additionalProperties: false } })
 
-test.each(["model-selected", "model-denied", "child-output", "child-output-invalid", "child-output-unknown", "code-child-output", "code-child-output-invalid", "code-child-output-unknown", "meeseeks-multiturn", "output-valid", "output-invalid", "output-malformed", "code", "code-agents", "delegation", "fetch-direct", "fetch-code", "workspace-direct", "workspace-code", "spill", "spill-rejected"] as const)("default Alchemy agent executes %s through the real OpenAI HTTP provider and native policies", scenario => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+test.each(["code-model-denied", "model-selected", "model-denied", "child-output", "child-output-invalid", "child-output-unknown", "code-child-output", "code-child-output-invalid", "code-child-output-unknown", "meeseeks-multiturn", "output-valid", "output-invalid", "output-malformed", "code", "code-agents", "delegation", "fetch-direct", "fetch-code", "workspace-direct", "workspace-code", "spill", "spill-rejected"] as const)("default Alchemy agent executes %s through the real OpenAI HTTP provider and native policies", scenario => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
   const spillTarget = yield* workspaceKey("alice", "default-code")
   const directory = yield* Effect.acquireRelease(Effect.promise(() => mkdtemp(join(tmpdir(), "tardigrade-default-code-agent-"))), path => Effect.promise(() => rm(path, { recursive: true, force: true })))
   const requests = yield* Ref.make<ReadonlyArray<typeof OpenAiSchema.CreateResponse.Type>>([])
@@ -85,6 +85,19 @@ test.each(["model-selected", "model-denied", "child-output", "child-output-inval
       if (scenario !== "meeseeks-multiturn" || previous.length < 2) expect(encoded).toContain(DEFAULT_MEESEEKS_INSTRUCTIONS)
     }
     const usage = { input_tokens: 20, output_tokens: 10, total_tokens: 30 }
+    if (scenario === "code-model-denied") {
+      if (previous.length === 0) {
+        const code = "try { await agents.run({text: 'Forbidden child', model: {provider: 'openai', model: 'forbidden'}}); return 'Unexpected success'; } catch (error) { return 'Recovered model refusal'; }"
+        const argumentsJson = yield* Schema.encodeEffect(Schema.fromJsonString(CodeTool.parametersSchema))({ code })
+        return yield* HttpServerResponse.schemaJson(OpenAiSchema.Response)({ id: "refusal-code", object: "response", model: "gpt-4.1-mini", created_at: 1700000000, usage, output: [{ type: "function_call", id: "refusal-call", call_id: "refusal-call", name: CodeTool.name, arguments: argumentsJson, status: "completed" }] }).pipe(Effect.orDie)
+      }
+      if (typeof body.input === "string" || body.input === undefined) return yield* Effect.die("Expected native tool result")
+      const result = body.input.find(item => item.type === "function_call_output" && item.call_id === "refusal-call")
+      if (result?.type !== "function_call_output" || typeof result.output !== "string") return yield* Effect.die("Expected Code refusal result")
+      const decoded = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ToolCodeResult))(result.output).pipe(Effect.orDie)
+      expect(decoded.outcome).toEqual({ _tag: "Returned", value: "Recovered model refusal" })
+      return yield* HttpServerResponse.schemaJson(OpenAiSchema.Response)({ id: "refusal-recovered", object: "response", model: "gpt-4.1-mini", created_at: 1700000001, usage, output: [{ type: "message", id: "recovered-message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Refusal recovered.", annotations: [] }] }] }).pipe(Effect.orDie)
+    }
     if (scenario === "model-selected") {
       expect(body.model).toBe("allowed-model")
       expect(body.max_output_tokens).toBe(77)
@@ -439,7 +452,23 @@ test.each(["model-selected", "model-denied", "child-output", "child-output-inval
   const runnerEndpoint = yield* RpcServer.toHttpEffect(RunRpcs.merge(CodeRpcs).merge(DelegationRpcs)).pipe(Effect.provide(Layer.succeedContext(runnerContext)), Effect.provide(RpcSerialization.layerNdjson))
   yield* Layer.build(HttpServer.serve()(runnerEndpoint).pipe(Layer.provide(Layer.succeedContext(runnerServerContext))))
   if (scenario !== "meeseeks-multiturn" && scenario !== "fetch-direct" && scenario !== "workspace-direct") yield* threads.send("default-code", OpenThread.make({ actor: "default", instance: "instance", name: "default", limits: DEFAULT_RUN_LIMITS })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
-  const request = { runId: "run", digest: "default-code", prompt: Prompt.make({ "model-selected": "Use the selected model.", "model-denied": "Reject a forbidden model.", "child-output": "Delegate with a structured finding.", "child-output-invalid": "Observe an invalid child finding.", "child-output-unknown": "Reject an unknown child output.", "code-child-output": "Use agents.run with a structured finding.", "code-child-output-invalid": "Observe invalid structured output inside Code.", "code-child-output-unknown": "Reject an unknown child output inside Code.", "meeseeks-multiturn": "Answer two turns.", "output-valid": "Return the declared research object.", "output-invalid": "Return invalid shape to verify terminal validation.", "output-malformed": "Return malformed JSON to verify terminal validation.", "code-agents": "Use agents.run inside Code to research a primary source.", code: "Read the current time using Code Mode.", delegation: "Delegate a child task and report its completed result.", "fetch-direct": "Read the granted URL with fetch_get.", "fetch-code": "Read the granted URL using Code Mode.", "workspace-direct": "Write text, read a bounded slice, and list the durable workspace.", "workspace-code": "Use Code Mode to write, read and list the durable workspace.", spill: "Return a large Code result then read and grep its complete persisted value.", "spill-rejected": "Report a known archive allowance refusal without retrying the completed Code." }[scenario]) }
+  const request = { runId: "run", digest: "default-code", prompt: Prompt.make({ "code-model-denied": "Handle a forbidden child model and continue.", "model-selected": "Use the selected model.", "model-denied": "Reject a forbidden model.", "child-output": "Delegate with a structured finding.", "child-output-invalid": "Observe an invalid child finding.", "child-output-unknown": "Reject an unknown child output.", "code-child-output": "Use agents.run with a structured finding.", "code-child-output-invalid": "Observe invalid structured output inside Code.", "code-child-output-unknown": "Reject an unknown child output inside Code.", "meeseeks-multiturn": "Answer two turns.", "output-valid": "Return the declared research object.", "output-invalid": "Return invalid shape to verify terminal validation.", "output-malformed": "Return malformed JSON to verify terminal validation.", "code-agents": "Use agents.run inside Code to research a primary source.", code: "Read the current time using Code Mode.", delegation: "Delegate a child task and report its completed result.", "fetch-direct": "Read the granted URL with fetch_get.", "fetch-code": "Read the granted URL using Code Mode.", "workspace-direct": "Write text, read a bounded slice, and list the durable workspace.", "workspace-code": "Use Code Mode to write, read and list the durable workspace.", spill: "Return a large Code result then read and grep its complete persisted value.", "spill-rejected": "Report a known archive allowance refusal without retrying the completed Code." }[scenario]) }
+  if (scenario === "code-model-denied") {
+    yield* threads.send("default-code", RequestRun.make(request)).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
+    const terminal = yield* Effect.repeat(threads.state("default-code"), { until: value => value._tag === "Open" && value.active?.status === "completed", schedule: Schedule.spaced("10 millis") }).pipe(Effect.timeout("5 seconds"))
+    if (terminal._tag !== "Open" || terminal.active === null) return yield* Effect.die("Expected completed parent")
+    expect(terminal.active.tokens).toBe(60)
+    expect((yield* Ref.get(requests)).length).toBe(2)
+    const code = yield* codes.state(runKey("default-code", "run:2"))
+    if (code._tag !== "Open") return yield* Effect.die("Expected persisted Code")
+    expect(code.status).toBe("completed")
+    expect(code.calls[0]?.request.refusal?.reason).toBe("ModelNotAllowed")
+    expect(code.calls[0]?.outcome).toEqual({ _tag: "Failed", reason: "ModelNotAllowed" })
+    expect(code.calls[0]?.request.mutation).toBe(false)
+    const childId = delegationKey("default-code", "run", yield* codeAgentRequestId(runKey("default-code", "run:2"), 0))
+    expect((yield* delegations.state(childId))._tag).toBe("Unreserved")
+    return
+  }
   if (scenario === "model-selected" || scenario === "model-denied") {
     const model = { provider: "openai", model: "forbidden" }
     const selected = (() => {

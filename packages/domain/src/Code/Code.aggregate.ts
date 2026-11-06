@@ -66,6 +66,7 @@ export class CodeExecution extends Domain.Aggregate("CodeExecution", {
       if (current.request.catalog[command.package]?.includes(command.method) !== true) return yield* CodeRejected.make({ reason: "MethodNotSelected" })
       if (command.ordinal !== current.calls.length) return yield* CodeRejected.make({ reason: "CallOrderConflict" })
       if (current.calls.length >= current.request.limits.maxCalls) return yield* CodeRejected.make({ reason: "CallBudgetExceeded" })
+      if (request.refusal !== undefined && (request.mutation || request.requiresApproval || request.execution !== undefined)) return yield* CodeRejected.make({ reason: "InvalidRefusalCapability" })
       if (request.execution !== undefined && (!request.mutation || request.execution.toolCalls > request.execution.limits.maxToolCalls)) return yield* CodeRejected.make({ reason: "InvalidDelegationCapability" })
       return [CodeCallPrepared.make({ call: { callId: `${id.length}:${id}:${command.ordinal}`, request, status: "prepared", approved: !command.requiresApproval, outcome: null, settlementSequence: null, reason: null } })]
     }),

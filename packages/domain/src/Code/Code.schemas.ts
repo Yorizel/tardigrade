@@ -1,3 +1,4 @@
+import { ModelUnavailable } from "../Execution/ModelAccess.external"
 import { ModelGrant } from "../Execution/Model.schemas"
 import { Ownership } from "../Actor.context"
 import { Schema } from "effect"
@@ -39,6 +40,7 @@ export const HostCallInput = Schema.Struct({
   mutation: Schema.Boolean,
   requiresApproval: Schema.Boolean,
   execution: Schema.optionalKey(AgentRunCapability),
+  refusal: Schema.optionalKey(ModelUnavailable),
 })
 export const CodeOutcome = Schema.Union([
   Schema.TaggedStruct("Returned", { value: Schema.optionalKey(Schema.Json), modelOutput: Schema.optionalKey(Schema.Array(Prompt.ToolModelOutputPart)) }),

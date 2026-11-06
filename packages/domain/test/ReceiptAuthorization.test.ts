@@ -34,6 +34,14 @@ for (const commandId of ["known-receipt", ""]) {
     expect(receipt.reply.receipt?.input).toEqual(request.prompt)
     const replay = yield* alice.RequestRun("private", request, { commandId, headers: aliceHeaders })
     expect(replay).toEqual(receipt)
+    const conflict = yield* alice.RequestRun("private", { ...request, model: { provider: "openai", model: "changed" } }, { commandId, headers: aliceHeaders }).pipe(Effect.result)
+    expect(Result.isFailure(conflict)).toBe(true)
+    if (Result.isFailure(conflict)) expect(conflict.failure._tag).toBe("ReceiptConflict")
+    for (const changed of [{ ...request, runId: "other-run" }, { ...request, digest: "other-digest" }, { ...request, prompt: Prompt.make("Changed prompt") }]) {
+      const changedReceipt = yield* alice.RequestRun("private", changed, { commandId, headers: aliceHeaders }).pipe(Effect.result)
+      expect(Result.isFailure(changedReceipt)).toBe(true)
+      if (Result.isFailure(changedReceipt)) expect(changedReceipt.failure._tag).toBe("ReceiptConflict")
+    }
     const same = yield* bob.RequestRun("private", request, { commandId, headers: bobHeaders }).pipe(Effect.result)
     expect(Result.isFailure(same)).toBe(true)
     if (Result.isFailure(same)) expect(same.failure._tag).toBe("ReceiptForbidden")

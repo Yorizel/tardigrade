@@ -2,7 +2,7 @@ import { ModelGrant } from "../Execution/Model.schemas"
 import { ContextPlan } from "../Execution/Context.schemas"
 import * as Domain from "@alchemy.run/domain"
 import { Schema } from "effect"
-import { ReceiptOwnerGuard, Session } from "../Actor.context"
+import { RunReceiptGuard, ReceiptOwnerGuard, Session } from "../Actor.context"
 import { ThreadId, RunLimits, Run, Step, Prompt, Response, Receipt, ChildBinding, RunRequest } from "./Thread.schemas"
 
 export class RunRejected extends Schema.TaggedError<RunRejected, { readonly brand: unique symbol }>()("RunRejected", { reason: Schema.String }, { httpApiStatus: 409 }) {}
@@ -23,7 +23,7 @@ export class RunCancelled extends Domain.Event("RunCancelled", { runId: Schema.N
 export class RunBecameUnknown extends Domain.Event("RunBecameUnknown", { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString, reason: Schema.String }) {}
 
 export class OpenThread extends Domain.Command("OpenThread", { target: ThreadId, middleware: [ReceiptOwnerGuard, Session], input: { actor: Schema.NonEmptyString, instance: Schema.NonEmptyString, name: Schema.NonEmptyString, limits: RunLimits }, events: [ThreadOpened], rejects: [NotOwner, RunRejected] }) {}
-export class RequestRun extends Domain.Command("RequestRun", { target: ThreadId, middleware: [ReceiptOwnerGuard, Session], input: RunRequest.fields, events: [RunRequested, RunAcknowledged], reply: { receipt: Schema.NullOr(Receipt) }, rejects: [NotOwner, RunRejected] }) {}
+export class RequestRun extends Domain.Command("RequestRun", { target: ThreadId, middleware: [RunReceiptGuard, ReceiptOwnerGuard, Session], input: RunRequest.fields, events: [RunRequested, RunAcknowledged], reply: { receipt: Schema.NullOr(Receipt) }, rejects: [NotOwner, RunRejected] }) {}
 export class BeginStep extends Domain.Command("BeginStep", { target: ThreadId, input: { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString, kind: Step.fields.kind, mutation: Schema.Boolean, requiresApproval: Schema.Boolean }, events: [StepPrepared], rejects: [RunRejected] }) {}
 export class ConfirmDispatch extends Domain.Command("ConfirmDispatch", { target: ThreadId, input: { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString }, events: [StepDispatched], rejects: [RunRejected] }) {}
 export class RecordStep extends Domain.Command("RecordStep", { target: ThreadId, input: { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString, prompt: Prompt.Prompt, usage: Response.Usage }, events: [StepRecorded, StepOutputRejected, RunFailed], rejects: [RunRejected] }) {}

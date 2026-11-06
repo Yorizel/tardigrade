@@ -90,6 +90,11 @@ export const ExecuteCodeLive = Layer.unwrap(Effect.gen(function* () {
           const entry = Option.getOrUndefined(EffectArray.findFirst(current.code.calls, value => value.request.ordinal === call.request.ordinal))
           if (current.code.status !== "running" || current.run === null || current.run.runId !== current.code.request.runId || ["completed", "failed", "cancelled", "unknown"].includes(current.run.status) || entry === undefined) return yield* Effect.die("Code execution is terminal")
           if (entry.outcome !== null) return entry.outcome
+          if (entry.request.refusal !== undefined) {
+            if (entry.status === "prepared") yield* api.DispatchCodeCall(executionId, { ordinal: entry.request.ordinal }, { headers, commandId: commandId(`dispatch:${entry.request.ordinal}`) }).pipe(Effect.orDie)
+            else if (entry.status !== "dispatched") return yield* Effect.die("Refused host call cannot be settled")
+            return { _tag: "Failed" as const, reason: entry.request.refusal.reason }
+          }
           if (entry.status === "dispatched") {
             yield* api.MarkCodeCallUnknown(executionId, { ordinal: entry.request.ordinal, reason: "Host call outcome was not recorded; reconciliation required" }, { headers, commandId: commandId(`unknown:${entry.request.ordinal}`) }).pipe(Effect.orDie)
             return yield* Effect.die("Host call outcome is unknown")

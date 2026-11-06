@@ -1,3 +1,4 @@
+import { RunReceiptGuardLive } from "@clavia/tardigrade-domain/RunReceiptGuard.middleware"
 import { ReceiptOwnerGuardLive } from "@clavia/tardigrade-domain/ReceiptOwnerGuard.middleware"
 import { CurrentCaller, Session, Unauthorized } from "@clavia/tardigrade-domain/Actor.context"
 import { Config, Effect, Layer, Option, Redacted, Schema } from "effect"
@@ -13,4 +14,4 @@ const AuthenticatedSessionLive = Layer.effect(Session, Effect.gen(function* () {
   }
 }))
 
-export const SessionLive = Layer.merge(AuthenticatedSessionLive, ReceiptOwnerGuardLive)
+export const SessionLive = Layer.mergeAll(AuthenticatedSessionLive, ReceiptOwnerGuardLive, RunReceiptGuardLive)

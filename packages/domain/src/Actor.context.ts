@@ -15,6 +15,10 @@ export class Session extends RpcMiddleware.Service<Session, { provides: CurrentC
 ) {}
 
 export class ReceiptForbidden extends Schema.TaggedError<ReceiptForbidden, { readonly brand: unique symbol }>()("ReceiptForbidden", {}, { httpApiStatus: 403 }) {}
+export class ReceiptConflict extends Schema.TaggedError<ReceiptConflict, { readonly brand: unique symbol }>()("ReceiptConflict", {}, { httpApiStatus: 409 }) {}
+
 export class ReceiptOwnerGuard extends RpcMiddleware.Service<ReceiptOwnerGuard, { requires: CurrentCaller | Internals }>()(
   "Tardigrade/ReceiptOwnerGuard", { error: ReceiptForbidden },
 ) {}
+
+export class RunReceiptGuard extends RpcMiddleware.Service<RunReceiptGuard>()("Tardigrade/RunReceiptGuard", { error: ReceiptConflict }) {}

@@ -1,3 +1,4 @@
+import { RunReceiptGuardLive } from "@clavia/tardigrade-domain/RunReceiptGuard.middleware"
 import { ActorInternalApi } from "@clavia/tardigrade-domain/ActorInternal.api"
 import { CurrentCaller, Session, Unauthorized } from "@clavia/tardigrade-domain/Actor.context"
 import { ReceiptOwnerGuardLive } from "@clavia/tardigrade-domain/ReceiptOwnerGuard.middleware"
@@ -14,13 +15,13 @@ const authenticate = Effect.fn("Internal.authenticate")(function* (headers: Head
   return yield* Schema.decodeUnknownEffect(CurrentCaller.schema)({ subject: owner.value }).pipe(Effect.mapError(() => Unauthorized.make()))
 })
 
-export const InternalSessionLive = Layer.merge(Layer.effect(Session, Effect.gen(function* () {
+export const InternalSessionLive = Layer.mergeAll(Layer.effect(Session, Effect.gen(function* () {
   const token = yield* RunnerCredential
   return (effect, { headers }) => Effect.gen(function* () {
     const owner = yield* authenticate(headers, token)
     return yield* effect.pipe(Effect.provideService(CurrentCaller, owner))
   })
-})), ReceiptOwnerGuardLive)
+})), ReceiptOwnerGuardLive, RunReceiptGuardLive)
 
 export const internalApi = Effect.gen(function* () {
   const token = yield* RunnerCredential

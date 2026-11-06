@@ -175,8 +175,9 @@ export const CodeMethodsLive = CodeMethods.toLayer(Effect.gen(function* () {
         const toolCalls = params.budget ?? delegationLimits.maxToolCalls
         if (toolCalls > delegationLimits.maxToolCalls) return yield* new ExecutionRejected({ reason: "DelegationToolBudgetExceeded" })
         const output = yield* selectChildOutput(childOutputs, params.output)
-        const model = yield* models.select({ actor, owner: input.scope.owner, requested: params.model ?? null, ...Struct.renameKeys(Struct.pick(input, ["model"]), { model: "inherited" }) })
-        const capability = { _tag: "Delegate" as const, targetActor: actor, limits: delegationLimits, toolCalls, model }
+        const model = yield* models.select({ actor, owner: input.scope.owner, requested: params.model ?? null, ...Struct.renameKeys(Struct.pick(input, ["model"]), { model: "inherited" }) }).pipe(Effect.result)
+        if (Result.isFailure(model)) return { ...input.call, input: params, mutation: false, requiresApproval: false, refusal: model.failure }
+        const capability = { _tag: "Delegate" as const, targetActor: actor, limits: delegationLimits, toolCalls, model: model.success }
         const execution = Option.match(output, { onNone: () => capability, onSome: output => ({ ...capability, output }) })
         return { ...input.call, input: params, mutation: true, requiresApproval: false, execution }
       }
