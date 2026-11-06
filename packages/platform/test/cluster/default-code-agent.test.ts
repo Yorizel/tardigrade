@@ -18,11 +18,13 @@ import { Thread } from "@clavia/tardigrade-domain/Thread/Thread.aggregate"
 import { OpenThread, RequestRun } from "@clavia/tardigrade-domain/Thread/Thread.commands"
 import { DEFAULT_RUN_LIMITS, Receipt } from "@clavia/tardigrade-domain/Thread/Thread.schemas"
 import { CodeExecution } from "@clavia/tardigrade-domain/Code/Code.aggregate"
+import { CodeTool } from "@clavia/tardigrade-domain/Code/CodeTool"
 import { CodeOutcome } from "@clavia/tardigrade-domain/Code/Code.schemas"
 import { ExecuteCodeLive } from "@clavia/tardigrade-domain/Code/ExecuteCode.saga"
 import { RunCodeLive } from "@clavia/tardigrade-domain/Code/RunCode.saga"
 import { ExecuteRunLive } from "@clavia/tardigrade-domain/Execution/ExecuteRun.saga"
 import { runKey, ExecuteRun, executionKey } from "@clavia/tardigrade-domain/Execution/Run.workflow"
+import { FetchGet, FetchResponse } from "../../src/cluster/fetch-tool"
 import { AgentExecutionLive, CodeMethodsLive } from "../../../../examples/alchemy/AgentExecution"
 import { internalApi } from "../../src/alchemy/internal"
 import { ActorPoliciesLive } from "../../src/alchemy/policies"
@@ -38,12 +40,13 @@ import { ReservedState, DEFAULT_DELEGATION_LIMITS, delegationKey } from "@clavia
 
 const ToolCodeResult = Schema.Struct({ outcome: CodeOutcome, logs: Schema.Array(Schema.String) })
 
-test.each(["code", "delegation"] as const)("default Alchemy agent executes %s through the real OpenAI HTTP provider and native policies", scenario => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+test.each(["code", "delegation", "fetch-direct", "fetch-code"] as const)("default Alchemy agent executes %s through the real OpenAI HTTP provider and native policies", scenario => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
   const directory = yield* Effect.acquireRelease(Effect.promise(() => mkdtemp(join(tmpdir(), "tardigrade-default-code-agent-"))), path => Effect.promise(() => rm(path, { recursive: true, force: true })))
   const requests = yield* Ref.make<ReadonlyArray<typeof OpenAiSchema.CreateResponse.Type>>([])
   const observedResult = yield* Ref.make<string | null>(null)
   const providerEndpoint = Effect.gen(function* () {
     const httpRequest = yield* HttpServerRequest.HttpServerRequest
+    if (httpRequest.url === "/fetch-fixture") return HttpServerResponse.text("Native fetch result.", { headers: { "x-native-fetch": "present" } })
     expect(httpRequest.url).toBe("/v1/responses")
     const body = yield* Schema.decodeUnknownEffect(OpenAiSchema.CreateResponse)(yield* httpRequest.json).pipe(Effect.orDie)
     const previous = yield* Ref.getAndUpdate(requests, values => [...values, body])
@@ -81,6 +84,14 @@ test.each(["code", "delegation"] as const)("default Alchemy agent executes %s th
         output: [{ type: "message", id: "message-parent-done", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Native delegation completed.", annotations: [] }] }],
       }).pipe(Effect.orDie)
     }
+    if (scenario === "fetch-direct" && previous.length === 0) {
+      const fetchTool = body.tools?.find(tool => tool.type === "function" && tool.name === "fetch_get")
+      expect(fetchTool?.type).toBe("function")
+      return yield* HttpServerResponse.schemaJson(OpenAiSchema.Response)({
+        id: "response-fetch", object: "response", model: "gpt-4.1-mini", created_at: 1700000000, usage,
+        output: [{ type: "function_call", id: "function-fetch", call_id: "fetch-call", name: "fetch_get", arguments: Schema.encodeSync(Schema.fromJsonString(FetchGet.parametersSchema) )({ url: `http://${httpRequest.headers.host}/fetch-fixture` }), status: "completed" }],
+      }).pipe(Effect.orDie)
+    }
     if (previous.length === 0) {
       const execute = body.tools?.find(tool => tool.type === "function" && tool.name === "execute")
       expect(execute?.type).toBe("function")
@@ -89,19 +100,41 @@ test.each(["code", "delegation"] as const)("default Alchemy agent executes %s th
       expect(Schema.encodeSync(Schema.fromJsonString(Schema.Json))(parameters)).toContain('"code"')
       return yield* HttpServerResponse.schemaJson(OpenAiSchema.Response)({
         id: "response-code", object: "response", model: "gpt-4.1-mini", created_at: 1700000000, usage,
-        output: [{ type: "function_call", id: "function-code", call_id: "execute-call", name: "execute", arguments: '{"code":"return await tools.current_time({});"}', status: "completed" }],
+        output: [{ type: "function_call", id: "function-code", call_id: "execute-call", name: "execute", arguments: Schema.encodeSync(Schema.fromJsonString(CodeTool.parametersSchema))({ code: (() => {
+          if (scenario === "fetch-code") return `return await tools.fetch_get({ url: "http://${httpRequest.headers.host}/fetch-fixture" });`
+          return "return await tools.current_time({});"
+        })() }), status: "completed" }],
       }).pipe(Effect.orDie)
     }
     expect(previous.length).toBe(1)
     if (body.input === undefined || typeof body.input === "string") return yield* Effect.die("Expected structured provider input")
-    const result = body.input.find(item => item.type === "function_call_output" && item.call_id === "execute-call")
-    if (result?.type !== "function_call_output" || typeof result.output !== "string") return yield* Effect.die("Expected Code Mode tool result")
-    const decoded = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ToolCodeResult))(result.output).pipe(Effect.orDie)
-    expect(decoded.outcome._tag).toBe("Returned")
-    if (decoded.outcome._tag !== "Returned" || typeof decoded.outcome.value !== "string") return yield* Effect.die("Expected native time value")
-    const time = yield* Schema.decodeUnknownEffect(Schema.DateTimeUtcFromString)(decoded.outcome.value).pipe(Effect.orDie)
-    expect(DateTime.formatIso(time)).toBe(decoded.outcome.value)
-    yield* Ref.set(observedResult, decoded.outcome.value)
+    const callId = (() => {
+      if (scenario === "fetch-direct") return "fetch-call"
+      return "execute-call"
+    })()
+    const result = body.input.find(item => item.type === "function_call_output" && item.call_id === callId)
+    if (result?.type !== "function_call_output" || typeof result.output !== "string") return yield* Effect.die("Expected native tool result")
+    if (scenario === "fetch-direct") {
+      const fetched = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(FetchResponse))(result.output).pipe(Effect.orDie)
+      expect(fetched.body).toBe("Native fetch result.")
+      expect(fetched.headers["x-native-fetch"]).toBe("present")
+      yield* Ref.set(observedResult, fetched.body)
+    } else {
+      const decoded = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ToolCodeResult))(result.output).pipe(Effect.orDie)
+      expect(decoded.outcome._tag).toBe("Returned")
+      if (decoded.outcome._tag !== "Returned") return yield* Effect.die("Expected native code result")
+      if (scenario === "fetch-code") {
+        const fetched = yield* Schema.decodeUnknownEffect(FetchResponse)(decoded.outcome.value).pipe(Effect.orDie)
+        expect(fetched.body).toBe("Native fetch result.")
+        expect(fetched.headers["x-native-fetch"]).toBe("present")
+        yield* Ref.set(observedResult, fetched.body)
+      } else {
+        if (typeof decoded.outcome.value !== "string") return yield* Effect.die("Expected native time string")
+        const time = yield* Schema.decodeUnknownEffect(Schema.DateTimeUtcFromString)(decoded.outcome.value).pipe(Effect.orDie)
+        expect(DateTime.formatIso(time)).toBe(decoded.outcome.value)
+        yield* Ref.set(observedResult, DateTime.formatIso(time))
+      }
+    }
     return yield* HttpServerResponse.schemaJson(OpenAiSchema.Response)({
       id: "response-done", object: "response", model: "gpt-4.1-mini", created_at: 1700000001, usage,
       output: [{ type: "message", id: "message-done", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Native Code Mode completed.", annotations: [] }] }],
@@ -129,13 +162,13 @@ test.each(["code", "delegation"] as const)("default Alchemy agent executes %s th
   const runner = Layer.mergeAll(ExecuteRunLive, RunCodeLive, ExecuteCodeLive, ExecuteDelegationLive, RunDelegationLive, RunRpcHandlers, CodeRpcHandlers, DelegationRpcHandlers).pipe(
     Layer.provide(DomainClientLive), Layer.provide(AgentExecutionLive.pipe(Layer.provide(provider))), Layer.provide(CodeMethodsLive), Layer.provide(CodeRuntimeLive),
     Layer.provideMerge(ClusterWorkflowEngine.layer.pipe(Layer.provideMerge(SingleRunner.layer({ shardingConfig: { entityMessagePollInterval: Duration.millis(20) } })))),
-    Layer.provide(SqliteClient.layer({ filename: join(directory, "runner.sqlite") })), Layer.provide(Digest.layerWebCrypto), Layer.provide(config),
+    Layer.provide(SqliteClient.layer({ filename: join(directory, "runner.sqlite") })), Layer.provide(Digest.layerWebCrypto), Layer.provide(FetchHttpClient.layer), Layer.provide(config),
   )
   const runnerContext = yield* Layer.build(runner)
   const runnerEndpoint = yield* RpcServer.toHttpEffect(RunRpcs.merge(CodeRpcs).merge(DelegationRpcs)).pipe(Effect.provide(Layer.succeedContext(runnerContext)), Effect.provide(RpcSerialization.layerNdjson))
   yield* Layer.build(HttpServer.serve()(runnerEndpoint).pipe(Layer.provide(Layer.succeedContext(runnerServerContext))))
   yield* threads.send("default-code", OpenThread.make({ actor: "default", instance: "instance", name: "default", limits: DEFAULT_RUN_LIMITS })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
-  yield* threads.send("default-code", RequestRun.make({ runId: "run", digest: "default-code", prompt: Prompt.make({ code: "Read the current time using Code Mode.", delegation: "Delegate a child task and report its completed result." }[scenario]) })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
+  yield* threads.send("default-code", RequestRun.make({ runId: "run", digest: "default-code", prompt: Prompt.make({ code: "Read the current time using Code Mode.", delegation: "Delegate a child task and report its completed result.", "fetch-direct": "Read the granted URL with fetch_get.", "fetch-code": "Read the granted URL using Code Mode." }[scenario]) })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
   const completed = yield* Effect.repeat(threads.state("default-code"), { until: value => value._tag === "Open" && value.active !== null && ["completed", "failed", "cancelled", "unknown"].includes(value.active.status), schedule: Schedule.spaced("10 millis") }).pipe(Effect.timeout("10 seconds"), Effect.onError(() => Effect.gen(function* () {
     yield* Effect.logError("DefaultCodeAgent failure", yield* threads.state("default-code"), yield* Ref.get(requests))
     const id = yield* ExecuteRun.executionId({ threadId: "default-code", runId: "run", owner: "alice", key: executionKey({ threadId: "default-code", runId: "run", owner: "alice" }) })
@@ -166,13 +199,23 @@ test.each(["code", "delegation"] as const)("default Alchemy agent executes %s th
     return
   }
   expect(completed._tag === "Open" && completed.active?.text).toBe("Native Code Mode completed.")
+  if (scenario === "fetch-direct") {
+    expect(yield* Ref.get(observedResult)).toBe("Native fetch result.")
+    expect((yield* Ref.get(requests)).length).toBe(2)
+    return
+  }
   const code = yield* codes.state(runKey("default-code", "run:2"))
   expect(code._tag).toBe("Open")
   if (code._tag !== "Open") return yield* Effect.die("Expected durable Code execution")
   expect(code.status).toBe("completed")
-  expect(code.request.catalog).toEqual({ tools: ["current_time"] })
+  expect(code.request.catalog).toEqual({ tools: ["current_time", "fetch_get", "fetch_request"] })
   expect(code.calls.length).toBe(1)
-  expect(code.calls[0]?.request).toMatchObject({ package: "tools", method: "current_time", mutation: false, requiresApproval: false })
-  expect(code.outcome).toEqual({ _tag: "Returned", value: yield* Ref.get(observedResult) })
+  if (scenario === "fetch-code") {
+    expect(code.calls[0]?.request).toMatchObject({ package: "tools", method: "fetch_get", mutation: false, requiresApproval: false })
+    expect(code.outcome).toMatchObject({ _tag: "Returned", value: { body: "Native fetch result.", status: 200 } })
+  } else {
+    expect(code.calls[0]?.request).toMatchObject({ package: "tools", method: "current_time", mutation: false, requiresApproval: false })
+    expect(code.outcome).toEqual({ _tag: "Returned", value: yield* Ref.get(observedResult) })
+  }
   expect((yield* Ref.get(requests)).length).toBe(2)
 }))), 20_000)

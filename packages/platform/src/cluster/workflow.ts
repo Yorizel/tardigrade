@@ -10,3 +10,5 @@ export { DomainClientLive } from "./domain-client"
 export { CodeRuntimeLive } from "./code-runtime"
 export { CodeRpcs, CodeRpcHandlers } from "./code-control"
 export { DelegationRpcs, DelegationRpcHandlers } from "./delegation-control"
+
+export { FetchGet, FetchRequest, FetchTools, FetchToolsLive, FetchPolicy, FetchResponse, FetchRejected, DEFAULT_FETCH_POLICY } from "./fetch-tool"

@@ -1,6 +1,7 @@
 import { OpenAiLanguageModel } from "@effect/ai-openai"
 import { AgentExecution, CodeMethods, CodeTool, CodeLimits, DEFAULT_CODE_LIMITS, DelegateTool, DelegationLimits, DEFAULT_DELEGATION_LIMITS, ExecutionRejected } from "tardie/domain"
-import { Config, Context, DateTime, Effect, Schema, Stream } from "effect"
+import { Config, Context, DateTime, Effect, Layer, Result, Schema, Stream } from "effect"
+import { FetchGet, FetchRequest, FetchTools, FetchToolsLive } from "tardie/platform/cluster"
 import { LanguageModel, Prompt, Tool, Toolkit } from "effect/ai"
 
 const CurrentTime = Tool.make("current_time", {
@@ -8,9 +9,10 @@ const CurrentTime = Tool.make("current_time", {
   parameters: Tool.EmptyParams,
   success: Schema.String,
 }).annotate(Tool.Readonly, true)
-const tools = Toolkit.make(CurrentTime)
-const modelTools = Toolkit.make(CurrentTime, CodeTool, DelegateTool)
-const toolHandlers = tools.toLayer({ current_time: () => DateTime.now.pipe(Effect.map(DateTime.formatIso)) })
+const timeTools = Toolkit.make(CurrentTime)
+const tools = Toolkit.merge(timeTools, FetchTools)
+const modelTools = Toolkit.merge(tools, Toolkit.make(CodeTool, DelegateTool))
+const toolHandlers = Layer.merge(timeTools.toLayer({ current_time: () => DateTime.now.pipe(Effect.map(DateTime.formatIso)) }), FetchToolsLive)
 const decodeTime = Effect.fn("Tools.currentTime.params")(function* (input: unknown = {}) {
   return yield* Schema.decodeUnknownEffect(CurrentTime.parametersSchema, { onExcessProperty: "error" })(input).pipe(Effect.orDie)
 })
@@ -24,34 +26,70 @@ const planTime = Effect.fn("Tools.currentTime.plan")(function* (params: typeof C
   return { mutation: !Context.get(CurrentTime.annotations, Tool.Readonly), requiresApproval: approval === true }
 })
 
+const prepareTool = Effect.fn("Tools.prepare")(function* (name: string, input: unknown, operationId: string, prompt: Prompt.Prompt) {
+  if (name === CurrentTime.name) {
+    const params = yield* decodeTime(input)
+    const policy = yield* planTime(params, operationId, prompt)
+    return { name: CurrentTime.name, params, ...policy }
+  }
+  if (name === FetchGet.name) {
+    const params = yield* Schema.decodeUnknownEffect(FetchGet.parametersSchema, { onExcessProperty: "error" })(input).pipe(Effect.orDie)
+    return { name: FetchGet.name, params, mutation: !Context.get(FetchGet.annotations, Tool.Readonly), requiresApproval: false }
+  }
+  if (name === FetchRequest.name) {
+    const params = yield* Schema.decodeUnknownEffect(FetchRequest.parametersSchema, { onExcessProperty: "error" })(input).pipe(Effect.orDie)
+    return { name: FetchRequest.name, params, mutation: !Context.get(FetchRequest.annotations, Tool.Readonly), requiresApproval: false }
+  }
+  return yield* new ExecutionRejected({ reason: "UnexposedTool" })
+})
+const invokeTool = Effect.fn("Tools.invoke")(function* (handlers: Toolkit.WithHandler<typeof tools.tools>, name: string, input: unknown, operationId: string) {
+  const prepared = yield* prepareTool(name, input, operationId, Prompt.empty)
+  const completed = yield* Effect.gen(function* () {
+    const stream = yield* handlers.handle(prepared.name, prepared.params, operationId)
+    return yield* Stream.runLast(stream)
+  }).pipe(Effect.result)
+  if (Result.isFailure(completed)) {
+    const failure = Tool.failureResultSchema(FetchRequest)
+    const result = yield* Schema.encodeEffect(failure)(completed.failure).pipe(Effect.orDie)
+    const reason = yield* Schema.encodeEffect(Schema.fromJsonString(failure))(completed.failure).pipe(Effect.orDie)
+    return { isFailure: true as const, result, reason }
+  }
+  if (completed.success._tag === "None") return yield* new ExecutionRejected({ reason: "ToolReturnedNoOutcome" })
+  const encoded = completed.success.value.encodedResult
+  if (completed.success.value.isFailure) {
+    const failure = Tool.failureResultSchema(FetchRequest)
+    const decoded = yield* Schema.decodeUnknownEffect(Schema.toEncoded(failure))(encoded).pipe(Effect.orDie)
+    const reason = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.toEncoded(failure)))(decoded).pipe(Effect.orDie)
+    return { isFailure: true as const, result: decoded, reason }
+  }
+  if (prepared.name === CurrentTime.name) {
+    const result = yield* Schema.decodeUnknownEffect(Schema.toEncoded(CurrentTime.successSchema))(encoded).pipe(Effect.orDie)
+    return { isFailure: false as const, result, reason: null }
+  }
+  const result = yield* Schema.decodeUnknownEffect(Schema.toEncoded(FetchGet.successSchema))(encoded).pipe(Effect.orDie)
+  return { isFailure: false as const, result, reason: null }
+})
+
 export const CodeMethodsLive = CodeMethods.toLayer(Effect.gen(function* () {
   const actor = yield* Config.NonEmptyString("TARDIGRADE_ACTOR")
   const handlers = yield* tools
   return {
     catalog: Effect.fn("CodeMethods.catalog")(function* (input) {
       if (input.actor !== actor) return yield* new ExecutionRejected({ reason: "UnknownActor" })
-      return { tools: [CurrentTime.name] }
+      return { tools: Object.values(tools.tools).map(tool => tool.name) }
     }),
     plan: Effect.fn("CodeMethods.plan")(function* (input) {
       if (input.actor !== actor) return yield* new ExecutionRejected({ reason: "UnknownActor" })
-      if (input.call.package !== "tools" || input.call.method !== CurrentTime.name) return yield* new ExecutionRejected({ reason: "UnexposedTool" })
-      const params = yield* decodeTime(input.call.input)
-      const policy = yield* planTime(params, input.operationId, input.prompt)
-      return { ...input.call, ...policy }
+      if (input.call.package !== "tools") return yield* new ExecutionRejected({ reason: "UnexposedTool" })
+      const policy = yield* prepareTool(input.call.method, input.call.input, input.operationId, input.prompt)
+      return { ...input.call, mutation: policy.mutation, requiresApproval: policy.requiresApproval }
     }),
     invoke: Effect.fn("CodeMethods.invoke")(function* (input) {
       if (input.actor !== actor) return yield* new ExecutionRejected({ reason: "UnknownActor" })
-      if (input.call.package !== "tools" || input.call.method !== CurrentTime.name) return yield* new ExecutionRejected({ reason: "UnexposedTool" })
-      const params = yield* decodeTime(input.call.input)
-      const stream = yield* handlers.handle(CurrentTime.name, params, input.operationId)
-      const result = yield* Stream.runLast(stream)
-      if (result._tag === "None") return yield* new ExecutionRejected({ reason: "ToolReturnedNoOutcome" })
-      if (result.value.isFailure) {
-        const reason = yield* Schema.decodeUnknownEffect(Schema.String)(result.value.encodedResult).pipe(Effect.orDie)
-        return { _tag: "Failed" as const, reason }
-      }
-      const value = yield* Schema.decodeUnknownEffect(Schema.toEncoded(CurrentTime.successSchema))(result.value.encodedResult).pipe(Effect.orDie)
-      return { _tag: "Returned" as const, value }
+      if (input.call.package !== "tools") return yield* new ExecutionRejected({ reason: "UnexposedTool" })
+      const result = yield* invokeTool(handlers, input.call.method, input.call.input, input.operationId)
+      if (result.isFailure) return { _tag: "Failed" as const, reason: result.reason }
+      return { _tag: "Returned" as const, value: result.result }
     }),
   }
 }).pipe(Effect.provide(toolHandlers)))
@@ -89,23 +127,18 @@ export const AgentExecutionLive = AgentExecution.toLayer(Effect.gen(function* ()
           const params = yield* Schema.decodeUnknownEffect(CodeTool.parametersSchema, { onExcessProperty: "error" })(call.params).pipe(Effect.orDie)
           return { call: Prompt.toolCallPart({ id: call.id, name: call.name, params, providerExecuted: false }), mutation: true, requiresApproval: false, execution: { _tag: "Code" as const, catalog, limits } }
         }
-        if (call.name !== CurrentTime.name) return yield* new ExecutionRejected({ reason: "UnexposedTool" })
-        const params = yield* decodeTime(call.params)
-        const policy = yield* planTime(params, call.id, input.prompt)
-        return { call: Prompt.toolCallPart({ id: call.id, name: call.name, params, providerExecuted: false }), ...policy, execution: { _tag: "External" as const } }
+        const tool = yield* prepareTool(call.name, call.params, call.id, input.prompt)
+        return { call: Prompt.toolCallPart({ id: call.id, name: tool.name, params: tool.params, providerExecuted: false }), mutation: tool.mutation, requiresApproval: tool.requiresApproval, execution: { _tag: "External" as const } }
       }))
       return { prompt: Prompt.fromResponseParts(response.content), usage: response.usage, text: response.text, tools: planned }
     }),
     invoke: Effect.fn("AgentExecution.invoke")(function* (input) {
       if (input.actor !== actor) return yield* new ExecutionRejected({ reason: "UnknownActor" })
-      if (input.call.name !== CurrentTime.name || input.call.providerExecuted) return yield* new ExecutionRejected({ reason: "UnexposedTool" })
-      const params = yield* decodeTime(input.call.params)
-      const stream = yield* handlers.handle(CurrentTime.name, params, input.operationId)
-      const result = yield* Stream.runLast(stream)
-      if (result._tag === "None") return yield* new ExecutionRejected({ reason: "ToolReturnedNoOutcome" })
+      if (input.call.providerExecuted) return yield* new ExecutionRejected({ reason: "UnexposedTool" })
+      const result = yield* invokeTool(handlers, input.call.name, input.call.params, input.operationId)
       return Prompt.fromMessages([Prompt.toolMessage({ content: [Prompt.toolResultPart({
-        id: input.call.id, name: input.call.name, result: result.value.encodedResult,
-        isFailure: result.value.isFailure, providerExecuted: false,
+        id: input.call.id, name: input.call.name, result: result.result,
+        isFailure: result.isFailure, providerExecuted: false,
       })] })])
     }),
   }

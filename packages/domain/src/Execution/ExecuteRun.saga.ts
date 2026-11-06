@@ -84,6 +84,14 @@ export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
             const result = yield* RunCode.execute({ key: codeExecutionKey(owner, executionId), executionId, owner, request })
             const stored = yield* commands.CodeExecution.get(executionId, { headers }).pipe(Effect.orDie)
             if (stored._tag !== "Open" || stored.owner !== owner) return yield* Effect.die("Code execution result is unavailable")
+            if (result.outcome._tag === "Returned" && result.outcome.modelOutput !== undefined) {
+              const logParts = stored.logs.map(text => Prompt.textPart({ text }))
+              return Prompt.fromMessages([Prompt.toolMessage({ content: [Prompt.toolResultPart({
+                id: tool.call.id, name: tool.call.name, result: { outcome: { _tag: result.outcome._tag, value: result.outcome.value }, logs: stored.logs },
+                modelOutput: [...result.outcome.modelOutput, ...logParts],
+                isFailure: false, providerExecuted: false,
+              })] })])
+            }
             return Prompt.fromMessages([Prompt.toolMessage({ content: [Prompt.toolResultPart({
               id: tool.call.id, name: tool.call.name, result: { outcome: result.outcome, logs: stored.logs },
               isFailure: result.outcome._tag === "Failed", providerExecuted: false,

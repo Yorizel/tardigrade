@@ -1,6 +1,7 @@
 export { ActorModel, ReceiptOwnerGuardLive } from "./Actor.model"
 export { ActorApi } from "./Actor.api"
 export { Thread } from "./Thread/Thread.aggregate"
+export { ThreadDirectory, ThreadRegistered } from "./Thread/ThreadDirectory.view"
 export { ThreadId, ThreadState, RunLimits, DEFAULT_RUN_LIMITS, Run, Step, Receipt } from "./Thread/Thread.schemas"
 export { CurrentCaller, Session, Unauthorized, ReceiptOwnerGuard, ReceiptForbidden } from "./Actor.context"
 export { OpenThread, RequestRun, ApproveRun, CancelRun, BeginStep, ConfirmDispatch, RecordStep, MarkUnknown, ResolveUnknown, CompleteRun, FailRun, RunRejected, NotOwner } from "./Thread/Thread.commands"

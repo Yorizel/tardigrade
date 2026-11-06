@@ -5,6 +5,6 @@ export class ActorApi extends Domain.Api("Tardigrade", {
   model: ActorModel,
   commands: ["OpenThread", "RequestRun", "ApproveRun", "CancelRun", "ResolveUnknown", "ApproveCodeCall", "CancelCode", "ResolveCodeCall", "RequestDelegationCancellation", "ResolveDelegation", "ReplyToChild", "AcknowledgeDelegationInbox"],
   aggregates: ["Thread", "CodeExecution", "Delegation"],
-  views: [],
+  views: ["ThreadDirectory"],
   streams: [],
 }) {}

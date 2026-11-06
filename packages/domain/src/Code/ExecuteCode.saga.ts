@@ -1,5 +1,6 @@
 import { Cause, Effect, Exit, Layer, Queue, Ref, Schema, Semaphore, Scope, Stream } from "effect"
 import { Activity, DurableDeferred, Workflow } from "effect/workflow"
+import { Prompt } from "effect/ai"
 import type { WorkflowEngine, WorkflowInstance } from "effect/workflow/WorkflowEngine"
 import { ActorInternalApi } from "../ActorInternal.api"
 import { CodeMethods } from "./CodeMethods.external"
@@ -70,8 +71,16 @@ export const ExecuteCodeLive = Layer.unwrap(Effect.gen(function* () {
         execute: runtime.evaluate({ request: code.request, calls: code.calls }).pipe(Effect.orDie),
       })
       if (attempt._tag === "Completed") {
-        yield* api.CompleteCode(executionId, { observedCalls: attempt.observedCalls, outcome: attempt.outcome, logs: attempt.logs }, { headers, commandId: commandId(`complete:${revision}`) }).pipe(Effect.orDie)
-        return { outcome: attempt.outcome }
+        const outcome = attempt.outcome
+        const matches = code.calls.filter(call => outcome._tag === "Returned" && call.outcome?._tag === "Returned" && Schema.toEquivalence(Schema.UndefinedOr(Schema.Json))(call.outcome.value, outcome.value))
+        const returned = matches[0]?.outcome
+        if (outcome._tag === "Returned" && returned?._tag === "Returned" && returned.modelOutput !== undefined && matches.every(call => call.outcome?._tag === "Returned" && Schema.toEquivalence(Schema.UndefinedOr(Schema.Array(Prompt.ToolModelOutputPart)))(call.outcome.modelOutput, returned.modelOutput))) {
+          const content = { ...outcome, modelOutput: returned.modelOutput }
+          yield* api.CompleteCode(executionId, { observedCalls: attempt.observedCalls, outcome: content, logs: attempt.logs }, { headers, commandId: commandId(`complete:${revision}`) }).pipe(Effect.orDie)
+          return { outcome: content }
+        }
+        yield* api.CompleteCode(executionId, { observedCalls: attempt.observedCalls, outcome, logs: attempt.logs }, { headers, commandId: commandId(`complete:${revision}`) }).pipe(Effect.orDie)
+        return { outcome }
       }
       yield* Effect.forEach(attempt.requested, call => Effect.gen(function* () {
         const planned = yield* Activity.make({

@@ -1,5 +1,6 @@
 import { Ownership } from "../Actor.context"
 import { Schema } from "effect"
+import { Prompt } from "effect/ai"
 
 export const CodeLimits = Schema.Struct({
   maxCalls: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
@@ -34,7 +35,7 @@ export const HostCallInput = Schema.Struct({
   requiresApproval: Schema.Boolean,
 })
 export const CodeOutcome = Schema.Union([
-  Schema.TaggedStruct("Returned", { value: Schema.optionalKey(Schema.Json) }),
+  Schema.TaggedStruct("Returned", { value: Schema.optionalKey(Schema.Json), modelOutput: Schema.optionalKey(Schema.Array(Prompt.ToolModelOutputPart)) }),
   Schema.TaggedStruct("Failed", { reason: Schema.String }),
 ])
 export const CodeSettlementSequence = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))

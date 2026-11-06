@@ -20,6 +20,7 @@ const RunnerLive = Layer.mergeAll(ExecuteRunLive, RunCodeLive, ExecuteCodeLive, 
   Layer.provide(LocalClusterWorkflowLive),
   Layer.provide(SqliteClient.layerConfig({ filename: Config.NonEmptyString("TARDIGRADE_RUNNER_DB") })),
   Layer.provide(Digest.layerWebCrypto),
+  Layer.provide(FetchHttpClient.layer),
 )
 const server = Layer.unwrap(Effect.gen(function* () {
   const fetch = yield* RpcServer.toHttpEffect(RunRpcs.merge(CodeRpcs).merge(DelegationRpcs))

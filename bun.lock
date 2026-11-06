@@ -171,11 +171,8 @@
         "tardie-chat": "./src/main.ts",
       },
       "dependencies": {
-        "@clavia/tardigrade-agent": "workspace:*",
-        "@clavia/tardigrade-core": "workspace:*",
-        "@clavia/tardigrade-libraries": "workspace:*",
-        "@clavia/tardigrade-model": "workspace:*",
-        "@clavia/tardigrade-platform": "workspace:*",
+        "@alchemy.run/domain": "2.0.0-beta.85",
+        "@clavia/tardigrade-domain": "workspace:*",
         "@effect/platform-bun": "4.1.2",
         "effect": "4.1.2",
       },

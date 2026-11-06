@@ -7,10 +7,12 @@ import { CodeExecution } from "./Code/Code.aggregate"
 import { DelegationExecutionPolicy } from "./Delegation/DelegationExecution.policy"
 import { Delegation } from "./Delegation/Delegation.aggregate"
 import { Thread } from "./Thread/Thread.aggregate"
+import { ThreadDirectory } from "./Thread/ThreadDirectory.view"
 import { RunExecution } from "./Execution/RunExecution.policy"
 
 export class ActorModel extends Domain.Model("Tardigrade", {
   aggregates: [Thread, CodeExecution, Delegation],
+  views: [ThreadDirectory],
   policies: [RunExecution, CodeExecutionPolicy, DelegationExecutionPolicy],
 }) {}
 
