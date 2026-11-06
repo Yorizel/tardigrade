@@ -1,6 +1,5 @@
-import * as Domain from "@alchemy.run/domain"
-import { Cause, Effect, Exit, Queue, Ref, Schema, Semaphore, Scope, Stream } from "effect"
-import { Activity, DurableDeferred } from "effect/workflow"
+import { Cause, Effect, Exit, Layer, Queue, Ref, Schema, Semaphore, Scope, Stream } from "effect"
+import { Activity, DurableDeferred, Workflow } from "effect/workflow"
 import type { WorkflowEngine, WorkflowInstance } from "effect/workflow/WorkflowEngine"
 import { ActorInternalApi } from "../ActorInternal.api"
 import { CodeMethods } from "./CodeMethods.external"
@@ -11,17 +10,17 @@ export const CodeExecutionScope = Schema.Struct({ executionId: Schema.NonEmptySt
 export const codeExecutionKey = (owner: string, executionId: string) => `${owner.length}:${owner}${executionId.length}:${executionId}`
 export const codeApproval = (ordinal: number) => DurableDeferred.make(`code-approval:${ordinal}`)
 
-export class ExecuteCode extends Domain.Saga("Tardigrade/ExecuteCode", {
-  key: Schema.NonEmptyString,
-  input: CodeExecutionScope.fields,
-  result: { outcome: CodeOutcome },
-}) {}
+export const ExecuteCode = Workflow.make("Tardigrade/ExecuteCode", {
+  payload: { key: Schema.NonEmptyString, ...CodeExecutionScope.fields },
+  idempotencyKey: payload => payload.key,
+  success: Schema.Struct({ outcome: CodeOutcome }),
+})
 
-export const ExecuteCodeLive = ExecuteCode.toLayer(Effect.gen(function* () {
+export const ExecuteCodeLive = Layer.unwrap(Effect.gen(function* () {
   const api = yield* ActorInternalApi.Client
   const runtime = yield* CodeRuntime
   const methods = yield* CodeMethods
-  return Effect.fn("ExecuteCode")(function* ({ key, executionId, owner }) {
+  return ExecuteCode.toLayer(Effect.fn("ExecuteCode")(function* ({ key, executionId, owner }) {
     if (key !== codeExecutionKey(owner, executionId)) return yield* Effect.die("Invalid code execution key")
     const headers = { "x-tardigrade-owner": owner }
     const commandId = (operation: string) => `${codeExecutionKey(owner, executionId)}:${operation}`
@@ -29,7 +28,7 @@ export const ExecuteCodeLive = ExecuteCode.toLayer(Effect.gen(function* () {
       const code = yield* api.CodeExecution.get(executionId, { headers }).pipe(Effect.orDie)
       if (code === null || code._tag !== "Open" || code.owner !== owner) return yield* Effect.die("Unauthorized code execution scope")
       const parent = yield* api.Thread.get(code.request.threadId, { headers }).pipe(Effect.orDie)
-      if (parent === null || parent._tag !== "Open" || parent.owner !== owner || parent.active === null || parent.active.runId !== code.request.runId) {
+      if (parent === null || parent._tag !== "Open" || parent.owner !== owner) {
         return yield* Effect.die("Unauthorized code parent scope")
       }
       return { code, parent, run: parent.active }
@@ -44,7 +43,7 @@ export const ExecuteCodeLive = ExecuteCode.toLayer(Effect.gen(function* () {
         execute: Effect.gen(function* () {
           const current = yield* authority()
           const entry = current.code.calls.find(value => value.request.ordinal === call.request.ordinal)
-          if (current.code.status !== "running" || ["completed", "failed", "cancelled", "unknown"].includes(current.run.status) || entry === undefined) return yield* Effect.die("Code execution is terminal")
+          if (current.code.status !== "running" || current.run === null || current.run.runId !== current.code.request.runId || ["completed", "failed", "cancelled", "unknown"].includes(current.run.status) || entry === undefined) return yield* Effect.die("Code execution is terminal")
           if (entry.outcome !== null) return entry.outcome
           if (entry.status === "dispatched") {
             yield* api.MarkCodeCallUnknown(executionId, { ordinal: entry.request.ordinal, reason: "Host call outcome was not recorded; reconciliation required" }, { headers, commandId: commandId(`unknown:${entry.request.ordinal}`) }).pipe(Effect.orDie)
@@ -57,11 +56,11 @@ export const ExecuteCodeLive = ExecuteCode.toLayer(Effect.gen(function* () {
       })
       yield* api.SettleCodeCall(executionId, { ordinal: call.request.ordinal, outcome }, { headers, commandId: commandId(`settle:${call.request.ordinal}`) }).pipe(Effect.orDie)
     })
-    const loop = Effect.fn("ExecuteCode.replay")(function* (): Effect.fn.Return<typeof ExecuteCode.workflow.successSchema.Type, never, WorkflowEngine | WorkflowInstance | Scope.Scope> {
+    const loop = Effect.fn("ExecuteCode.replay")(function* (): Effect.fn.Return<typeof ExecuteCode.successSchema.Type, never, WorkflowEngine | WorkflowInstance | Scope.Scope> {
       const { code, parent, run } = yield* authority()
       if (code.outcome !== null) return { outcome: code.outcome }
       if (code.status !== "running") return { outcome: { _tag: "Failed", reason: code.reason ?? code.status } }
-      if (["completed", "failed", "cancelled", "unknown"].includes(run.status)) {
+      if (run === null || run.runId !== code.request.runId || ["completed", "failed", "cancelled", "unknown"].includes(run.status)) {
         yield* api.CancelCode(executionId, { reason: "ParentRunTerminal" }, { headers, commandId: commandId("parent-terminal") }).pipe(Effect.catchTag("CodeRejected", () => Effect.void), Effect.orDie)
         return { outcome: { _tag: "Failed", reason: "ParentRunTerminal" } }
       }
@@ -94,22 +93,25 @@ export const ExecuteCodeLive = ExecuteCode.toLayer(Effect.gen(function* () {
           yield* Queue.offer(notifications, exit)
         }))))
       }), { concurrency: 1, discard: true })
+      const changed = api.CodeExecution.watch(executionId, { headers }).pipe(
+        Stream.filter(({ state }) => {
+          if (state._tag !== "Open" || state.status !== "running") return true
+          return pending.some(call => !call.approved && state.calls.some(entry => entry.request.ordinal === call.request.ordinal && entry.approved))
+        }),
+        Stream.runHead, Effect.orDie, Effect.asVoid,
+      )
+      const parentChanged = api.Thread.watch(code.request.threadId, { headers }).pipe(
+        Stream.filter(({ state }) => state._tag !== "Open" || state.owner !== owner || state.active === null || state.active.runId !== code.request.runId || ["completed", "failed", "cancelled", "unknown"].includes(state.active.status)),
+        Stream.runHead, Effect.orDie, Effect.asVoid,
+      )
       const active = yield* Ref.get(live)
       if (active.size > 0 || ready.length > 0) {
         const settled = Queue.take(notifications).pipe(Effect.flatMap(exit => exit))
-        const changed = api.CodeExecution.watch(executionId, { headers }).pipe(
-          Stream.filter(({ state }) => {
-            if (state._tag !== "Open" || state.status !== "running") return true
-            return pending.some(call => !call.approved && state.calls.some(entry => entry.request.ordinal === call.request.ordinal && entry.approved))
-          }),
-          Stream.runHead, Effect.orDie, Effect.asVoid,
-        )
-        yield* Effect.raceFirst(settled, changed)
+        yield* Effect.raceFirst(settled, Effect.raceFirst(changed, parentChanged))
         return yield* loop()
       }
-      const awaitingApproval = pending.find(call => call.request.requiresApproval && !call.approved)
-      if (awaitingApproval !== undefined) {
-        yield* DurableDeferred.await(codeApproval(awaitingApproval.request.ordinal))
+      if (pending.some(call => call.request.requiresApproval && !call.approved)) {
+        yield* Effect.raceFirst(changed, parentChanged)
         return yield* loop()
       }
       if (pending.length === 0) return yield* loop()
@@ -126,7 +128,7 @@ export const ExecuteCodeLive = ExecuteCode.toLayer(Effect.gen(function* () {
       const current = yield* authority()
       const reason = Cause.pretty(cause)
       if (current.code.status === "running") {
-        if (["completed", "failed", "cancelled", "unknown"].includes(current.run.status)) {
+        if (current.run === null || current.run.runId !== current.code.request.runId || ["completed", "failed", "cancelled", "unknown"].includes(current.run.status)) {
           yield* api.CancelCode(executionId, { reason: "ParentRunTerminal" }, { headers, commandId: commandId("parent-terminal") }).pipe(Effect.catchTag("CodeRejected", () => Effect.void), Effect.orDie)
         } else {
           yield* api.FailCode(executionId, { reason }, { headers, commandId: commandId("fail") }).pipe(Effect.catchTag("CodeRejected", () => Effect.void), Effect.orDie)
@@ -134,5 +136,5 @@ export const ExecuteCodeLive = ExecuteCode.toLayer(Effect.gen(function* () {
       }
       return { outcome: { _tag: "Failed" as const, reason } }
     })))
-  }, Effect.scoped)
+  }, Effect.scoped))
 }))

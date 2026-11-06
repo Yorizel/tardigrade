@@ -1,4 +1,12 @@
-import { Cause, Effect, Schema } from "effect"
+import { Cause, Clock, Effect, Layer, Schema } from "effect"
+import { Digest } from "effect/crypto"
+import { CodeTool } from "../Code/CodeTool"
+import { CodeInput } from "../Code/Code.schemas"
+import { DelegateTool } from "../Delegation/DelegateTool"
+import { RunDelegation } from "../Delegation/RunDelegation.saga"
+import { Reservation, ReservedState, delegationKey, delegationExecutionKey } from "../Delegation/Delegation.schemas"
+import { RunCode } from "../Code/RunCode.saga"
+import { codeExecutionKey } from "../Code/ExecuteCode.saga"
 import { Prompt, Response } from "effect/ai"
 import { Activity, DurableDeferred } from "effect/workflow"
 import type { WorkflowEngine, WorkflowInstance } from "effect/workflow/WorkflowEngine"
@@ -8,10 +16,11 @@ import { RunRejected } from "../Thread/Thread.commands"
 import { AgentExecution, ModelTurn, ExecutionRejected } from "./AgentExecution.external"
 import { ExecuteRun, runKey, approval, executionKey } from "./Run.workflow"
 
-export const ExecuteRunLive = ExecuteRun.toLayer(Effect.gen(function* () {
+export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
   const commands = yield* ActorInternalApi.Client
+  const digester = yield* Digest.Digest
   const execution = yield* AgentExecution
-  return Effect.fn("ExecuteRun")(function* ({ key, threadId, runId, owner }) {
+  return ExecuteRun.toLayer(Effect.fn("ExecuteRun")(function* ({ key, threadId, runId, owner }) {
     if (key !== executionKey({ threadId, runId, owner })) return yield* Effect.die("Invalid run execution key")
     const headers = { "x-tardigrade-owner": owner }
     const authority = yield* commands.Thread.get(threadId, { headers }).pipe(Effect.orDie)
@@ -56,7 +65,61 @@ export const ExecuteRunLive = ExecuteRun.toLayer(Effect.gen(function* () {
         const stepId = `${runId}:${accepted.stepSerial + index + 2}`
         yield* Activity.make({ name: `prepare-${stepId}`, error: RunRejected, execute: commands.BeginStep(threadId, { runId, stepId, kind: "tool", mutation: tool.mutation, requiresApproval: tool.requiresApproval }, { headers, commandId: runKey(threadId, `prepare:${stepId}`) }).pipe(Effect.orDie, Effect.asVoid) })
         if (tool.requiresApproval) yield* DurableDeferred.await(approval(stepId))
-        const prompt = yield* Activity.make({
+        const prompt = yield* Effect.gen(function* () {
+          if (tool.execution._tag === "Code") {
+            if (tool.call.name !== CodeTool.name || tool.call.providerExecuted) return yield* new ExecutionRejected({ reason: "UnexposedCodeTool" })
+            const current = yield* commands.Thread.get(threadId, { headers }).pipe(Effect.orDie)
+            if (current._tag !== "Open" || current.owner !== owner || current.active === null || current.active.runId !== runId || current.active.step?.stepId !== stepId || ["completed", "cancelled", "failed", "unknown"].includes(current.active.status)) return yield* new RunRejected({ reason: "RunTerminal" })
+            if (!current.active.step.dispatched) yield* commands.ConfirmDispatch(threadId, { runId, stepId }, { headers, commandId: runKey(threadId, `dispatch:${stepId}`) }).pipe(Effect.orDie)
+            const executionId = runKey(threadId, stepId)
+            const capability = tool.execution
+            const request = yield* Activity.make({
+              name: `code-input-${stepId}`, success: CodeInput,
+              execute: Effect.gen(function* () {
+                const params = yield* Schema.decodeUnknownEffect(CodeTool.parametersSchema, { onExcessProperty: "error" })(tool.call.params).pipe(Effect.orDie)
+                const digest = yield* digester.digestHex(Digest.sha256, new TextEncoder().encode(params.code))
+                return { threadId, runId, digest, code: params.code, catalog: capability.catalog, limits: capability.limits, ambient: { at: yield* Clock.currentTimeMillis, seed: executionId } }
+              }),
+            })
+            const result = yield* RunCode.execute({ key: codeExecutionKey(owner, executionId), executionId, owner, request })
+            const stored = yield* commands.CodeExecution.get(executionId, { headers }).pipe(Effect.orDie)
+            if (stored._tag !== "Open" || stored.owner !== owner) return yield* Effect.die("Code execution result is unavailable")
+            return Prompt.fromMessages([Prompt.toolMessage({ content: [Prompt.toolResultPart({
+              id: tool.call.id, name: tool.call.name, result: { outcome: result.outcome, logs: stored.logs },
+              isFailure: result.outcome._tag === "Failed", providerExecuted: false,
+            })] })])
+          }
+          if (tool.execution._tag === "Delegate") {
+            if (tool.call.name !== DelegateTool.name || tool.call.providerExecuted) return yield* new ExecutionRejected({ reason: "UnexposedDelegationTool" })
+            const current = yield* commands.Thread.get(threadId, { headers }).pipe(Effect.orDie)
+            if (current._tag !== "Open" || current.owner !== owner || current.active === null || current.active.runId !== runId || current.active.step?.stepId !== stepId || ["completed", "cancelled", "failed", "unknown"].includes(current.active.status)) return yield* new RunRejected({ reason: "RunTerminal" })
+            if (!current.active.step.dispatched) yield* commands.ConfirmDispatch(threadId, { runId, stepId }, { headers, commandId: runKey(threadId, `dispatch:${stepId}`) }).pipe(Effect.orDie)
+            const capability = tool.execution
+            const delegationId = delegationKey(threadId, runId, stepId)
+            const reservation = yield* Activity.make({
+              name: `delegation-input-${stepId}`, success: Reservation,
+              execute: Effect.gen(function* () {
+                const params = yield* Schema.decodeUnknownEffect(DelegateTool.parametersSchema, { onExcessProperty: "error" })(tool.call.params).pipe(Effect.orDie)
+                const ancestry = Effect.fn("ExecuteRun.ancestry")(function* (id: string, depth: number): Effect.fn.Return<ReadonlyArray<string>> {
+                  if (depth >= capability.limits.maxDepth) return yield* Effect.die("Delegation depth budget exceeded")
+                  const ancestor = yield* commands.Thread.get(id, { headers }).pipe(Effect.orDie)
+                  if (ancestor._tag !== "Open" || ancestor.owner !== owner) return yield* Effect.die("Delegation ancestry is unavailable")
+                  if (ancestor.child === null) return [id]
+                  const parents = yield* ancestry(ancestor.child.binding.parentThreadId, depth + 1)
+                  if (parents.includes(id)) return yield* Effect.die("Delegation ancestry cycle")
+                  return [...parents, id]
+                })
+                const lineage = yield* ancestry(threadId, 0)
+                return { requestId: stepId, parentThreadId: threadId, parentRunId: runId, targetActor: capability.targetActor, lineage, toolCalls: capability.toolCalls, limits: capability.limits, prompt: Prompt.make(params.task) }
+              }),
+            })
+            const delegated = yield* RunDelegation.execute({ key: delegationExecutionKey(owner, delegationId), delegationId, owner, reservation })
+            const result = yield* Schema.encodeEffect(ReservedState)(delegated).pipe(Effect.orDie)
+            return Prompt.fromMessages([Prompt.toolMessage({ content: [Prompt.toolResultPart({
+              id: tool.call.id, name: tool.call.name, result, isFailure: delegated.status !== "completed", providerExecuted: false,
+            })] })])
+          }
+          return yield* Activity.make({
           name: `invoke-${stepId}`,
           success: Prompt.Prompt,
           error: Schema.Union([RunRejected, ExecutionRejected]),
@@ -75,6 +138,7 @@ export const ExecuteRunLive = ExecuteRun.toLayer(Effect.gen(function* () {
             return yield* execution.invoke({ actor: state.actor, operationId: runKey(threadId, stepId), call: tool.call }).pipe(Effect.orDie)
           }),
         })
+        })
         yield* Activity.make({ name: `record-${stepId}`, error: RunRejected, execute: commands.RecordStep(threadId, { runId, stepId, prompt, usage: Response.Usage.make({ inputTokens: { total: 0 }, outputTokens: { total: 0 } }) }, { headers, commandId: runKey(threadId, `record:${stepId}`) }).pipe(Effect.orDie, Effect.asVoid) })
       }), { concurrency: 1, discard: true })
       if (model.tools.length === 0) {
@@ -84,5 +148,5 @@ export const ExecuteRunLive = ExecuteRun.toLayer(Effect.gen(function* () {
       yield* loop(turn + 1)
     })
     yield* loop(0).pipe(Effect.catchCause(cause => fail(Cause.pretty(cause))))
-  })
+  }))
 }))

@@ -8,3 +8,5 @@ export const ClusterWorkflowLive = ClusterWorkflowEngine.layer.pipe(Layer.provid
 export { RunRpcs, RunRpcHandlers, RunControl, RunControlLive, RunControlSession, RunControlSessionLive, RunControlUnauthorized } from "./run-control"
 export { DomainClientLive } from "./domain-client"
 export { CodeRuntimeLive } from "./code-runtime"
+export { CodeRpcs, CodeRpcHandlers } from "./code-control"
+export { DelegationRpcs, DelegationRpcHandlers } from "./delegation-control"

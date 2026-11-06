@@ -1,11 +1,11 @@
 import * as Domain from "@alchemy.run/domain"
 import { BunHttpServer, BunRuntime } from "@effect/platform-bun"
 import { ActorApi, ActorModel } from "tardie/domain"
-import { SessionLive, RunExecutionLive, internalApi } from "tardie/platform/alchemy"
+import { SessionLive, ActorPoliciesLive, internalApi } from "tardie/platform/alchemy"
 import { Config, Effect, Layer } from "effect"
 import { HttpServer, HttpServerRequest } from "effect/http"
 
-const World = ActorModel.layer(RunExecutionLive).pipe(Layer.provide(Domain.InMemory))
+const World = ActorModel.layer(ActorPoliciesLive).pipe(Layer.provide(Domain.InMemory))
 const server = Layer.unwrap(Effect.gen(function* () {
   const api = yield* ActorApi.pipe(Effect.provide(SessionLive))
   const runtime = yield* internalApi

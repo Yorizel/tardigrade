@@ -1,26 +1,28 @@
 import { OpenAiClient } from "@effect/ai-openai"
 import { BunHttpServer, BunRuntime } from "@effect/platform-bun"
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient"
-import { ExecuteRunLive } from "tardie/domain"
-import { DomainClientLive, LocalClusterWorkflowLive, RunRpcHandlers, RunRpcs } from "tardie/platform/cluster"
+import { ExecuteRunLive, ExecuteCodeLive, RunCodeLive, ExecuteDelegationLive, RunDelegationLive } from "tardie/domain"
+import { DomainClientLive, LocalClusterWorkflowLive, RunRpcHandlers, RunRpcs, CodeRpcHandlers, CodeRpcs, CodeRuntimeLive, DelegationRpcs, DelegationRpcHandlers } from "tardie/platform/cluster"
 import { Config, Effect, Layer } from "effect"
 import { Digest } from "effect/crypto"
 import { FetchHttpClient, HttpServer } from "effect/http"
 import { RpcSerialization, RpcServer } from "effect/rpc"
-import { AgentExecutionLive } from "./AgentExecution"
+import { AgentExecutionLive, CodeMethodsLive } from "./AgentExecution"
 
 const ExecutionLive = AgentExecutionLive.pipe(Layer.provide(
   OpenAiClient.layerConfig({ apiKey: Config.Redacted("OPENAI_API_KEY") }).pipe(Layer.provide(FetchHttpClient.layer)),
 ))
-const RunnerLive = Layer.mergeAll(ExecuteRunLive, RunRpcHandlers).pipe(
+const RunnerLive = Layer.mergeAll(ExecuteRunLive, RunCodeLive, ExecuteCodeLive, RunDelegationLive, ExecuteDelegationLive, RunRpcHandlers, CodeRpcHandlers, DelegationRpcHandlers).pipe(
   Layer.provide(DomainClientLive),
   Layer.provide(ExecutionLive),
+  Layer.provide(CodeMethodsLive),
+  Layer.provide(CodeRuntimeLive),
   Layer.provide(LocalClusterWorkflowLive),
   Layer.provide(SqliteClient.layerConfig({ filename: Config.NonEmptyString("TARDIGRADE_RUNNER_DB") })),
   Layer.provide(Digest.layerWebCrypto),
 )
 const server = Layer.unwrap(Effect.gen(function* () {
-  const fetch = yield* RpcServer.toHttpEffect(RunRpcs)
+  const fetch = yield* RpcServer.toHttpEffect(RunRpcs.merge(CodeRpcs).merge(DelegationRpcs))
   return HttpServer.serve(fetch)
 }))
 server.pipe(

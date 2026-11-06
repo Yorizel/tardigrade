@@ -1,6 +1,7 @@
 import { Config, Effect, Layer, Option, Redacted, Schema } from "effect"
 import { Headers } from "effect/http"
 import { Rpc, RpcGroup, RpcMiddleware } from "effect/rpc"
+import { WorkflowEngine } from "effect/workflow/WorkflowEngine"
 import { DurableDeferred, Workflow, WorkflowProxy, WorkflowProxyServer } from "effect/workflow"
 import { ExecuteRun, approval, executionKey } from "@clavia/tardigrade-domain/Execution/Run.workflow"
 
@@ -19,7 +20,7 @@ export const RunControlSessionLive = Layer.effect(RunControlSession, Effect.gen(
     if (Option.isNone(authorization) || authorization.value !== `Bearer ${Redacted.value(credential)}`) {
       return Effect.fail(RunControlUnauthorized.make())
     }
-    return Schema.decodeUnknownEffect(ExecuteRun.workflow.payloadSchema)(payload).pipe(
+    return Schema.decodeUnknownEffect(ExecuteRun.payloadSchema)(payload).pipe(
       Effect.mapError(() => RunControlUnauthorized.make()),
       Effect.flatMap(scope => {
         if (scope.key !== executionKey(scope)) return Effect.fail(RunControlUnauthorized.make())
@@ -31,37 +32,41 @@ export const RunControlSessionLive = Layer.effect(RunControlSession, Effect.gen(
 
 export const RunControl = RpcGroup.make(
   Rpc.make("SignalRunApproval", {
-    payload: Schema.Struct({ ...ExecuteRun.workflow.payloadSchema.fields, stepId: Schema.NonEmptyString }),
+    payload: Schema.Struct({ ...ExecuteRun.payloadSchema.fields, stepId: Schema.NonEmptyString }),
   }),
-  Rpc.make("ResumeRun", { payload: ExecuteRun.workflow.payloadSchema }),
-  Rpc.make("InterruptRun", { payload: ExecuteRun.workflow.payloadSchema }),
+  Rpc.make("ResumeRun", { payload: ExecuteRun.payloadSchema }),
+  Rpc.make("InterruptRun", { payload: ExecuteRun.payloadSchema }),
   Rpc.make("PollRun", {
-    payload: ExecuteRun.workflow.payloadSchema,
+    payload: ExecuteRun.payloadSchema,
     success: Schema.Option(Workflow.Result({
-      success: ExecuteRun.workflow.successSchema,
-      error: ExecuteRun.workflow.errorSchema,
+      success: ExecuteRun.successSchema,
+      error: ExecuteRun.errorSchema,
     })),
   }),
 )
 
-export const RunRpcs = WorkflowProxy.toRpcGroup([ExecuteRun.workflow]).omit("Tardigrade/ExecuteRunResume").merge(RunControl).middleware(RunControlSession)
+export const RunRpcs = WorkflowProxy.toRpcGroup([ExecuteRun]).omit("Tardigrade/ExecuteRunResume").merge(RunControl).middleware(RunControlSession)
 
 export const RunControlLive = RunControl.toLayer({
   SignalRunApproval: payload => Effect.gen(function* () {
-    const executionId = yield* ExecuteRun.workflow.executionId(payload)
+    const executionId = yield* ExecuteRun.executionId(payload)
     const deferred = approval(payload.stepId)
     yield* DurableDeferred.succeed(deferred, {
-      token: DurableDeferred.tokenFromExecutionId(deferred, { workflow: ExecuteRun.workflow, executionId }),
+      token: DurableDeferred.tokenFromExecutionId(deferred, { workflow: ExecuteRun, executionId }),
       value: undefined,
     })
   }),
-  ResumeRun: payload => ExecuteRun.workflow.executionId(payload).pipe(Effect.flatMap(id => ExecuteRun.workflow.resume(id))),
-  InterruptRun: payload => ExecuteRun.workflow.executionId(payload).pipe(Effect.flatMap(id => ExecuteRun.workflow.interrupt(id))),
-  PollRun: payload => ExecuteRun.workflow.executionId(payload).pipe(Effect.flatMap(id => ExecuteRun.workflow.poll(id))),
+  ResumeRun: payload => ExecuteRun.executionId(payload).pipe(Effect.flatMap(id => ExecuteRun.resume(id))),
+  InterruptRun: payload => Effect.gen(function* () {
+    const engine = yield* WorkflowEngine
+    const id = yield* ExecuteRun.executionId(payload)
+    yield* engine.interruptUnsafe(ExecuteRun, id)
+  }),
+  PollRun: payload => ExecuteRun.executionId(payload).pipe(Effect.flatMap(id => ExecuteRun.poll(id))),
 })
 
 export const RunRpcHandlers = Layer.mergeAll(
-  WorkflowProxyServer.layerRpcHandlers([ExecuteRun.workflow]),
+  WorkflowProxyServer.layerRpcHandlers([ExecuteRun]),
   RunControlLive,
   RunControlSessionLive,
 )

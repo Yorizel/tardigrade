@@ -21,7 +21,7 @@ import { AgentExecution } from "@clavia/tardigrade-domain/Execution/AgentExecuti
 import { ExecuteRunLive } from "@clavia/tardigrade-domain/Execution/ExecuteRun.saga"
 import { ExecuteRun, executionKey } from "@clavia/tardigrade-domain/Execution/Run.workflow"
 import { internalApi } from "../../src/alchemy/internal"
-import { RunExecutionLive } from "../../src/alchemy/run-policy"
+import { ActorPoliciesLive } from "../../src/alchemy/policies"
 import { DomainClientLive } from "../../src/cluster/domain-client"
 import { RunRpcHandlers, RunRpcs } from "../../src/cluster/run-control"
 
@@ -43,7 +43,7 @@ test("Domain policies start, approve and cancel Cluster workflows through actual
     RUNNER_TO_DOMAIN_TOKEN: "policy-domain-fixture-token",
     WORKER_TO_RUNNER_TOKEN: "policy-runner-fixture-token",
   }))
-  const stateContext = yield* Layer.build(ActorModel.layer(RunExecutionLive).pipe(Layer.provide(Domain.InMemory), Layer.provide(config)))
+  const stateContext = yield* Layer.build(ActorModel.layer(ActorPoliciesLive).pipe(Layer.provide(Domain.InMemory), Layer.provide(config)))
   const threads = Context.get(stateContext, Thread)
   const domainEndpoint = yield* internalApi.pipe(Effect.provide(Layer.succeedContext(stateContext)), Effect.provide(config))
   yield* Layer.build(HttpServer.serve()(domainEndpoint).pipe(Layer.provide(Layer.succeedContext(domainServerContext))))
@@ -55,7 +55,7 @@ test("Domain policies start, approve and cancel Cluster workflows through actual
         return { prompt: Prompt.make([{ role: "assistant", content: "Stored 42." }]), usage, text: "Stored 42.", tools: [] }
       }
       const call = Prompt.toolCallPart({ id: "write-1", name: "store_number", params: {}, providerExecuted: false })
-      return { prompt: Prompt.fromMessages([Prompt.assistantMessage({ content: [call] })]), usage, text: "", tools: [{ call, mutation: true, requiresApproval: true }] }
+      return { prompt: Prompt.fromMessages([Prompt.assistantMessage({ content: [call] })]), usage, text: "", tools: [{ call, execution: { _tag: "External" as const }, mutation: true, requiresApproval: true }] }
     }),
     invoke: Effect.fn("PolicyFixture.invoke")(function* (input) {
       yield* Ref.update(calls, value => ({ ...value, tools: value.tools + 1 }))
@@ -99,8 +99,8 @@ test("Domain policies start, approve and cancel Cluster workflows through actual
       schedule: Schedule.spaced("10 millis"),
     }).pipe(Effect.timeout("5 seconds"))
     yield* threads.send(cancelledScope.threadId, CancelRun.make({ runId: cancelledScope.runId, reason: "User cancelled" }))
-    const cancelledId = yield* ExecuteRun.workflow.executionId({ ...cancelledScope, key: executionKey(cancelledScope) })
-    const result = yield* Effect.repeat(ExecuteRun.workflow.poll(cancelledId), {
+    const cancelledId = yield* ExecuteRun.executionId({ ...cancelledScope, key: executionKey(cancelledScope) })
+    const result = yield* Effect.repeat(ExecuteRun.poll(cancelledId), {
       until: value => Option.isSome(value) && value.value._tag === "Complete",
       schedule: Schedule.spaced("10 millis"),
     }).pipe(Effect.timeout("5 seconds"))

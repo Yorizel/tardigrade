@@ -1,7 +1,7 @@
 import * as Cloudflare from "@alchemy.run/cloudflare"
 import * as DomainCloudflare from "@alchemy.run/cloudflare/Domain"
 import { ActorApi, ActorModel } from "tardie/domain"
-import { SessionLive, RunExecutionLive, internalApi } from "tardie/platform/alchemy"
+import { SessionLive, ActorPoliciesLive, internalApi } from "tardie/platform/alchemy"
 import { Effect, Layer } from "effect"
 import { HttpServerRequest, HttpServerResponse } from "effect/http"
 
@@ -20,5 +20,5 @@ export default class ActorWorker extends Cloudflare.Worker<ActorWorker>()(
         return yield* api.fetch
       }),
     }
-  }).pipe(Effect.provide(ActorModel.layer(RunExecutionLive).pipe(Layer.provide(DomainCloudflare.layerDurableObjects())))),
+  }).pipe(Effect.provide(ActorModel.layer(ActorPoliciesLive).pipe(Layer.provide(DomainCloudflare.layerDurableObjects())))),
 ) {}

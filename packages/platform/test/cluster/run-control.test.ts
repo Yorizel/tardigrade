@@ -19,12 +19,12 @@ test("native run RPC authenticates, signals, replays and interrupts without pers
       path => Effect.promise(() => rm(path, { recursive: true, force: true })),
     )
     const database = SqliteClient.layer({ filename: join(directory, "runner.sqlite") })
-    const handler = ExecuteRun.toLayer(Effect.gen(function* () {
+    const handler = Layer.unwrap(Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
-      return Effect.fn("RunControl.testHandler")(function* () {
+      return ExecuteRun.toLayer(Effect.fn("RunControl.testHandler")(function* () {
         yield* Activity.make({ name: "increment", execute: sql`INSERT INTO proof_calls DEFAULT VALUES`.pipe(Effect.orDie, Effect.asVoid) })
         yield* DurableDeferred.await(approval("step-1"))
-      })
+      }))
     }))
     const application = Layer.mergeAll(handler, RunRpcHandlers).pipe(
       Layer.provide(ClusterWorkflowEngine.layer.pipe(Layer.provideMerge(SingleRunner.layer()))),
@@ -42,7 +42,7 @@ test("native run RPC authenticates, signals, replays and interrupts without pers
       const denied = yield* client["Tardigrade/ExecuteRunDiscard"](payload).pipe(Effect.exit)
       expect(Exit.isFailure(denied)).toBe(true)
       const executionId = yield* client["Tardigrade/ExecuteRunDiscard"](payload, options)
-      expect(executionId).toBe(yield* ExecuteRun.workflow.executionId(payload))
+      expect(executionId).toBe(yield* ExecuteRun.executionId(payload))
       for (const conflicting of [{ ...payload, owner: "bob" }, { ...payload, threadId: "other" }, { ...payload, runId: "other" }]) {
         expect(Exit.isFailure(yield* client["Tardigrade/ExecuteRunDiscard"](conflicting, options).pipe(Effect.exit))).toBe(true)
         expect(Exit.isFailure(yield* client.SignalRunApproval({ ...conflicting, stepId: "step-1" }, options).pipe(Effect.exit))).toBe(true)

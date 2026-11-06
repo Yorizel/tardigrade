@@ -3,8 +3,8 @@ import { Effect, Layer, Result } from "effect"
 import { Prompt } from "effect/ai"
 import { expect, test } from "bun:test"
 import { Delegation } from "../src/Delegation/Delegation.aggregate"
-import { AcknowledgeDelegationInbox, ConfirmDelegationNotStarted, MarkDelegationStarted, RecordChildMessage, RecordChildOutcome, ReplyToChild, RequestDelegationCancellation, ReserveDelegation, ResolveDelegation } from "../src/Delegation/Delegation.commands"
-import { DEFAULT_DELEGATION_LIMITS, delegationKey } from "../src/Delegation/Delegation.schemas"
+import { AcknowledgeDelegationInbox, ConfirmDelegationFencedNotStarted, MarkDelegationStarted, RecordChildMessage, RecordChildOutcome, ReplyToChild, RequestDelegationCancellation, ReserveDelegation, ResolveDelegation } from "../src/Delegation/Delegation.commands"
+import { DEFAULT_DELEGATION_LIMITS, delegationKey, FencedChildAbsent, childBindingOf } from "../src/Delegation/Delegation.schemas"
 import { ReceiptOwnerGuardLive } from "../src/Actor.model"
 import { CurrentCaller, Session } from "../src/Actor.context"
 
@@ -64,8 +64,9 @@ test("cancelling a reservation prevents a late start and needs explicit confirma
   expect(before.status).toBe("cancel_requested")
   const late = yield* delegations.send(key, MarkDelegationStarted.make()).pipe(Effect.result)
   expect(Result.isFailure(late)).toBe(true)
-  yield* delegations.send(key, ConfirmDelegationNotStarted.make())
-  yield* delegations.send(key, ConfirmDelegationNotStarted.make())
+  const child = FencedChildAbsent.make({ _tag: "ChildReserved", owner: "alice", binding: childBindingOf(before), closed: true, reason: "Stop" })
+  yield* delegations.send(key, ConfirmDelegationFencedNotStarted.make({ child }))
+  yield* delegations.send(key, ConfirmDelegationFencedNotStarted.make({ child }))
   const after = yield* delegations.state(key)
   if (after._tag !== "Reserved") return yield* Effect.die("Expected reservation")
   expect(after.status).toBe("cancelled")
@@ -78,8 +79,6 @@ test("late success after cancellation stays unknown until owner reconciliation",
   yield* delegations.send(key, ReserveDelegation.make(reservation))
   yield* delegations.send(key, MarkDelegationStarted.make())
   yield* delegations.send(key, RequestDelegationCancellation.make({ reason: "Stop" }))
-  const falseConfirmation = yield* delegations.send(key, ConfirmDelegationNotStarted.make()).pipe(Effect.result)
-  expect(Result.isFailure(falseConfirmation)).toBe(true)
   yield* delegations.send(key, RecordChildOutcome.make({ childThreadId: key, receipt: completed }))
   yield* delegations.send(key, RecordChildOutcome.make({ childThreadId: key, receipt: completed }))
   const uncertain = yield* delegations.state(key)

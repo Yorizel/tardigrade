@@ -3,9 +3,9 @@ import { Array, Effect, Schema } from "effect"
 import { Prompt } from "effect/ai"
 import { NotOwner } from "../Thread/Thread.commands"
 import { CurrentCaller, Session } from "../Actor.context"
-import { Receipt } from "../Thread/Thread.schemas"
-import { ChildMessage, DelegationState, Reservation, delegationKey } from "./Delegation.schemas"
-import { AcknowledgeDelegationInbox, ChildMessageRecorded, ChildOutcomeRecorded, ChildReplyRecorded, ConfirmDelegationNotStarted, DelegationCancellationRequested, DelegationReconciled, DelegationRejected, DelegationReserved, DelegationStarted, InboxAcknowledged, MarkDelegationStarted, RecordChildMessage, RecordChildOutcome, ReplyToChild, RequestDelegationCancellation, ReserveDelegation, ResolveDelegation } from "./Delegation.commands"
+import { Receipt, ChildBinding } from "../Thread/Thread.schemas"
+import { ChildMessage, DelegationState, Reservation, delegationKey, childBindingOf } from "./Delegation.schemas"
+import { AcknowledgeDelegationInbox, ChildMessageRecorded, ChildOutcomeRecorded, ChildReplyRecorded, ConfirmDelegationFencedNotStarted, DelegationCancellationRequested, DelegationReconciled, DelegationRejected, DelegationReserved, DelegationStarted, InboxAcknowledged, MarkDelegationStarted, RecordChildMessage, RecordChildOutcome, ReplyToChild, RequestDelegationCancellation, ReserveDelegation, ResolveDelegation } from "./Delegation.commands"
 
 const owned = Effect.fn("Delegation.owned")(function* (state: typeof DelegationState.Type) {
   const caller = yield* CurrentCaller
@@ -17,7 +17,7 @@ export class Delegation extends Domain.Aggregate("Delegation", {
   id: Schema.NonEmptyString,
   state: DelegationState,
   initial: { _tag: "Unreserved" },
-  commands: [ReserveDelegation, MarkDelegationStarted, RequestDelegationCancellation, ConfirmDelegationNotStarted, RecordChildMessage, RecordChildOutcome, ResolveDelegation, ReplyToChild, AcknowledgeDelegationInbox],
+  commands: [ReserveDelegation, MarkDelegationStarted, RequestDelegationCancellation, ConfirmDelegationFencedNotStarted, RecordChildMessage, RecordChildOutcome, ResolveDelegation, ReplyToChild, AcknowledgeDelegationInbox],
   decide: {
     ReserveDelegation: Effect.fn("Delegation.reserve")(function* (state, command, { id }) {
       const caller = yield* CurrentCaller
@@ -47,10 +47,15 @@ export class Delegation extends Domain.Aggregate("Delegation", {
       if (current.status !== "reserved" && current.status !== "running") return yield* new DelegationRejected({ reason: "DelegationTerminal" })
       return [DelegationCancellationRequested.make({ reason: command.reason })]
     }),
-    ConfirmDelegationNotStarted: state => {
+    ConfirmDelegationFencedNotStarted: (state, command) => {
       if (state._tag !== "Reserved") return new DelegationRejected({ reason: "UnknownDelegation" })
-      if (state.status === "cancelled" && !state.started) return []
-      if (state.status !== "cancel_requested" || state.started) return new DelegationRejected({ reason: "ChildMayHaveStarted" })
+      const proof = command.child
+      if (proof.owner !== state.owner) return new DelegationRejected({ reason: "ChildFenceIdentityConflict" })
+      const expected = childBindingOf(state)
+      if (proof._tag === "ChildReserved" && !Schema.toEquivalence(ChildBinding)(proof.binding, expected)) return new DelegationRejected({ reason: "ChildFenceIdentityConflict" })
+      if (proof._tag === "Open" && !Schema.toEquivalence(ChildBinding)(proof.child.binding, expected)) return new DelegationRejected({ reason: "ChildFenceIdentityConflict" })
+      if (state.status === "cancelled" && state.inbox.some(entry => entry.content._tag === "Result" && entry.content.outcome.receipt === null && entry.content.outcome.reason === "CancelledBeforeStart")) return []
+      if (state.status !== "cancel_requested") return new DelegationRejected({ reason: "DelegationNotCancelling" })
       const outcome = { status: "cancelled" as const, receipt: null, reason: "CancelledBeforeStart" }
       return [ChildOutcomeRecorded.make({ entry: { sequence: state.inbox.length + 1, messageId: state.childRunId, content: { _tag: "Result", outcome } } })]
     },

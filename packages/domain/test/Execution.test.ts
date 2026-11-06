@@ -44,7 +44,7 @@ test.each([
       yield* Ref.update(calls, value => ({ ...value, models: value.models + 1 }))
       if (input.prompt.content.some(message => message.role === "tool")) return { prompt: Prompt.make([{ role: "assistant", content: "The tool returned 42." }]), usage, text: "The tool returned 42.", tools: [] }
       const call = Prompt.toolCallPart({ id: "call-1", name: "read_number", params: {}, providerExecuted: false })
-      return { prompt: Prompt.fromMessages([Prompt.assistantMessage({ content: [call] })]), usage, text: "", tools: [{ call, mutation: false, requiresApproval: false }] }
+      return { prompt: Prompt.fromMessages([Prompt.assistantMessage({ content: [call] })]), usage, text: "", tools: [{ call, execution: { _tag: "External" as const }, mutation: false, requiresApproval: false }] }
     }),
     invoke: Effect.fn("Fixture.invoke")(function* (input) {
       expect(input.operationId).toBe(toolOperation)
@@ -57,8 +57,8 @@ test.each([
     const threads = yield* Thread
     yield* threads.send(threadId, OpenThread.make({ actor: "agent", instance: "i", name: "main", limits: DEFAULT_RUN_LIMITS }))
     yield* threads.send(threadId, RequestRun.make({ runId, digest: "d", prompt: Prompt.make("Read the number") }))
-    yield* ExecuteRun.workflow.execute({ key: executionKey({ threadId, runId, owner: "alice" }), threadId, runId, owner: "alice" })
-    yield* ExecuteRun.workflow.execute({ key: executionKey({ threadId, runId, owner: "alice" }), threadId, runId, owner: "alice" })
+    yield* ExecuteRun.execute({ key: executionKey({ threadId, runId, owner: "alice" }), threadId, runId, owner: "alice" })
+    yield* ExecuteRun.execute({ key: executionKey({ threadId, runId, owner: "alice" }), threadId, runId, owner: "alice" })
     const state = yield* threads.state(threadId)
     if (state._tag !== "Open") return yield* Effect.die("Expected open thread")
     expect(state.active?.status).toBe("completed")
@@ -85,7 +85,7 @@ test("a mismatched workflow owner cannot dispatch or fail another owner's run", 
     yield* threads.send("private", OpenThread.make({ actor: "agent", instance: "i", name: "main", limits: DEFAULT_RUN_LIMITS }))
     yield* threads.send("private", RequestRun.make({ runId: "r", digest: "d", prompt: Prompt.make("Private prompt") }))
     const before = yield* threads.state("private")
-    const result = yield* ExecuteRun.workflow.execute({ key: executionKey({ threadId: "private", runId: "r", owner: "bob" }), threadId: "private", runId: "r", owner: "bob" }).pipe(Effect.exit)
+    const result = yield* ExecuteRun.execute({ key: executionKey({ threadId: "private", runId: "r", owner: "bob" }), threadId: "private", runId: "r", owner: "bob" }).pipe(Effect.exit)
     expect(Exit.isFailure(result)).toBe(true)
     expect(yield* threads.state("private")).toEqual(before)
     expect(yield* Ref.get(calls)).toBe(0)

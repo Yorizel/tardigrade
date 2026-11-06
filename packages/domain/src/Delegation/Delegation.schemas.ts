@@ -1,7 +1,7 @@
 import { Ownership } from "../Actor.context"
 import { Schema } from "effect"
 import { Prompt } from "effect/ai"
-import { Receipt } from "../Thread/Thread.schemas"
+import { Receipt, ChildBinding, ChildReservedState, OpenState, ChildAdmission } from "../Thread/Thread.schemas"
 
 export const DelegationLimits = Schema.Struct({
   maxDepth: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
@@ -60,3 +60,23 @@ export const ReservedState = Schema.TaggedStruct("Reserved", {
 })
 export const DelegationState = Schema.Union([Schema.TaggedStruct("Unreserved", {}), ReservedState])
 export const delegationKey = (parentThreadId: string, parentRunId: string, requestId: string) => `${parentThreadId.length}:${parentThreadId}${parentRunId.length}:${parentRunId}${requestId}`
+
+export const FencedChildAbsent = Schema.Union([
+  Schema.Struct({ ...ChildReservedState.fields, closed: Schema.Literal(true) }),
+  Schema.Struct({
+    ...OpenState.fields,
+    child: Schema.Struct({ ...ChildAdmission.fields, closed: Schema.Literal(true) }),
+    active: Schema.Null,
+    receipts: Schema.Array(Receipt).check(Schema.isMaxLength(0)),
+    lastReceipt: Schema.Null,
+  }),
+])
+export const DelegationExecutionScope = Schema.Struct({ delegationId: ReservedState.fields.delegationId, ...Ownership.fields })
+export const delegationExecutionKey = (owner: string, delegationId: string) => `${owner.length}:${owner}${delegationId.length}:${delegationId}`
+export const childBindingOf = (delegation: typeof ReservedState.Type) => ChildBinding.make({
+  delegationId: delegation.delegationId,
+  parentThreadId: delegation.reservation.parentThreadId,
+  parentRunId: delegation.reservation.parentRunId,
+  childRunId: delegation.childRunId,
+  actor: delegation.reservation.targetActor,
+})

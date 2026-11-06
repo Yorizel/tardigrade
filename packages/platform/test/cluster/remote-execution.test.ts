@@ -57,7 +57,7 @@ test("Cluster executes against authenticated Domain HTTP with approval, cancella
         return { prompt: Prompt.make([{ role: "assistant", content: "Confirmed 42." }]), usage, text: "Confirmed 42.", tools: [] }
       }
       const call = Prompt.toolCallPart({ id: "call-1", name: "write_number", params: {}, providerExecuted: false })
-      return { prompt: Prompt.fromMessages([Prompt.assistantMessage({ content: [call] })]), usage, text: "", tools: [{ call, mutation: true, requiresApproval: true }] }
+      return { prompt: Prompt.fromMessages([Prompt.assistantMessage({ content: [call] })]), usage, text: "", tools: [{ call, execution: { _tag: "External" as const }, mutation: true, requiresApproval: true }] }
     }),
     invoke: Effect.fn("HttpFixture.invoke")(function* (input) {
       yield* Ref.update(calls, value => ({ ...value, tools: value.tools + 1 }))
@@ -82,26 +82,26 @@ test("Cluster executes against authenticated Domain HTTP with approval, cancella
       return yield* client.Thread.get(scope.threadId, { headers: { "x-tardigrade-owner": "alice" } })
     })).pipe(Effect.provide(remoteClient))
     expect(remote?._tag === "Open" && remote.owner === "alice").toBe(true)
-    const executionId = yield* ExecuteRun.workflow.execute(payload, { discard: true })
+    const executionId = yield* ExecuteRun.execute(payload, { discard: true })
     yield* Effect.repeat(threads.state(scope.threadId), {
       until: snapshot => snapshot._tag === "Open" && snapshot.active?.status === "awaiting_approval",
       schedule: Schedule.spaced("10 millis"),
     }).pipe(Effect.timeout("5 seconds"), Effect.onError(() => Effect.gen(function* () {
-      yield* Effect.logError("Approval wait failed", yield* threads.state(scope.threadId), yield* ExecuteRun.workflow.poll(executionId), yield* Ref.get(calls))
+      yield* Effect.logError("Approval wait failed", yield* threads.state(scope.threadId), yield* ExecuteRun.poll(executionId), yield* Ref.get(calls))
     })))
     expect(yield* Ref.get(calls)).toEqual({ models: 1, tools: 0 })
     yield* threads.send(scope.threadId, ApproveRun.make({ runId: scope.runId, stepId: "run-a:2" }))
     const deferred = approval("run-a:2")
     yield* DurableDeferred.succeed(deferred, {
-      token: DurableDeferred.tokenFromExecutionId(deferred, { workflow: ExecuteRun.workflow, executionId }), value: undefined,
+      token: DurableDeferred.tokenFromExecutionId(deferred, { workflow: ExecuteRun, executionId }), value: undefined,
     })
-    yield* ExecuteRun.workflow.execute(payload).pipe(Effect.timeout("5 seconds"))
-    yield* ExecuteRun.workflow.execute(payload).pipe(Effect.timeout("5 seconds"))
+    yield* ExecuteRun.execute(payload).pipe(Effect.timeout("5 seconds"))
+    yield* ExecuteRun.execute(payload).pipe(Effect.timeout("5 seconds"))
     const completed = yield* threads.state(scope.threadId)
     expect(completed._tag === "Open" && completed.active?.status === "completed").toBe(true)
     expect(yield* Ref.get(calls)).toEqual({ models: 2, tools: 1 })
     const wrongOwner = { ...scope, owner: "bob" }
-    expect(Exit.isFailure(yield* ExecuteRun.workflow.execute({ ...wrongOwner, key: executionKey(wrongOwner) }).pipe(Effect.exit))).toBe(true)
+    expect(Exit.isFailure(yield* ExecuteRun.execute({ ...wrongOwner, key: executionKey(wrongOwner) }).pipe(Effect.exit))).toBe(true)
     expect(yield* threads.state(scope.threadId)).toEqual(completed)
     const denied = yield* Effect.scoped(Effect.gen(function* () {
       const client = yield* ActorInternalApi.clientHttp(url)
@@ -112,14 +112,14 @@ test("Cluster executes against authenticated Domain HTTP with approval, cancella
     const cancelPayload = { ...cancelScope, key: executionKey(cancelScope) }
     yield* threads.send(cancelScope.threadId, OpenThread.make({ actor: "agent", instance: "instance", name: "cancel", limits: DEFAULT_RUN_LIMITS }))
     yield* threads.send(cancelScope.threadId, RequestRun.make({ runId: cancelScope.runId, digest: "cancel", prompt: Prompt.make("Write then cancel") }))
-    const cancelId = yield* ExecuteRun.workflow.execute(cancelPayload, { discard: true })
+    const cancelId = yield* ExecuteRun.execute(cancelPayload, { discard: true })
     yield* Effect.repeat(threads.state(cancelScope.threadId), {
       until: snapshot => snapshot._tag === "Open" && snapshot.active?.status === "awaiting_approval",
       schedule: Schedule.spaced("10 millis"),
     }).pipe(Effect.timeout("5 seconds"))
     yield* threads.send(cancelScope.threadId, CancelRun.make({ runId: cancelScope.runId, reason: "User cancelled" }))
-    yield* ExecuteRun.workflow.interrupt(cancelId)
-    const cancelled = yield* Effect.repeat(ExecuteRun.workflow.poll(cancelId), {
+    yield* ExecuteRun.interrupt(cancelId)
+    const cancelled = yield* Effect.repeat(ExecuteRun.poll(cancelId), {
       until: result => Option.isSome(result) && result.value._tag === "Complete",
       schedule: Schedule.spaced("10 millis"),
     }).pipe(Effect.timeout("5 seconds"))

@@ -2,14 +2,16 @@ import * as Domain from "@alchemy.run/domain"
 import { Effect, Layer, Schema } from "effect"
 import { Internals } from "@alchemy.run/domain/Model"
 import { CurrentCaller, Ownership, ReceiptForbidden, ReceiptOwnerGuard } from "./Actor.context"
+import { CodeExecutionPolicy } from "./Code/CodeExecution.policy"
 import { CodeExecution } from "./Code/Code.aggregate"
+import { DelegationExecutionPolicy } from "./Delegation/DelegationExecution.policy"
 import { Delegation } from "./Delegation/Delegation.aggregate"
 import { Thread } from "./Thread/Thread.aggregate"
 import { RunExecution } from "./Execution/RunExecution.policy"
 
 export class ActorModel extends Domain.Model("Tardigrade", {
   aggregates: [Thread, CodeExecution, Delegation],
-  policies: [RunExecution],
+  policies: [RunExecution, CodeExecutionPolicy, DelegationExecutionPolicy],
 }) {}
 
 const ReceiptRequest = Schema.Struct({ target: Schema.Unknown, commandId: Schema.optional(Schema.String) })

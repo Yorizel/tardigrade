@@ -91,10 +91,10 @@ test("QuickJS uses the Domain journal for concurrent replay, approval and cancel
     const request = { threadId: "parent", runId: "run", digest: "race", code: "const winner = await Promise.race([tools.slow(), tools.fast()]); console.log('winner', winner); return { winner, next: await tools.after(winner) };", catalog, ambient: { at: 123, seed: "race" }, limits: DEFAULT_CODE_LIMITS }
     yield* codes.send("race", RequestCode.make(request))
     const racePayload = { key: codeExecutionKey("alice", "race"), executionId: "race", owner: "alice" }
-    yield* ExecuteCode.workflow.execute(racePayload, { discard: true })
-    const race = yield* ExecuteCode.workflow.execute(racePayload).pipe(Effect.timeout("5 seconds"))
+    yield* ExecuteCode.execute(racePayload, { discard: true })
+    const race = yield* ExecuteCode.execute(racePayload).pipe(Effect.timeout("5 seconds"))
     expect(race.outcome).toEqual({ _tag: "Returned", value: { winner: "fast", next: { after: "fast" } } })
-    yield* ExecuteCode.workflow.execute(racePayload)
+    yield* ExecuteCode.execute(racePayload)
     expect(yield* Ref.get(invoked)).toEqual(["slow", "fast", "after"])
     const journal = yield* codes.state("race")
     expect(journal._tag === "Open" && journal.calls[1]?.settlementSequence).toBe(0)
@@ -102,7 +102,7 @@ test("QuickJS uses the Domain journal for concurrent replay, approval and cancel
     expect(journal._tag === "Open" && journal.logs).toEqual(["winner fast"])
     yield* codes.send("approved", RequestCode.make({ ...request, digest: "approved", code: "return await tools.write({ value: 42 });" }))
     const approvedPayload = { key: codeExecutionKey("alice", "approved"), executionId: "approved", owner: "alice" }
-    const approvedId = yield* ExecuteCode.workflow.execute(approvedPayload, { discard: true })
+    const approvedId = yield* ExecuteCode.execute(approvedPayload, { discard: true })
     yield* Effect.repeat(codes.state("approved"), {
       until: state => state._tag === "Open" && state.calls.length === 1,
       schedule: Schedule.spaced("10 millis"),
@@ -110,18 +110,18 @@ test("QuickJS uses the Domain journal for concurrent replay, approval and cancel
     expect((yield* Ref.get(invoked)).includes("write")).toBe(false)
     yield* codes.send("approved", ApproveCodeCall.make({ ordinal: 0 }))
     const deferred = codeApproval(0)
-    yield* DurableDeferred.succeed(deferred, { token: DurableDeferred.tokenFromExecutionId(deferred, { workflow: ExecuteCode.workflow, executionId: approvedId }), value: undefined })
-    expect((yield* ExecuteCode.workflow.execute(approvedPayload).pipe(Effect.timeout("5 seconds"))).outcome).toEqual({ _tag: "Returned", value: "write" })
+    yield* DurableDeferred.succeed(deferred, { token: DurableDeferred.tokenFromExecutionId(deferred, { workflow: ExecuteCode, executionId: approvedId }), value: undefined })
+    expect((yield* ExecuteCode.execute(approvedPayload).pipe(Effect.timeout("5 seconds"))).outcome).toEqual({ _tag: "Returned", value: "write" })
     yield* codes.send("cancelled", RequestCode.make({ ...request, digest: "cancelled", code: "return await tools.write();" }))
     const cancelPayload = { key: codeExecutionKey("alice", "cancelled"), executionId: "cancelled", owner: "alice" }
-    const cancelId = yield* ExecuteCode.workflow.execute(cancelPayload, { discard: true })
+    const cancelId = yield* ExecuteCode.execute(cancelPayload, { discard: true })
     yield* Effect.repeat(codes.state("cancelled"), {
       until: state => state._tag === "Open" && state.calls.length === 1,
       schedule: Schedule.spaced("10 millis"),
     }).pipe(Effect.timeout("5 seconds"))
     yield* codes.send("cancelled", CancelCode.make({ reason: "User cancelled" }))
-    yield* DurableDeferred.succeed(deferred, { token: DurableDeferred.tokenFromExecutionId(deferred, { workflow: ExecuteCode.workflow, executionId: cancelId }), value: undefined })
-    expect((yield* ExecuteCode.workflow.execute(cancelPayload).pipe(Effect.timeout("5 seconds"))).outcome._tag).toBe("Failed")
+    yield* DurableDeferred.succeed(deferred, { token: DurableDeferred.tokenFromExecutionId(deferred, { workflow: ExecuteCode, executionId: cancelId }), value: undefined })
+    expect((yield* ExecuteCode.execute(cancelPayload).pipe(Effect.timeout("5 seconds"))).outcome._tag).toBe("Failed")
     const cancelled = yield* codes.state("cancelled")
     expect(cancelled._tag === "Open" && cancelled.status).toBe("cancelled")
     expect((yield* Ref.get(invoked)).filter(method => method === "write").length).toBe(1)
@@ -129,18 +129,18 @@ test("QuickJS uses the Domain journal for concurrent replay, approval and cancel
     yield* codes.send("uncertain", PrepareCodeCall.make({ ordinal: 0, package: "tools", method: "write", mutation: true, requiresApproval: false }))
     yield* codes.send("uncertain", DispatchCodeCall.make({ ordinal: 0 }))
     yield* codes.send("uncertain", PrepareCodeCall.make({ ordinal: 1, package: "tools", method: "fast", mutation: false, requiresApproval: false }))
-    const uncertain = yield* ExecuteCode.workflow.execute({ key: codeExecutionKey("alice", "uncertain"), executionId: "uncertain", owner: "alice" }).pipe(Effect.timeout("5 seconds"))
+    const uncertain = yield* ExecuteCode.execute({ key: codeExecutionKey("alice", "uncertain"), executionId: "uncertain", owner: "alice" }).pipe(Effect.timeout("5 seconds"))
     expect(uncertain.outcome._tag).toBe("Failed")
     const unknown = yield* codes.state("uncertain")
     expect(unknown._tag === "Open" && unknown.status).toBe("unknown")
     expect((yield* Ref.get(invoked)).filter(method => method === "write").length).toBe(1)
     yield* codes.send("caught", RequestCode.make({ ...request, digest: "caught", code: "try { await tools.fail(); } catch (error) { return 'caught'; }" }))
-    const caught = yield* ExecuteCode.workflow.execute({ key: codeExecutionKey("alice", "caught"), executionId: "caught", owner: "alice" }).pipe(Effect.timeout("5 seconds"))
+    const caught = yield* ExecuteCode.execute({ key: codeExecutionKey("alice", "caught"), executionId: "caught", owner: "alice" }).pipe(Effect.timeout("5 seconds"))
     expect(caught.outcome).toEqual({ _tag: "Returned", value: "caught" })
     expect((yield* Ref.get(invoked)).filter(method => method === "fast").length).toBe(1)
     yield* codes.send("mixed", RequestCode.make({ ...request, digest: "mixed", code: "const held = tools.hold(); const written = await tools.write('mixed'); return [await held, written];" }))
     const mixedPayload = { key: codeExecutionKey("alice", "mixed"), executionId: "mixed", owner: "alice" }
-    const mixedId = yield* ExecuteCode.workflow.execute(mixedPayload, { discard: true })
+    const mixedId = yield* ExecuteCode.execute(mixedPayload, { discard: true })
     yield* Effect.repeat(codes.state("mixed"), {
       until: state => state._tag === "Open" && state.calls[0]?.status === "dispatched" && state.calls[1]?.status === "prepared",
       schedule: Schedule.spaced("10 millis"),
@@ -148,24 +148,39 @@ test("QuickJS uses the Domain journal for concurrent replay, approval and cancel
     expect((yield* Ref.get(invoked)).filter(method => method === "write").length).toBe(1)
     yield* codes.send("mixed", ApproveCodeCall.make({ ordinal: 1 }))
     const mixedApproval = codeApproval(1)
-    yield* DurableDeferred.succeed(mixedApproval, { token: DurableDeferred.tokenFromExecutionId(mixedApproval, { workflow: ExecuteCode.workflow, executionId: mixedId }), value: undefined })
-    expect((yield* ExecuteCode.workflow.execute(mixedPayload).pipe(Effect.timeout("5 seconds"))).outcome).toEqual({ _tag: "Returned", value: ["held", "write"] })
+    yield* DurableDeferred.succeed(mixedApproval, { token: DurableDeferred.tokenFromExecutionId(mixedApproval, { workflow: ExecuteCode, executionId: mixedId }), value: undefined })
+    expect((yield* ExecuteCode.execute(mixedPayload).pipe(Effect.timeout("5 seconds"))).outcome).toEqual({ _tag: "Returned", value: ["held", "write"] })
     yield* codes.send("live-cancel", RequestCode.make({ ...request, digest: "live-cancel", code: "const held = tools.blocked(); const written = tools.write('cancelled'); return [await held, await written];" }))
     const liveCancelPayload = { key: codeExecutionKey("alice", "live-cancel"), executionId: "live-cancel", owner: "alice" }
-    yield* ExecuteCode.workflow.execute(liveCancelPayload, { discard: true })
+    yield* ExecuteCode.execute(liveCancelPayload, { discard: true })
     yield* Effect.repeat(codes.state("live-cancel"), {
       until: state => state._tag === "Open" && state.calls[0]?.status === "dispatched" && state.calls[1]?.status === "prepared",
       schedule: Schedule.spaced("10 millis"),
     }).pipe(Effect.timeout("5 seconds"))
     yield* codes.send("live-cancel", CancelCode.make({ reason: "Cancel while host call is live" }))
-    expect((yield* ExecuteCode.workflow.execute(liveCancelPayload).pipe(Effect.timeout("5 seconds"))).outcome._tag).toBe("Failed")
+    expect((yield* ExecuteCode.execute(liveCancelPayload).pipe(Effect.timeout("5 seconds"))).outcome._tag).toBe("Failed")
     expect((yield* Ref.get(invoked)).filter(method => method === "write").length).toBe(2)
+    for (const scenario of [{ id: "parent-approval", source: "return await tools.write();", expected: "prepared" }, { id: "parent-live", source: "return await tools.blocked();", expected: "dispatched" }]) {
+      yield* threads.send(scenario.id, new OpenThread({ actor: "agent", instance: "instance", name: scenario.id, limits: DEFAULT_RUN_LIMITS }))
+      yield* threads.send(scenario.id, new RequestRun({ runId: "parent-run", digest: scenario.id, prompt: Prompt.make("Cancel parent") }))
+      yield* codes.send(scenario.id, new RequestCode({ ...request, threadId: scenario.id, runId: "parent-run", digest: scenario.id, code: scenario.source }))
+      const payload = { key: codeExecutionKey("alice", scenario.id), executionId: scenario.id, owner: "alice" }
+      yield* ExecuteCode.execute(payload, { discard: true })
+      yield* Effect.repeat(codes.state(scenario.id), {
+        until: state => state._tag === "Open" && state.calls[0]?.status === scenario.expected,
+        schedule: Schedule.spaced("10 millis"),
+      }).pipe(Effect.timeout("5 seconds"))
+      yield* threads.send(scenario.id, new CancelRun({ runId: "parent-run", reason: "Parent cancelled without code signal" }))
+      expect((yield* ExecuteCode.execute(payload).pipe(Effect.timeout("5 seconds"))).outcome._tag).toBe("Failed")
+      const cancelledByParent = yield* codes.state(scenario.id)
+      expect(cancelledByParent._tag === "Open" && cancelledByParent.status).toBe("cancelled")
+    }
     const before = yield* codes.state("race")
-    expect(Exit.isFailure(yield* ExecuteCode.workflow.execute({ key: codeExecutionKey("bob", "race"), executionId: "race", owner: "bob" }).pipe(Effect.exit))).toBe(true)
+    expect(Exit.isFailure(yield* ExecuteCode.execute({ key: codeExecutionKey("bob", "race"), executionId: "race", owner: "bob" }).pipe(Effect.exit))).toBe(true)
     expect(yield* codes.state("race")).toEqual(before)
     yield* codes.send("parent-terminal", RequestCode.make({ ...request, digest: "parent-terminal", code: "return await tools.write();" }))
     yield* threads.send("parent", CancelRun.make({ runId: "run", reason: "Parent cancelled" }))
-    const stopped = yield* ExecuteCode.workflow.execute({ key: codeExecutionKey("alice", "parent-terminal"), executionId: "parent-terminal", owner: "alice" })
+    const stopped = yield* ExecuteCode.execute({ key: codeExecutionKey("alice", "parent-terminal"), executionId: "parent-terminal", owner: "alice" })
     expect(stopped.outcome._tag).toBe("Failed")
     const stoppedState = yield* codes.state("parent-terminal")
     expect(stoppedState._tag === "Open" && stoppedState.status).toBe("cancelled")

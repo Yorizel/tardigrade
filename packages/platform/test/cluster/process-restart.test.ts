@@ -20,7 +20,7 @@ import { DEFAULT_RUN_LIMITS } from "@clavia/tardigrade-domain/Thread/Thread.sche
 import { internalApi } from "../../src/alchemy/internal"
 import { executionKey } from "@clavia/tardigrade-domain/Execution/Run.workflow"
 import { RunRpcs } from "../../src/cluster/run-control"
-import { RunExecutionLive } from "../../src/alchemy/run-policy"
+import { ActorPoliciesLive } from "../../src/alchemy/policies"
 import { RunnerReady } from "./runner-process.fixture"
 
 const domainToken = "process-domain-fixture-token"
@@ -71,7 +71,7 @@ for (const mode of ["approval", "unknown"] as const) {
       WORKER_TO_RUNNER_TOKEN: runnerToken,
       RUNNER_TO_DOMAIN_TOKEN: domainToken,
     }))
-    const stateContext = yield* Layer.build(ActorModel.layer(RunExecutionLive).pipe(Layer.provide(Domain.InMemory), Layer.provide(config)))
+    const stateContext = yield* Layer.build(ActorModel.layer(ActorPoliciesLive).pipe(Layer.provide(Domain.InMemory), Layer.provide(config)))
     const threads = Context.get(stateContext, Thread)
     const endpoint = yield* internalApi.pipe(Effect.provide(stateContext), Effect.provide(config))
     yield* Layer.build(HttpServer.serve()(endpoint).pipe(Layer.provide(Layer.succeedContext(domainServerContext))))

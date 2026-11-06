@@ -26,7 +26,7 @@ describe("initActor", () => {
     expect(initialized.modelLock).toBeUndefined()
     const worker = await readFile(initialized.worker, "utf8")
     expect(worker).toContain("DomainCloudflare.layerDurableObjects()")
-    expect(worker).toContain("ActorModel.layer(RunExecutionLive)")
+    expect(worker).toContain("ActorModel.layer(ActorPoliciesLive)")
     expect(worker).not.toContain("createActorWorker")
     expect(await readFile(initialized.entry, "utf8")).toContain("disableToolCallResolution: true")
     expect(await readFile(initialized.manifest, "utf8")).toContain("TARDIGRADE_ACTOR=native-agent")

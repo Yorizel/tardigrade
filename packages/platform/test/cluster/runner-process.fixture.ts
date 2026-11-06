@@ -25,7 +25,7 @@ const FixtureExecutionLive = AgentExecution.toLayer(Effect.gen(function* () {
       yield* sql`INSERT INTO fixture_calls (kind, operation_id) VALUES ('infer', ${input.operationId})`.pipe(Effect.orDie)
       if (input.prompt.content.some(message => message.role === "tool")) return { prompt: Prompt.make([{ role: "assistant", content: "Stored 42 after restart." }]), usage, text: "Stored 42 after restart.", tools: [] }
       const call = Prompt.toolCallPart({ id: "store-1", name: "store_number", params: {}, providerExecuted: false })
-      return { prompt: Prompt.fromMessages([Prompt.assistantMessage({ content: [call] })]), usage, text: "", tools: [{ call, mutation: true, requiresApproval: mode === "approval" }] }
+      return { prompt: Prompt.fromMessages([Prompt.assistantMessage({ content: [call] })]), usage, text: "", tools: [{ call, execution: { _tag: "External" as const }, mutation: true, requiresApproval: mode === "approval" }] }
     }),
     invoke: Effect.fn("ProcessFixture.invoke")(function* (input: Parameters<Context.Service.Shape<typeof AgentExecution>["invoke"]>[0]) {
       yield* sql`INSERT INTO fixture_calls (kind, operation_id) VALUES ('invoke', ${input.operationId})`.pipe(Effect.orDie)
