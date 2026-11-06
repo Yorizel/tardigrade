@@ -3,6 +3,7 @@ import { tmpdir } from "node:os"
 import { dirname, isAbsolute, join, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { rewriteComponentRuntimeImports, stageInitTemplates } from "./publish-paths"
+import { copyProjectPatches, projectPatchesFrom } from "../apps/cli/src/version"
 import publicExports from "./public-exports.json"
 import { syncPublicExports } from "./public-exports"
 import { publishDependencies, publishSources } from "./publish-manifest"
@@ -68,13 +69,15 @@ const verifyPackedManifest = async (tarball: string, expected: {
   readonly dependencies: Readonly<Record<string, string>>
   readonly peerDependencies: Readonly<Record<string, string>>
   readonly peerDependenciesMeta: Readonly<Record<string, { readonly optional?: boolean }>>
+  readonly patchedDependencies: Readonly<Record<string, string>>
 }) => {
   const packed = JSON.parse(await output(["tar", "-xOf", tarball, "package/package.json"], root)) as {
     readonly dependencies?: Readonly<Record<string, string>>
     readonly peerDependencies?: Readonly<Record<string, string>>
     readonly peerDependenciesMeta?: Readonly<Record<string, { readonly optional?: boolean }>>
+    readonly patchedDependencies?: Readonly<Record<string, string>>
   }
-  for (const [name, expectedDependencies] of [["dependencies", expected.dependencies], ["peerDependencies", expected.peerDependencies], ["peerDependenciesMeta", expected.peerDependenciesMeta]] as const) {
+  for (const [name, expectedDependencies] of [["dependencies", expected.dependencies], ["peerDependencies", expected.peerDependencies], ["peerDependenciesMeta", expected.peerDependenciesMeta], ["patchedDependencies", expected.patchedDependencies]] as const) {
     if (JSON.stringify(packed[name] ?? {}) !== JSON.stringify(expectedDependencies)) {
       throw new Error(`packed manifest ${name} differs from the publication manifest`)
     }
@@ -174,12 +177,17 @@ const requestedOutput = option("--output")
 const destination = requestedOutput === undefined ? await mkdtemp(join(tmpdir(), "tardigrade-pack-")) : resolve(root, requestedOutput)
 const temporary = requestedOutput === undefined
 const stage = join(destination, "package")
+const projectPatches = await projectPatchesFrom(new URL("../apps/cli/src/init.ts", import.meta.url).href)
+const patchedDependencies = projectPatches.patchedDependencies
 
 try {
   await mkdir(stage, { recursive: true })
   for (const source of packages) await mkdir(join(stage, "src", source.namespace), { recursive: true })
+  await rm(join(stage, "patches"), { recursive: true, force: true })
+  await copyProjectPatches(projectPatches, stage)
   await Promise.all([
     cp(join(root, "LICENSE"), join(stage, "LICENSE")),
+    cp(join(root, "THIRD_PARTY_NOTICES.md"), join(stage, "THIRD_PARTY_NOTICES.md")),
     cp(join(root, "README.md"), join(stage, "README.md")),
     stageInitTemplates(root, stage),
     ...packages.map(async (source) => {
@@ -207,12 +215,13 @@ try {
     bugs: publicSource.pkg.bugs,
     publishConfig: publicSource.pkg.publishConfig,
     ...(sourceTree === undefined ? {} : { tardigrade: { sourceTree } }),
-    files: ["src", STAGED_EXAMPLES],
+    files: ["src", STAGED_EXAMPLES, "patches", "THIRD_PARTY_NOTICES.md"],
     engines: publicSource.pkg.engines,
     type: "module",
     bin: { [BIN_NAME]: BIN_ENTRY },
     exports: publicExports,
-    ...dependencies
+    ...dependencies,
+    patchedDependencies
   }
   await writeFile(join(stage, "package.json"), `${JSON.stringify(publishManifest, null, 2)}\n`)
 
@@ -227,7 +236,15 @@ try {
 
   const filename = await output(["bun", "pm", "pack", "--destination", destination, "--quiet", "--ignore-scripts"], stage)
   const tarball = isAbsolute(filename) ? filename : join(destination, filename)
-  await verifyPackedManifest(tarball, dependencies)
+  await verifyPackedManifest(tarball, { ...dependencies, patchedDependencies })
+  const packedFiles = (await output(["tar", "-tzf", tarball], root)).split("\n")
+  for (const source of Object.values(patchedDependencies)) {
+    if (!packedFiles.includes(`package/${source}`)) throw new Error(`packed artifact is missing patch resource ${source}`)
+  }
+  const packedPatchFiles = packedFiles.filter((path) => path.startsWith("package/patches/") && !path.endsWith("/")).sort()
+  const expectedPatchFiles = Object.values(patchedDependencies).map((path) => `package/${path}`).sort()
+  if (JSON.stringify(packedPatchFiles) !== JSON.stringify(expectedPatchFiles)) throw new Error("packed artifact contains unreferenced patch resources")
+  if (!packedFiles.includes("package/THIRD_PARTY_NOTICES.md")) throw new Error("packed artifact is missing THIRD_PARTY_NOTICES.md")
   if (packOnly) {
     console.log(`pack ${publicSource.pkg.name}@${version}`)
   } else {

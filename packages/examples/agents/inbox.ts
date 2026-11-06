@@ -28,8 +28,8 @@ const InboxState = Schema.Union([
   }),
 ])
 
-export class InboxRejected extends Domain.Rejection("InboxRejected", { reason: Schema.Literals(["AlreadyOpen", "NotOpen", "MessageIdTooLong", "MessageTooLong", "MessageLimitExceeded", "MessageIdConflict"]) }, { httpApiStatus: 409 }) {}
-export class InboxNotOwner extends Domain.Rejection("InboxNotOwner", {}, { httpApiStatus: 403 }) {}
+export class InboxRejected extends Schema.TaggedError<InboxRejected, { readonly brand: unique symbol }>()("InboxRejected", { reason: Schema.Literals(["AlreadyOpen", "NotOpen", "MessageIdTooLong", "MessageTooLong", "MessageLimitExceeded", "MessageIdConflict"]) }, { httpApiStatus: 409 }) {}
+export class InboxNotOwner extends Schema.TaggedError<InboxNotOwner, { readonly brand: unique symbol }>()("InboxNotOwner", {}, { httpApiStatus: 403 }) {}
 
 export class InboxOpened extends Domain.Event("InboxOpened", { owner: Schema.NonEmptyString, policy: InboxPolicy }) {}
 export class InboxMessageReceived extends Domain.Event("InboxMessageReceived", { message: Message }) {}
@@ -53,7 +53,7 @@ export class PostInboxMessage extends Domain.Command("PostInboxMessage", {
 
 const owned = Effect.fn("ExampleInbox.owned")(function* (state: typeof InboxState.Type) {
   const caller = yield* CurrentCaller
-  if (state._tag === "Unopened" || state.owner !== caller.subject) return yield* new InboxNotOwner()
+  if (state._tag === "Unopened" || state.owner !== caller.subject) return yield* InboxNotOwner.make()
   return state
 })
 
@@ -66,22 +66,22 @@ export class Inbox extends Domain.Aggregate("ExampleInbox", {
     OpenInbox: Effect.fn("ExampleInbox.OpenInbox")(function* (state, command) {
       const caller = yield* CurrentCaller
       if (state._tag === "Open") {
-        if (state.owner !== caller.subject) return yield* new InboxNotOwner()
-        if (!Schema.toEquivalence(InboxPolicy)(state.policy, command.policy)) return yield* new InboxRejected({ reason: "AlreadyOpen" })
+        if (state.owner !== caller.subject) return yield* InboxNotOwner.make()
+        if (!Schema.toEquivalence(InboxPolicy)(state.policy, command.policy)) return yield* InboxRejected.make({ reason: "AlreadyOpen" })
         return []
       }
       return [InboxOpened.make({ owner: caller.subject, policy: command.policy })]
     }),
     PostInboxMessage: Effect.fn("ExampleInbox.PostInboxMessage")(function* (state, command) {
       const current = yield* owned(state)
-      if (command.id.length > current.policy.maxMessageIdChars) return yield* new InboxRejected({ reason: "MessageIdTooLong" })
+      if (command.id.length > current.policy.maxMessageIdChars) return yield* InboxRejected.make({ reason: "MessageIdTooLong" })
       const previous = current.messages.find(message => message.id === command.id)
       if (previous !== undefined) {
-        if (!Schema.toEquivalence(Message)(previous, command)) return yield* new InboxRejected({ reason: "MessageIdConflict" })
+        if (!Schema.toEquivalence(Message)(previous, command)) return yield* InboxRejected.make({ reason: "MessageIdConflict" })
         return [InboxMessageAcknowledged.make({ message: previous })]
       }
-      if (command.text.length > current.policy.maxTextChars) return yield* new InboxRejected({ reason: "MessageTooLong" })
-      if (current.messages.length >= current.policy.maxMessages) return yield* new InboxRejected({ reason: "MessageLimitExceeded" })
+      if (command.text.length > current.policy.maxTextChars) return yield* InboxRejected.make({ reason: "MessageTooLong" })
+      if (current.messages.length >= current.policy.maxMessages) return yield* InboxRejected.make({ reason: "MessageLimitExceeded" })
       return [InboxMessageReceived.make({ message: { id: command.id, text: command.text } })]
     }),
   },
@@ -104,7 +104,7 @@ export class Inbox extends Domain.Aggregate("ExampleInbox", {
     middleware: [Session],
     rejects: [InboxRejected, InboxNotOwner],
     validate: Effect.fn("ExampleInbox.read")(function* (_request, state) {
-      if (state === null) return yield* new InboxNotOwner()
+      if (state === null) return yield* InboxNotOwner.make()
       yield* owned(state)
     }),
   },

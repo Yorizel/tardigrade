@@ -21,13 +21,13 @@ export const RunCodeLive = Layer.unwrap(Effect.gen(function* () {
     }
     yield* Effect.succeed({ executionId, owner }).pipe(RunCode.withCompensation(() => Effect.gen(function* () {
       const current = yield* api.CodeExecution.get(executionId, { headers }).pipe(
-        Effect.catchTag("CodeNotOwner", () => Effect.succeed(null)), Effect.orDie,
+        Effect.catchTag("CodeNotOwner", () => Effect.succeed(null)),
       )
       if (current === null || current._tag !== "Open" || current.owner !== owner || !Schema.toEquivalence(CodeInput)(current.request, request)) return
       yield* api.CancelCode(executionId, { reason: "Code admission workflow interrupted" }, { headers, commandId: `${key}:admission-cancel` }).pipe(
-        Effect.catchTag("CodeRejected", () => Effect.void), Effect.orDie,
+        Effect.catchTag("CodeRejected", () => Effect.void),
       )
-    })))
+    }).pipe(Effect.orDie)))
     yield* Activity.make({
       name: "admit-code",
       execute: Effect.gen(function* () {

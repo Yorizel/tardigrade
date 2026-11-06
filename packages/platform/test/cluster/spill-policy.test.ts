@@ -80,7 +80,8 @@ test("code admission uses the persisted spill policy when a later planner propos
   const catalog = yield* SpillCatalog
   const codes = yield* CodeExecution
   yield* threads.send("thread", OpenThread.make({ actor: "fixture", instance: "instance", name: "main", limits: DEFAULT_RUN_LIMITS }))
-  yield* catalog.send(workspaceKey("alice", "thread"), OpenSpillCatalog.make({ threadId: "thread", policy }))
+  const target = yield* workspaceKey("alice", "thread")
+  yield* catalog.send(target, OpenSpillCatalog.make({ threadId: "thread", policy }))
   yield* threads.send("thread", RequestRun.make({ runId: "run", digest: "run", prompt: Prompt.make("Use the durable workspace") }))
   const scope = { owner: "alice", threadId: "thread", runId: "run" }
   yield* ExecuteRun.execute({ ...scope, key: executionKey(scope) })

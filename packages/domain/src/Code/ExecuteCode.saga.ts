@@ -69,7 +69,7 @@ export const ExecuteCodeLive = Layer.unwrap(Effect.gen(function* () {
         const key = delegationExecutionKey(owner, delegationId)
         if (entry.status === "prepared") yield* api.DispatchCodeCall(executionId, { ordinal: entry.request.ordinal }, { headers, commandId: commandId(`dispatch:${entry.request.ordinal}`) }).pipe(Effect.orDie)
         else if (entry.status !== "dispatched") return yield* Effect.die("Code delegation cannot be dispatched")
-        const delegated = yield* RunDelegation.execute({ key, delegationId, owner, reservation }).pipe(Effect.onInterrupt(() => api.RequestDelegationCancellation(delegationId, { reason: "Code execution interrupted" }, { headers, commandId: commandId(`delegate-cancel:${entry.request.ordinal}`) }).pipe(Effect.catchTag("NotOwner", () => Effect.void), Effect.catchTag("DelegationRejected", () => Effect.void), Effect.orDie)))
+        const delegated = yield* RunDelegation.execute({ key, delegationId, owner, reservation }).pipe(Effect.onInterrupt(() => api.RequestDelegationCancellation(delegationId, { reason: "Code execution interrupted" }, { headers, commandId: commandId(`delegate-cancel:${entry.request.ordinal}`) }).pipe(Effect.catchTags({ NotOwner: () => Effect.void, DelegationRejected: () => Effect.void }), Effect.orDie)))
         if (delegated.status === "unknown") {
           yield* api.MarkCodeCallUnknown(executionId, { ordinal: entry.request.ordinal, reason: "Delegated child outcome is unknown; reconciliation required" }, { headers, commandId: commandId(`unknown:${entry.request.ordinal}`) }).pipe(Effect.orDie)
           return yield* Effect.die("Delegated child outcome is unknown")
@@ -158,7 +158,7 @@ export const ExecuteCodeLive = Layer.unwrap(Effect.gen(function* () {
       )
       const active = yield* Ref.get(live)
       if (active.size > 0 || ready.length > 0) {
-        const settled = Queue.take(notifications).pipe(Effect.flatMap(exit => exit))
+        const settled = Queue.take(notifications).pipe(Effect.flatten)
         yield* Effect.raceFirst(settled, Effect.raceFirst(changed, parentChanged))
         return yield* loop()
       }

@@ -65,7 +65,7 @@ export const invokeWorkspaceTool = Effect.fn("WorkspaceTools.invoke")(function* 
   if (parent === null || parent._tag !== "Open" || parent.owner !== scope.owner || parent.active === null || parent.active.runId !== scope.runId || ["completed", "failed", "cancelled", "unknown"].includes(parent.active.status)) {
     return yield* WorkspaceToolRejected.make({ reason: "ParentRunTerminal" })
   }
-  const target = workspaceKey(scope.owner, scope.threadId)
+  const target = yield* workspaceKey(scope.owner, scope.threadId)
   const workspace = yield* Effect.gen(function* () {
     const existing = yield* api.Workspace.get(target, { headers })
     if (existing !== null && existing._tag === "Open") return existing

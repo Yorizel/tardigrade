@@ -3,8 +3,8 @@ import { Schema } from "effect"
 import { ReceiptOwnerGuard, Session } from "../Actor.context"
 import { CodeCall, CodeInput, CodeOutcome, HostCallInput, CodeSettlementSequence } from "./Code.schemas"
 
-export class CodeRejected extends Domain.Rejection("CodeRejected", { reason: Schema.NonEmptyString }, { httpApiStatus: 409 }) {}
-export class CodeNotOwner extends Domain.Rejection("CodeNotOwner", {}, { httpApiStatus: 403 }) {}
+export class CodeRejected extends Schema.TaggedError<CodeRejected, { readonly brand: unique symbol }>()("CodeRejected", { reason: Schema.NonEmptyString }, { httpApiStatus: 409 }) {}
+export class CodeNotOwner extends Schema.TaggedError<CodeNotOwner, { readonly brand: unique symbol }>()("CodeNotOwner", {}, { httpApiStatus: 403 }) {}
 export class CodeStarted extends Domain.Event("CodeStarted", { owner: Schema.NonEmptyString, request: CodeInput, startedAt: Schema.Finite, deadlineAt: Schema.Finite }) {}
 export class CodeCallPrepared extends Domain.Event("CodeCallPrepared", { call: CodeCall }) {}
 export class CodeCallReplayed extends Domain.Event("CodeCallReplayed", { ordinal: Schema.Int }) {}

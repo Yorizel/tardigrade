@@ -57,5 +57,8 @@
     "oxlint": "1.91.0",
     "oxlint-tsgolint": "7.0.2005"
   },
-  "private": true
+  "private": true,
+  "patchedDependencies": {
+    "effect@4.1.2": "patches/effect@4.1.2.patch"
+  }
 }

@@ -6,12 +6,12 @@ import { RequestCode, PrepareCodeCall, ApproveCodeCall, DispatchCodeCall, Settle
 
 const owned = Effect.fn("Code.owned")(function* (state: typeof CodeState.Type) {
   const caller = yield* CurrentCaller
-  if (state._tag !== "Open" || state.owner !== caller.subject) return yield* new CodeNotOwner()
+  if (state._tag !== "Open" || state.owner !== caller.subject) return yield* CodeNotOwner.make()
   return state
 })
 const active = (state: typeof CodeState.Type) => {
-  if (state._tag !== "Open") return new CodeRejected({ reason: "UnknownExecution" })
-  if (state.status !== "running") return new CodeRejected({ reason: "ExecutionTerminal" })
+  if (state._tag !== "Open") return CodeRejected.make({ reason: "UnknownExecution" })
+  if (state.status !== "running") return CodeRejected.make({ reason: "ExecutionTerminal" })
   return state
 }
 const resultSize = Effect.fn("Code.resultSize")(function* (outcome: typeof CodeOutcome.Type) {
@@ -39,66 +39,67 @@ export class CodeExecution extends Domain.Aggregate("CodeExecution", {
       const caller = yield* CurrentCaller
       const request = CodeInput.make(command)
       if (state._tag === "Open") {
-        if (state.owner !== caller.subject) return yield* new CodeNotOwner()
-        if (!Schema.toEquivalence(CodeInput)(state.request, request)) return yield* new CodeRejected({ reason: "ExecutionIdentityConflict" })
+        if (state.owner !== caller.subject) return yield* CodeNotOwner.make()
+        if (!Schema.toEquivalence(CodeInput)(state.request, request)) return yield* CodeRejected.make({ reason: "ExecutionIdentityConflict" })
         return []
       }
-      if (request.code.length > request.limits.maxCodeChars) return yield* new CodeRejected({ reason: "CodeBudgetExceeded" })
-      if (request.spill !== undefined && (request.catalog.workspace?.includes("read") !== true || request.catalog.workspace?.includes("grep") !== true)) return yield* new CodeRejected({ reason: "SpillReadersNotSelected" })
+      if (request.code.length > request.limits.maxCodeChars) return yield* CodeRejected.make({ reason: "CodeBudgetExceeded" })
+      if (request.spill !== undefined && (request.catalog.workspace?.includes("read") !== true || request.catalog.workspace?.includes("grep") !== true)) return yield* CodeRejected.make({ reason: "SpillReadersNotSelected" })
       const startedAt = DateTime.toEpochMillis(now)
       return [CodeStarted.make({ owner: caller.subject, request, startedAt, deadlineAt: startedAt + request.limits.maxDurationMs })]
     }),
     PrepareCodeCall: Effect.fn("Code.prepareCall")(function* (state, command, { id, now }) {
-      if (state._tag !== "Open") return yield* new CodeRejected({ reason: "UnknownExecution" })
+      if (state._tag !== "Open") return yield* CodeRejected.make({ reason: "UnknownExecution" })
       const request = HostCallInput.make(command)
       const previous = Option.getOrUndefined(EffectArray.findFirst(state.calls, call => call.request.ordinal === command.ordinal))
       if (previous !== undefined) {
-        if (!Schema.toEquivalence(HostCallInput)(previous.request, request)) return yield* new CodeRejected({ reason: "CallIdentityConflict" })
+        if (!Schema.toEquivalence(HostCallInput)(previous.request, request)) return yield* CodeRejected.make({ reason: "CallIdentityConflict" })
         return [CodeCallReplayed.make({ ordinal: command.ordinal })]
       }
       const current = active(state)
       if (current._tag !== "Open") return yield* current
-      if (DateTime.toEpochMillis(now) >= current.deadlineAt) return yield* new CodeRejected({ reason: "DurationBudgetExceeded" })
+      if (DateTime.toEpochMillis(now) >= current.deadlineAt) return yield* CodeRejected.make({ reason: "DurationBudgetExceeded" })
       if (request.input !== undefined) {
         const encodedInput = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))(request.input).pipe(Effect.orDie)
-        if (encodedInput.length > current.request.limits.maxCallInputChars) return yield* new CodeRejected({ reason: "CallInputBudgetExceeded" })
+        if (encodedInput.length > current.request.limits.maxCallInputChars) return yield* CodeRejected.make({ reason: "CallInputBudgetExceeded" })
       }
-      if (current.request.catalog[command.package]?.includes(command.method) !== true) return yield* new CodeRejected({ reason: "MethodNotSelected" })
-      if (command.ordinal !== current.calls.length) return yield* new CodeRejected({ reason: "CallOrderConflict" })
-      if (current.calls.length >= current.request.limits.maxCalls) return yield* new CodeRejected({ reason: "CallBudgetExceeded" })
-      if (request.execution !== undefined && (!request.mutation || request.execution.toolCalls > request.execution.limits.maxToolCalls)) return yield* new CodeRejected({ reason: "InvalidDelegationCapability" })
+      if (current.request.catalog[command.package]?.includes(command.method) !== true) return yield* CodeRejected.make({ reason: "MethodNotSelected" })
+      if (command.ordinal !== current.calls.length) return yield* CodeRejected.make({ reason: "CallOrderConflict" })
+      if (current.calls.length >= current.request.limits.maxCalls) return yield* CodeRejected.make({ reason: "CallBudgetExceeded" })
+      if (request.execution !== undefined && (!request.mutation || request.execution.toolCalls > request.execution.limits.maxToolCalls)) return yield* CodeRejected.make({ reason: "InvalidDelegationCapability" })
       return [CodeCallPrepared.make({ call: { callId: `${id.length}:${id}:${command.ordinal}`, request, status: "prepared", approved: !command.requiresApproval, outcome: null, settlementSequence: null, reason: null } })]
     }),
     ApproveCodeCall: Effect.fn("Code.Approve")(function* (state, command) {
-      const current = active(yield* owned(state))
+      const currentState = yield* owned(state)
+      const current = active(currentState)
       if (current._tag !== "Open") return yield* current
       const call = Option.getOrUndefined(EffectArray.findFirst(current.calls, entry => entry.request.ordinal === command.ordinal))
-      if (call === undefined) return yield* new CodeRejected({ reason: "UnknownCall" })
-      if (call.status !== "prepared") return yield* new CodeRejected({ reason: "CallNotPrepared" })
+      if (call === undefined) return yield* CodeRejected.make({ reason: "UnknownCall" })
+      if (call.status !== "prepared") return yield* CodeRejected.make({ reason: "CallNotPrepared" })
       if (call.approved) return []
       return [CodeCallApproved.make({ ordinal: command.ordinal })]
     }),
     DispatchCodeCall: (state, command, { now }) => {
       const current = active(state)
       if (current._tag !== "Open") return current
-      if (DateTime.toEpochMillis(now) >= current.deadlineAt) return new CodeRejected({ reason: "DurationBudgetExceeded" })
+      if (DateTime.toEpochMillis(now) >= current.deadlineAt) return CodeRejected.make({ reason: "DurationBudgetExceeded" })
       const call = Option.getOrUndefined(EffectArray.findFirst(current.calls, entry => entry.request.ordinal === command.ordinal))
-      if (call === undefined) return new CodeRejected({ reason: "UnknownCall" })
-      if (call.status !== "prepared") return new CodeRejected({ reason: "CallAlreadyDispatched" })
-      if (!call.approved) return new CodeRejected({ reason: "ApprovalRequired" })
+      if (call === undefined) return CodeRejected.make({ reason: "UnknownCall" })
+      if (call.status !== "prepared") return CodeRejected.make({ reason: "CallAlreadyDispatched" })
+      if (!call.approved) return CodeRejected.make({ reason: "ApprovalRequired" })
       return [CodeCallDispatched.make({ ordinal: command.ordinal })]
     },
     SettleCodeCall: Effect.fn("Code.settleCall")(function* (state, command) {
-      if (state._tag !== "Open") return yield* new CodeRejected({ reason: "UnknownExecution" })
+      if (state._tag !== "Open") return yield* CodeRejected.make({ reason: "UnknownExecution" })
       const call = Option.getOrUndefined(EffectArray.findFirst(state.calls, entry => entry.request.ordinal === command.ordinal))
-      if (call === undefined) return yield* new CodeRejected({ reason: "UnknownCall" })
+      if (call === undefined) return yield* CodeRejected.make({ reason: "UnknownCall" })
       if (call.outcome !== null) {
         if (Schema.toEquivalence(CodeOutcome)(call.outcome, command.outcome)) return []
-        return yield* new CodeRejected({ reason: "CallResultConflict" })
+        return yield* CodeRejected.make({ reason: "CallResultConflict" })
       }
       const current = active(state)
       if (current._tag !== "Open") return yield* current
-      if (call.status !== "dispatched") return yield* new CodeRejected({ reason: "CallNotDispatched" })
+      if (call.status !== "dispatched") return yield* CodeRejected.make({ reason: "CallNotDispatched" })
       if ((yield* resultSize(command.outcome)) > current.request.limits.maxResultChars) {
         if (call.request.mutation) return interrupted(current, "CallResultBudgetExceeded", false, command.ordinal)
         return interrupted(current, "CallResultBudgetExceeded", false, null)
@@ -112,21 +113,21 @@ export class CodeExecution extends Domain.Aggregate("CodeExecution", {
     CompleteCode: Effect.fn("Code.complete")(function* (state, command, { now }) {
       if (state._tag === "Open" && state.outcome !== null) {
         if (Schema.toEquivalence(CodeOutcome)(state.outcome, command.outcome) && Schema.toEquivalence(Schema.Array(Schema.String))(state.logs, command.logs) && command.observedCalls === state.calls.length) return []
-        return yield* new CodeRejected({ reason: "ExecutionResultConflict" })
+        return yield* CodeRejected.make({ reason: "ExecutionResultConflict" })
       }
       const current = active(state)
       if (current._tag !== "Open") return yield* current
-      if (DateTime.toEpochMillis(now) >= current.deadlineAt) return yield* new CodeRejected({ reason: "DurationBudgetExceeded" })
-      if (command.observedCalls !== current.calls.length) return yield* new CodeRejected({ reason: "ReplayOmittedCalls" })
-      if (EffectArray.some(current.calls, call => call.outcome === null)) return yield* new CodeRejected({ reason: "CallsPending" })
-      if ((yield* resultSize(command.outcome)) > current.request.limits.maxResultChars) return yield* new CodeRejected({ reason: "ResultBudgetExceeded" })
-      if (command.logs.length > current.request.limits.maxLogs || EffectArray.reduce(command.logs, 0, (total, line) => total + line.length) > current.request.limits.maxLogChars) return yield* new CodeRejected({ reason: "LogBudgetExceeded" })
+      if (DateTime.toEpochMillis(now) >= current.deadlineAt) return yield* CodeRejected.make({ reason: "DurationBudgetExceeded" })
+      if (command.observedCalls !== current.calls.length) return yield* CodeRejected.make({ reason: "ReplayOmittedCalls" })
+      if (EffectArray.some(current.calls, call => call.outcome === null)) return yield* CodeRejected.make({ reason: "CallsPending" })
+      if ((yield* resultSize(command.outcome)) > current.request.limits.maxResultChars) return yield* CodeRejected.make({ reason: "ResultBudgetExceeded" })
+      if (command.logs.length > current.request.limits.maxLogs || EffectArray.reduce(command.logs, 0, (total, line) => total + line.length) > current.request.limits.maxLogChars) return yield* CodeRejected.make({ reason: "LogBudgetExceeded" })
       return [CodeFinished.make({ outcome: command.outcome, logs: command.logs })]
     }),
     CancelCode: Effect.fn("Code.Cancel")(function* (state, command) {
       const current = yield* owned(state)
       if (current.status === "cancelled" && current.reason === command.reason) return []
-      if (current.status !== "running") return yield* new CodeRejected({ reason: "ExecutionTerminal" })
+      if (current.status !== "running") return yield* CodeRejected.make({ reason: "ExecutionTerminal" })
       return interrupted(current, command.reason, true, null)
     }),
     FailCode: (state, command) => {
@@ -136,18 +137,18 @@ export class CodeExecution extends Domain.Aggregate("CodeExecution", {
       return interrupted(current, command.reason, false, null)
     },
     MarkCodeCallUnknown: (state, command) => {
-      if (state._tag !== "Open") return new CodeRejected({ reason: "UnknownExecution" })
+      if (state._tag !== "Open") return CodeRejected.make({ reason: "UnknownExecution" })
       const call = Option.getOrUndefined(EffectArray.findFirst(state.calls, entry => entry.request.ordinal === command.ordinal))
-      if (call === undefined) return new CodeRejected({ reason: "UnknownCall" })
+      if (call === undefined) return CodeRejected.make({ reason: "UnknownCall" })
       if (call.status === "unknown" && call.reason === command.reason) return []
-      if (state.status !== "running" || call.status !== "dispatched") return new CodeRejected({ reason: "CallNotDispatched" })
+      if (state.status !== "running" || call.status !== "dispatched") return CodeRejected.make({ reason: "CallNotDispatched" })
       return interrupted(state, command.reason, false, command.ordinal)
     },
     ResolveCodeCall: Effect.fn("Code.Resolve")(function* (state, command) {
       const current = yield* owned(state)
       const call = Option.getOrUndefined(EffectArray.findFirst(current.calls, entry => entry.request.ordinal === command.ordinal))
-      if (current.status !== "unknown" || call?.status !== "unknown") return yield* new CodeRejected({ reason: "NoUncertainCall" })
-      if ((yield* resultSize(command.outcome)) > current.request.limits.maxResultChars) return yield* new CodeRejected({ reason: "ResultBudgetExceeded" })
+      if (current.status !== "unknown" || call?.status !== "unknown") return yield* CodeRejected.make({ reason: "NoUncertainCall" })
+      if ((yield* resultSize(command.outcome)) > current.request.limits.maxResultChars) return yield* CodeRejected.make({ reason: "ResultBudgetExceeded" })
       return [CodeCallReconciled.make({ ordinal: command.ordinal, outcome: command.outcome, evidence: command.evidence, remainingUnknown: EffectArray.some(current.calls, entry => entry.request.ordinal !== command.ordinal && entry.status === "unknown") })]
     }),
     ExpireCode: (state, _command, { now }) => {

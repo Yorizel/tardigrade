@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import * as Domain from "@alchemy.run/domain"
-import { ConfigProvider, Deferred, Effect, Fiber, Layer, Result } from "effect"
+import { ConfigProvider, Context, Deferred, Effect, Fiber, Layer, Result } from "effect"
 import { Prompt } from "effect/ai"
 import { SessionLive } from "../../platform/src/alchemy/session"
 import { ReceiptOwnerGuard } from "../src/Actor.context"
@@ -23,9 +23,12 @@ const config = { actor: "assistant", instance: "private", name: "private", limit
 const request = { runId: "private-run", digest: "private-digest", prompt: Prompt.make("Private result must remain with Alice") }
 
 for (const commandId of ["known-receipt", ""]) {
-  test(`native middleware authorizes receipt replay for commandId ${JSON.stringify(commandId)}`, () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
-    const alice = yield* ReceiptApi.clientInProcess.pipe(Effect.provide(AliceSession))
-    const bob = yield* ReceiptApi.clientInProcess.pipe(Effect.provide(BobSession))
+  test(`native middleware authorizes receipt replay for commandId "${commandId}"`, () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+    const platformServices = yield* Layer.build(platform)
+    const aliceServices = yield* Layer.build(AliceSession)
+    const bobServices = yield* Layer.build(BobSession)
+    const alice = yield* ReceiptApi.clientInProcess.pipe(Effect.provideContext(Context.merge(platformServices, aliceServices)))
+    const bob = yield* ReceiptApi.clientInProcess.pipe(Effect.provideContext(Context.merge(platformServices, bobServices)))
     yield* alice.OpenThread("private", config, { headers: aliceHeaders })
     const receipt = yield* alice.RequestRun("private", request, { commandId, headers: aliceHeaders })
     expect(receipt.reply.receipt?.input).toEqual(request.prompt)
@@ -46,11 +49,13 @@ for (const commandId of ["known-receipt", ""]) {
     if (aliceState?._tag !== "Open") return yield* Effect.die("Expected Alice's thread")
     expect(aliceState.owner).toBe("alice")
     expect(aliceState.active?.runId).toBe("private-run")
-  })).pipe(Effect.provide(platform))))
+  }))))
 }
 
 test("authentication runs before the receipt owner guard and requires per-call credentials", () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
-  const alice = yield* ReceiptApi.clientInProcess.pipe(Effect.provide(AliceSession))
+  const platformServices = yield* Layer.build(platform)
+  const aliceServices = yield* Layer.build(AliceSession)
+  const alice = yield* ReceiptApi.clientInProcess.pipe(Effect.provideContext(Context.merge(platformServices, aliceServices)))
   yield* alice.OpenThread("private", config, { headers: aliceHeaders })
   yield* alice.RequestRun("private", request, { commandId: "known-receipt", headers: aliceHeaders })
   const missing = yield* alice.RequestRun("private", request, { commandId: "known-receipt" }).pipe(Effect.result)
@@ -61,23 +66,24 @@ test("authentication runs before the receipt owner guard and requires per-call c
   if (Result.isFailure(wrong)) expect(wrong.failure._tag).toBe("Unauthorized")
   const stillAuthorized = yield* alice.RequestRun("private", request, { commandId: "known-receipt", headers: aliceHeaders })
   expect(stillAuthorized.reply.receipt?.runId).toBe("private-run")
-})).pipe(Effect.provide(platform))))
+}))))
 
 
 for (const commandId of ["creation-race", ""]) {
-  test(`receipt ownership remains private across concurrent target creation ${JSON.stringify(commandId)}`, () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+  test(`receipt ownership remains private across concurrent target creation "${commandId}"`, () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+    const platformServices = yield* Layer.build(platform)
+    const aliceServices = yield* Layer.build(AliceSession)
+    const bobServices = yield* Layer.build(BobSession)
     const admitted = yield* Deferred.make<void>()
     const release = yield* Deferred.make<void>()
-    const guard = yield* ReceiptOwnerGuard.pipe(Effect.provide(ReceiptOwnerGuardLive))
-    const alice = yield* ReceiptApi.clientInProcess.pipe(
-      Effect.provideService(ReceiptOwnerGuard, (effect, options) => guard(Effect.gen(function* () {
+    const guardServices = yield* Layer.build(ReceiptOwnerGuardLive)
+    const guard = Context.get(guardServices, ReceiptOwnerGuard)
+    const alice = yield* ReceiptApi.clientInProcess.pipe(Effect.provideContext(Context.add(Context.merge(platformServices, aliceServices), ReceiptOwnerGuard, (effect, options) => guard(Effect.gen(function* () {
         yield* Deferred.succeed(admitted, undefined)
         yield* Deferred.await(release)
         return yield* effect
-      }), options)),
-      Effect.provide(AliceSession),
-    )
-    const bob = yield* ReceiptApi.clientInProcess.pipe(Effect.provide(BobSession))
+      }), options))))
+    const bob = yield* ReceiptApi.clientInProcess.pipe(Effect.provideContext(Context.merge(platformServices, bobServices)))
     const pending = yield* alice.OpenThread("race", config, { commandId, headers: aliceHeaders }).pipe(Effect.result, Effect.forkChild)
     yield* Deferred.await(admitted)
     yield* bob.OpenThread("race", config, { commandId, headers: bobHeaders })
@@ -88,5 +94,5 @@ for (const commandId of ["creation-race", ""]) {
     const state = yield* bob.Thread.get("race", { headers: bobHeaders })
     if (state?._tag !== "Open") return yield* Effect.die("Expected Bob's target")
     expect(state.owner).toBe("bob")
-  })).pipe(Effect.provide(platform))))
+  }))))
 }

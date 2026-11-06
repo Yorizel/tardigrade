@@ -78,10 +78,17 @@ Known archive-capacity refusals produce a model-visible tool failure with the so
 
 A thread may accept a `context` policy in its run limits. The exported `DEFAULT_CONTEXT_POLICY` declares character thresholds, retained context and summary size/output-token limits. Domain prepares and settles compaction steps; native Activities invoke the configured model. The original task, existing system messages and complete tool exchanges are preserved. Summaries remain assistant data. Actual summary usage counts against the existing budgets; cancellation or expiry prevents replacement while a returned paid result still records its usage, including after a successor run starts.
 
-`RequestRun` accepts an optional `output` declaration containing a name and a closed JSON object schema. The chat CLI exposes the same declaration through `--output`. The native OpenAI adapter carries the schema alongside tools; Domain validates the final JSON once and persists the decoded result in the run receipt. An invalid result fails with `output_validation_failed` without a correction call. String `format` assertions remain unsupported and are rejected at admission. The selected provider model must support strict structured responses with tools.
+`RequestRun` accepts an optional `output` declaration containing a name and a closed JSON object schema. The chat CLI exposes the same declaration through `--output`. The native OpenAI adapter carries the schema alongside tools; Domain validates the final JSON once and persists the decoded result in the run receipt. An invalid result fails with `output_validation_failed` without a correction call. The nine supported string formats are asserted through native Schema filters; unknown names are rejected at admission. The dependency patch and generated project manifest carry the importer hook. The selected provider model must support strict structured responses with tools.
 
 ## Inbox example
 
 `packages/examples/agents/inbox.ts` defines a separate native Domain model for ordered text messages. `OpenInbox` accepts the storage and message limits, and `PostInboxMessage` returns the accepted text. A repeated message ID returns its original reply; conflicting payloads and other callers are rejected, including transport receipt replay. This context does not need an AI provider or an agent workflow.
 
 From `packages/examples`, `bun run cloudflare` starts its Alchemy stack. Configure `TARDIGRADE_TOKEN` and `TARDIGRADE_SUBJECT` for the shared authenticated session boundary. The Worker hosts `InboxApi` through Domain Durable Objects. Its stack is independent of the agent stack; persisted data in another hosting stack requires an explicit import before cutover.
+
+
+## Greeter example
+
+`packages/examples/act.ts` runs a separate authenticated Domain Greeting model. Its policy starts the native Effect workflow after admission and interrupts it after cancellation. The handler is a Domain external system; settled results and failures return through Domain commands. The example provides `WorkflowEngine.layerMemory` after `Domain.InMemory` so native workflow interruption releases an active handler. This example is ephemeral and does not establish SQL or cloud recovery.
+
+Run it with `TARDIGRADE_TOKEN` and `TARDIGRADE_SUBJECT`. `TARDIGRADE_GREETING_NAME` overrides the greeting name; `TARDIGRADE_GREETER_POLL_INTERVAL_MS` and `TARDIGRADE_GREETER_MAX_POLLS` override the exported positive polling defaults.

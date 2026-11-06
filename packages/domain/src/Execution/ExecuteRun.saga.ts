@@ -1,6 +1,6 @@
 import { compactRun } from "./CompactRun"
 import { delegationLineage } from "../Delegation/Delegation.lineage"
-import { Cause, Clock, Effect, Layer, Result, Schema } from "effect"
+import { Array as Arr, Match, Cause, Clock, Effect, Layer, Result, Schema } from "effect"
 import { Digest } from "effect/crypto"
 import { CodeTool } from "../Code/CodeTool"
 import { CodeInput } from "../Code/Code.schemas"
@@ -38,7 +38,7 @@ export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
       if (current === null || current._tag !== "Open" || current.owner !== owner || current.active?.runId !== runId) return
       yield* commands.FailRun(threadId, { runId, reason }, { headers, commandId: runKey(threadId, `fail:${runId}`) }).pipe(Effect.catchTag("RunRejected", () => Effect.void), Effect.orDie, Effect.asVoid)
     })
-    const loop = Effect.fn("ExecuteRun.turn")(function* (turn: number): Effect.fn.Return<void, typeof RunRejected.Type | typeof ExecutionRejected.Type, WorkflowEngine | WorkflowInstance> {
+    const loop = Effect.fn("ExecuteRun.turn")(function* (turn: number): Effect.fn.Return<void, RunRejected | ExecutionRejected, WorkflowEngine | WorkflowInstance> {
       const initialSnapshot = yield* Activity.make({ name: `snapshot-${turn}`, success: ThreadState, execute: commands.Thread.get(threadId, { headers }).pipe(Effect.orDie, Effect.flatMap(state => {
         if (state === null) return Effect.die("Thread is unavailable")
         if (state._tag !== "Open" || state.owner !== owner) return Effect.die("Unauthorized workflow scope")
@@ -59,10 +59,10 @@ export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
             if (decodedState._tag !== "Open" || decodedState.owner !== owner) return Effect.die("Unauthorized workflow scope")
             return Effect.succeed(decodedState)
           }))
-          if (state._tag !== "Open" || state.active === null || state.active.runId !== runId || state.active.step === null || state.active.step.stepId !== modelStep || ["cancelled", "failed", "unknown"].includes(state.active.status)) return yield* new RunRejected({ reason: "RunTerminal" })
+          if (state._tag !== "Open" || state.active === null || state.active.runId !== runId || state.active.step === null || state.active.step.stepId !== modelStep || ["cancelled", "failed", "unknown"].includes(state.active.status)) return yield* RunRejected.make({ reason: "RunTerminal" })
           if (state.active.step.dispatched) {
             yield* commands.MarkUnknown(threadId, { runId, stepId: modelStep, reason: "Model response was not recorded; explicit reconciliation required" }, { headers, commandId: runKey(threadId, `unknown:${modelStep}`) }).pipe(Effect.orDie)
-            return yield* new ExecutionRejected({ reason: "ModelOutcomeUnknown" })
+            return yield* ExecutionRejected.make({ reason: "ModelOutcomeUnknown" })
           }
           yield* commands.ConfirmDispatch(threadId, { runId, stepId: modelStep }, { headers, commandId: runKey(threadId, `dispatch:${modelStep}`) }).pipe(Effect.orDie)
           return yield* execution.infer({ actor: state.actor, operationId: runKey(threadId, modelStep), prompt: accepted.prompt, output: state.active.output, remainingTokens: state.limits.maxTokens - state.active.tokens }).pipe(Effect.orDie)
@@ -73,14 +73,13 @@ export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
         const stepId = `${runId}:${accepted.stepSerial + index + 2}`
         yield* Activity.make({ name: `prepare-${stepId}`, error: RunRejected, execute: commands.BeginStep(threadId, { runId, stepId, kind: "tool", mutation: tool.mutation, requiresApproval: tool.requiresApproval }, { headers, commandId: runKey(threadId, `prepare:${stepId}`) }).pipe(Effect.orDie, Effect.asVoid) })
         if (tool.requiresApproval) yield* DurableDeferred.await(approval(stepId))
-        const prompt = yield* Effect.gen(function* () {
-          if (tool.execution._tag === "Code") {
-            if (tool.call.name !== CodeTool.name || tool.call.providerExecuted) return yield* new ExecutionRejected({ reason: "UnexposedCodeTool" })
+        const prompt = yield* Match.value(tool.execution).pipe(
+          Match.tag("Code", capability => Effect.gen(function* () {
+            if (tool.call.name !== CodeTool.name || tool.call.providerExecuted) return yield* ExecutionRejected.make({ reason: "UnexposedCodeTool" })
             const current = yield* commands.Thread.get(threadId, { headers }).pipe(Effect.orDie)
-            if (current._tag !== "Open" || current.owner !== owner || current.active === null || current.active.runId !== runId || current.active.step?.stepId !== stepId || ["completed", "cancelled", "failed", "unknown"].includes(current.active.status)) return yield* new RunRejected({ reason: "RunTerminal" })
+            if (current._tag !== "Open" || current.owner !== owner || current.active === null || current.active.runId !== runId || current.active.step?.stepId !== stepId || ["completed", "cancelled", "failed", "unknown"].includes(current.active.status)) return yield* RunRejected.make({ reason: "RunTerminal" })
             if (!current.active.step.dispatched) yield* commands.ConfirmDispatch(threadId, { runId, stepId }, { headers, commandId: runKey(threadId, `dispatch:${stepId}`) }).pipe(Effect.orDie)
             const executionId = runKey(threadId, stepId)
-            const capability = tool.execution
             const request = yield* Activity.make({
               name: `code-input-${stepId}`, success: CodeInput,
               execute: Effect.gen(function* () {
@@ -88,7 +87,8 @@ export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
                 const digest = yield* digester.digestHex(Digest.sha256, new TextEncoder().encode(params.code))
                 const accepted = { threadId, runId, digest, code: params.code, catalog: capability.catalog, limits: capability.limits, ambient: { at: yield* Clock.currentTimeMillis, seed: executionId } }
                 if (capability.spill !== undefined) {
-                  const catalog = yield* commands.SpillCatalog.get(workspaceKey(owner, threadId), { headers }).pipe(Effect.orDie)
+                  const spillTarget = yield* workspaceKey(owner, threadId)
+                  const catalog = yield* commands.SpillCatalog.get(spillTarget, { headers }).pipe(Effect.orDie)
                   if (catalog !== null && catalog._tag === "Open") return { ...accepted, spill: catalog.policy }
                   return { ...accepted, spill: capability.spill }
                 }
@@ -103,7 +103,7 @@ export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
               return yield* Effect.die("Code execution outcome requires reconciliation")
             }
             if (result.outcome._tag === "Returned" && result.outcome.modelOutput !== undefined) {
-              const logParts = stored.logs.map(text => Prompt.textPart({ text }))
+              const logParts = Arr.map(stored.logs, text => Prompt.textPart({ text }))
               return Prompt.fromMessages([Prompt.toolMessage({ content: [Prompt.toolResultPart({
                 id: tool.call.id, name: tool.call.name, result: { outcome: { _tag: result.outcome._tag, value: result.outcome.value }, logs: stored.logs },
                 modelOutput: [...result.outcome.modelOutput, ...logParts],
@@ -134,13 +134,12 @@ export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
               id: tool.call.id, name: tool.call.name, result: { outcome: result.outcome, logs: stored.logs },
               isFailure: result.outcome._tag === "Failed", providerExecuted: false,
             })] })])
-          }
-          if (tool.execution._tag === "Delegate") {
-            if (tool.call.name !== DelegateTool.name || tool.call.providerExecuted) return yield* new ExecutionRejected({ reason: "UnexposedDelegationTool" })
+          })),
+          Match.tag("Delegate", capability => Effect.gen(function* () {
+            if (tool.call.name !== DelegateTool.name || tool.call.providerExecuted) return yield* ExecutionRejected.make({ reason: "UnexposedDelegationTool" })
             const current = yield* commands.Thread.get(threadId, { headers }).pipe(Effect.orDie)
-            if (current._tag !== "Open" || current.owner !== owner || current.active === null || current.active.runId !== runId || current.active.step?.stepId !== stepId || ["completed", "cancelled", "failed", "unknown"].includes(current.active.status)) return yield* new RunRejected({ reason: "RunTerminal" })
+            if (current._tag !== "Open" || current.owner !== owner || current.active === null || current.active.runId !== runId || current.active.step?.stepId !== stepId || ["completed", "cancelled", "failed", "unknown"].includes(current.active.status)) return yield* RunRejected.make({ reason: "RunTerminal" })
             if (!current.active.step.dispatched) yield* commands.ConfirmDispatch(threadId, { runId, stepId }, { headers, commandId: runKey(threadId, `dispatch:${stepId}`) }).pipe(Effect.orDie)
-            const capability = tool.execution
             const delegationId = delegationKey(threadId, runId, stepId)
             const reservation = yield* Activity.make({
               name: `delegation-input-${stepId}`, success: Reservation,
@@ -159,27 +158,28 @@ export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
             return Prompt.fromMessages([Prompt.toolMessage({ content: [Prompt.toolResultPart({
               id: tool.call.id, name: tool.call.name, result, isFailure: delegated.status !== "completed", providerExecuted: false,
             })] })])
-          }
-          return yield* Activity.make({
-          name: `invoke-${stepId}`,
-          success: Prompt.Prompt,
-          error: Schema.Union([RunRejected, ExecutionRejected]),
-          execute: Effect.gen(function* () {
-            const state = yield* commands.Thread.get(threadId, { headers }).pipe(Effect.orDie, Effect.flatMap(decodedState => {
-              if (decodedState === null) return Effect.die("Thread is unavailable")
-              if (decodedState._tag !== "Open" || decodedState.owner !== owner) return Effect.die("Unauthorized workflow scope")
-              return Effect.succeed(decodedState)
-            }))
-            if (state._tag !== "Open" || state.active === null || state.active.runId !== runId || state.active.step === null || state.active.step.stepId !== stepId || ["cancelled", "failed", "unknown"].includes(state.active.status)) return yield* new RunRejected({ reason: "RunTerminal" })
-            if (state.active.step.dispatched) {
-              yield* commands.MarkUnknown(threadId, { runId, stepId, reason: "Tool outcome was not recorded; reconciliation required" }, { headers, commandId: runKey(threadId, `unknown:${stepId}`) }).pipe(Effect.orDie)
-              return yield* new ExecutionRejected({ reason: "ToolOutcomeUnknown" })
-            }
-            yield* commands.ConfirmDispatch(threadId, { runId, stepId }, { headers, commandId: runKey(threadId, `dispatch:${stepId}`) }).pipe(Effect.orDie)
-            return yield* execution.invoke({ actor: state.actor, operationId: runKey(threadId, stepId), scope: { threadId, runId, owner }, call: tool.call }).pipe(Effect.orDie)
-          }),
-        })
-        })
+          })),
+          Match.tag("External", () => Activity.make({
+            name: `invoke-${stepId}`,
+            success: Prompt.Prompt,
+            error: Schema.Union([RunRejected, ExecutionRejected]),
+            execute: Effect.gen(function* () {
+              const state = yield* commands.Thread.get(threadId, { headers }).pipe(Effect.orDie, Effect.flatMap(decodedState => {
+                if (decodedState === null) return Effect.die("Thread is unavailable")
+                if (decodedState._tag !== "Open" || decodedState.owner !== owner) return Effect.die("Unauthorized workflow scope")
+                return Effect.succeed(decodedState)
+              }))
+              if (state._tag !== "Open" || state.active === null || state.active.runId !== runId || state.active.step === null || state.active.step.stepId !== stepId || ["cancelled", "failed", "unknown"].includes(state.active.status)) return yield* RunRejected.make({ reason: "RunTerminal" })
+              if (state.active.step.dispatched) {
+                yield* commands.MarkUnknown(threadId, { runId, stepId, reason: "Tool outcome was not recorded; reconciliation required" }, { headers, commandId: runKey(threadId, `unknown:${stepId}`) }).pipe(Effect.orDie)
+                return yield* ExecutionRejected.make({ reason: "ToolOutcomeUnknown" })
+              }
+              yield* commands.ConfirmDispatch(threadId, { runId, stepId }, { headers, commandId: runKey(threadId, `dispatch:${stepId}`) }).pipe(Effect.orDie)
+              return yield* execution.invoke({ actor: state.actor, operationId: runKey(threadId, stepId), scope: { threadId, runId, owner }, call: tool.call }).pipe(Effect.orDie)
+            }),
+          })),
+          Match.exhaustive,
+        )
         yield* Activity.make({ name: `record-${stepId}`, error: RunRejected, execute: commands.RecordStep(threadId, { runId, stepId, prompt, usage: Response.Usage.make({ inputTokens: { total: 0 }, outputTokens: { total: 0 } }) }, { headers, commandId: runKey(threadId, `record:${stepId}`) }).pipe(Effect.orDie, Effect.asVoid) })
       }), { concurrency: 1, discard: true })
       if (model.tools.length === 0) {

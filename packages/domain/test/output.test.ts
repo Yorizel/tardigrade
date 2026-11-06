@@ -1,5 +1,5 @@
 import * as Domain from "@alchemy.run/domain"
-import { Effect, Layer, Option, Result, Schema } from "effect"
+import { Record, String as Str, Effect, Layer, Option, Result, Schema } from "effect"
 import { expect, test } from "bun:test"
 import { validateOutput } from "../src/Output/Output"
 import { OutputDeclaration } from "../src/Output/Output.schemas"
@@ -7,15 +7,16 @@ import { CurrentCaller } from "../src/Actor.context"
 import { Thread } from "../src/Thread/Thread.aggregate"
 import { OpenThread, RequestRun, CompleteRun } from "../src/Thread/Thread.commands"
 import { DEFAULT_RUN_LIMITS, Prompt } from "../src/Thread/Thread.schemas"
+import { format as legacyFormat } from "@cfworker/json-schema"
 
 const TestModel = Domain.Model("OutputTest", { aggregates: [Thread] })
 const platform = TestModel.layer(Layer.empty).pipe(Layer.provide(Domain.InMemory))
-const run = <A, E>(program: Effect.Effect<A, E, Effect.Services<typeof Thread> | CurrentCaller>) => Effect.runPromise(program.pipe(
-  Effect.provideService(CurrentCaller, { subject: "alice" }),
-  Effect.provide(platform)
-))
+const run = <A, E>(program: Effect.Effect<A, E, Effect.Services<typeof Thread> | CurrentCaller>) => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+  const services = yield* Layer.build(platform)
+  return yield* program.pipe(Effect.provideContext(services), Effect.provideService(CurrentCaller, { subject: "alice" }))
+})))
 
-const declaration = Schema.decodeUnknownSync(OutputDeclaration)({
+const declaration = OutputDeclaration.make({
   name: "answer",
   schema: {
     type: "object",
@@ -26,10 +27,12 @@ const declaration = Schema.decodeUnknownSync(OutputDeclaration)({
 })
 
 test("output declaration schema rejects unsupported keywords and incomplete object requirements", () => {
-  const unsupported = Schema.decodeUnknownResult(OutputDeclaration)({ name: "answer", schema: { type: "string", pattern: "x" } })
-  const nestedUnsupported = Schema.decodeUnknownResult(OutputDeclaration)({ name: "answer", schema: { type: "array", items: { type: "string", pattern: "x" } } })
-  const incomplete = Schema.decodeUnknownResult(OutputDeclaration)({ name: "answer", schema: { type: "object", properties: { count: { type: "integer" } }, required: [], additionalProperties: false } })
+  const unsupported = Schema.decodeResult(OutputDeclaration)({ name: "answer", schema: { type: "string", pattern: "x" } })
+  const unsupportedFormat = Schema.decodeResult(OutputDeclaration)({ name: "answer", schema: { type: "object", properties: { value: { type: "string", format: "unknown" } }, required: ["value"], additionalProperties: false } })
+  const nestedUnsupported = Schema.decodeResult(OutputDeclaration)({ name: "answer", schema: { type: "array", items: { type: "string", pattern: "x" } } })
+  const incomplete = Schema.decodeResult(OutputDeclaration)({ name: "answer", schema: { type: "object", properties: { count: { type: "integer" } }, required: [], additionalProperties: false } })
   expect(Result.isFailure(unsupported)).toBe(true)
+  expect(Result.isFailure(unsupportedFormat)).toBe(true)
   expect(Result.isFailure(nestedUnsupported)).toBe(true)
   expect(Result.isFailure(incomplete)).toBe(true)
 })
@@ -42,12 +45,41 @@ test("output validation uses the declared schema once and returns decoded JSON",
   expect(Option.isNone(validateOutput(declaration, "not json"))).toBe(true)
 })
 
-test("format keywords are rejected until a native validator can enforce them", () => {
-  const formats = ["date-time", "time", "date", "duration", "email", "hostname", "ipv4", "ipv6", "uuid"] as const
-  for (const format of formats) {
-    const formatted = Schema.decodeUnknownResult(OutputDeclaration)({ name: "answer", schema: { type: "object", properties: { value: { type: "string", format } }, required: ["value"], additionalProperties: false } })
-    expect(Result.isFailure(formatted)).toBe(true)
+test("output formats enforce the existing JSON Schema assertions", () => Effect.runPromise(Effect.gen(function* () {
+  const fixtures = {
+    "date-time": ["2024-02-29T23:59:60+02:30", "2023-02-29T12:00:00Z", "2024-01-01T12:00:00"],
+    time: ["23:59:60-05:30", "24:00:00Z", "12:00:00+25:00"],
+    date: ["2000-02-29", "1900-02-29", "2024-13-01"],
+    duration: ["P1Y2M3DT4H5M6S", "P1,5W", "PT"],
+    email: ["person+tag@example-domain.test", "a..b@example.test", "\"quoted\"@example.test"],
+    hostname: ["sub.example.test.", "-bad.example", Str.repeat(254)("a")],
+    ipv4: ["192.0.2.1", "256.0.2.1", "192.0.2.01"],
+    ipv6: ["::ffff:192.0.2.1", "2001:db8::1", "2001:::1"],
+    uuid: ["urn:uuid:550e8400-e29b-41d4-a716-446655440000", "550e8400-e29b-41d4-a716", "not-a-uuid"]
+  } as const
+  for (const [format, cases] of Record.toEntries(fixtures)) {
+    expect(Record.has(legacyFormat, format)).toBe(true)
+    const formatted = OutputDeclaration.make({ name: "answer", schema: { type: "object", properties: { value: { type: "string", format } }, required: ["value"], additionalProperties: false } })
+    for (const value of cases) {
+      const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Struct({ value: Schema.String })))({ value })
+      expect(Option.isSome(validateOutput(formatted, encoded))).toBe(legacyFormat[format]?.(value) === true)
+    }
   }
+})))
+
+test("formatted constraints compose through nested objects, arrays, and unions", () => {
+  const nested = OutputDeclaration.make({ name: "nested", schema: {
+    type: "object",
+    properties: {
+      values: { type: "array", items: { anyOf: [{ type: "string", format: "ipv6" }, { type: "null" }] } },
+      contact: { type: "string", format: "email" }
+    },
+    required: ["values", "contact"],
+    additionalProperties: false
+  } })
+  expect(Option.isSome(validateOutput(nested, '{"values":["::1",null],"contact":"a@example.test"}'))).toBe(true)
+  expect(Option.isNone(validateOutput(nested, '{"values":["::1",null],"contact":"bad"}'))).toBe(true)
+  expect(Option.isNone(validateOutput(nested, '{"values":["2001:::1"],"contact":"a@example.test"}'))).toBe(true)
 })
 
 test("a declared run persists its declaration and decoded successful result", () => run(Effect.gen(function* () {
@@ -81,11 +113,11 @@ test("the wire profile requires an object root and rejects hidden unknown keywor
     { anyOf: [{ type: "object", properties: {}, required: [], additionalProperties: false }] },
     { type: "object", properties: {}, required: [], additionalProperties: false, "unknown\nkeyword": true },
     { type: "object", properties: { value: { type: "string", "type\n": "number" } }, required: ["value"], additionalProperties: false },
-  ]) expect(Result.isFailure(Schema.decodeUnknownResult(OutputDeclaration)({ name: "bad", schema }))).toBe(true)
+  ]) expect(Result.isFailure(Schema.decodeResult(OutputDeclaration)({ name: "bad", schema }))).toBe(true)
 })
 
 test("nested unions and large JSON integers retain their declared semantics", () => {
-  const nested = Schema.decodeUnknownSync(OutputDeclaration)({ name: "nested", schema: {
+  const nested = OutputDeclaration.make({ name: "nested", schema: {
     type: "object", properties: { values: { type: "array", items: { anyOf: [{ type: "integer" }, { type: "null" }] } } }, required: ["values"], additionalProperties: false,
   } })
   expect(Option.isSome(validateOutput(nested, '{"values":[100000000000000000000,null]}'))).toBe(true)

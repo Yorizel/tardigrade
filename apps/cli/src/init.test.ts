@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { Schema } from "effect"
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 
@@ -36,6 +37,11 @@ describe("initActor", () => {
     expect(packageManifest.dependencies["@alchemy.run/domain"]).toBe("2.0.0-beta.85")
     expect(packageManifest.scripts["dev:runner"]).toBe("bun --env-file=.env runner.ts")
     expect(packageManifest.dependencies["@effect/sql-sqlite-bun"]).toBe("4.1.2")
+    const sourcePackage = Schema.decodeUnknownSync(Schema.Struct({ patchedDependencies: Schema.Record(Schema.String, Schema.String) }))(JSON.parse(await readFile(new URL("../../../package.json", import.meta.url), "utf8")))
+    expect(packageManifest.patchedDependencies).toEqual(sourcePackage.patchedDependencies)
+    for (const patchPath of Object.values(sourcePackage.patchedDependencies)) {
+      expect(await readFile(join(initialized.directory, patchPath), "utf8")).toContain("formatChecks")
+    }
     expect(await readFile(join(initialized.directory, "runner.ts"), "utf8")).toContain("LocalClusterWorkflowLive")
     await expect(readFile(join(initialized.directory, "wrangler.jsonc"), "utf8")).rejects.toThrow()
   })

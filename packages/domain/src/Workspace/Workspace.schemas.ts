@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { Ownership } from "../Actor.context"
 import { ThreadId } from "../Thread/Thread.schemas"
 
@@ -30,7 +30,9 @@ export const DEFAULT_WORKSPACE_POLICY = {
 export const WorkspaceScope = Schema.Struct({ ...Ownership.fields, threadId: ThreadId })
 export const WorkspaceKey = Schema.fromJsonString(WorkspaceScope)
 export const WorkspaceId = Schema.NonEmptyString
-export const workspaceKey = (owner: typeof Ownership.fields.owner.Type, threadId: typeof ThreadId.Type) => Schema.encodeSync(WorkspaceKey)({ owner, threadId })
+export const workspaceKey = Effect.fn("Workspace.key")(function* (owner: typeof Ownership.fields.owner.Type, threadId: typeof ThreadId.Type) {
+  return yield* Schema.encodeEffect(WorkspaceKey)({ owner, threadId }).pipe(Effect.orDie)
+})
 export const WriteTextInput = Schema.Struct({ key: Schema.String, value: Schema.String })
 export const ReadTextInput = Schema.Struct({ key: Schema.String, offset: Schema.optionalKey(NonNegativeInt) })
 export const ListTextsInput = Schema.Struct({ after: Schema.optionalKey(Schema.String) })

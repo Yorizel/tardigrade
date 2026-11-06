@@ -31,6 +31,6 @@ export class ThreadDirectory extends Domain.View("ThreadDirectory", {
   },
   validate: Effect.fn("ThreadDirectory.authorize")(function* ({ key }) {
     const caller = yield* CurrentCaller
-    if (key !== caller.subject) return yield* new NotOwner()
+    if (key !== caller.subject) return yield* NotOwner.make()
   }),
 }) {}

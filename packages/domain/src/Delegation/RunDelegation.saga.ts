@@ -23,13 +23,13 @@ export const RunDelegationLive = Layer.unwrap(Effect.gen(function* () {
     }
     yield* Effect.succeed({ delegationId, owner }).pipe(RunDelegation.withCompensation(() => Effect.gen(function* () {
       const current = yield* api.Delegation.get(delegationId, { headers }).pipe(
-        Effect.catchTag("NotOwner", () => Effect.succeed(null)), Effect.orDie,
+        Effect.catchTag("NotOwner", () => Effect.succeed(null)),
       )
       if (current === null || current._tag !== "Reserved" || current.owner !== owner || !Schema.toEquivalence(Reservation)(current.reservation, reservation)) return
       yield* api.RequestDelegationCancellation(delegationId, { reason: "Delegation admission workflow interrupted" }, { headers, commandId: `${key}:admission-cancel` }).pipe(
-        Effect.catchTag("DelegationRejected", () => Effect.void), Effect.orDie,
+        Effect.catchTag("DelegationRejected", () => Effect.void),
       )
-    })))
+    }).pipe(Effect.orDie)))
     yield* Activity.make({
       name: "admit-delegation",
       execute: Effect.gen(function* () {

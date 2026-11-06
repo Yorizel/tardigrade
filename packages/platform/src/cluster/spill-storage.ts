@@ -34,7 +34,8 @@ export const SpillStorageLive = SpillStorage.toLayer(Effect.gen(function* () {
     )
     if (parent === null || parent._tag !== "Open" || parent.owner !== scope.owner) return yield* new SpillNotOwner()
     if (parent.active === null || parent.active.runId !== scope.runId || ["completed", "failed", "cancelled", "unknown"].includes(parent.active.status)) return yield* new SpillRejected({ reason: "ParentRunTerminal" })
-    return { headers, target: workspaceKey(scope.owner, scope.threadId) }
+    const target = yield* workspaceKey(scope.owner, scope.threadId)
+    return { headers, target }
   })
   const keyOf = Effect.fn("SpillStorage.key")(function* (scope: typeof RunScope.Type, record: typeof SpillIdentity.Type) {
     const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(StoredValueKey))({ owner: scope.owner, threadId: scope.threadId, ref: record.ref, digest: record.digest }).pipe(Effect.orDie)

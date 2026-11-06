@@ -5,7 +5,7 @@ import { ReceiptOwnerGuard, Session } from "../Actor.context"
 import { Receipt } from "../Thread/Thread.schemas"
 import { ChildMessage, ChildReply, Handle, MessageEntry, ReconciledEntry, Reservation, Resolution, ResultEntry, FencedChildAbsent } from "./Delegation.schemas"
 
-export class DelegationRejected extends Domain.Rejection("DelegationRejected", { reason: Schema.String }, { httpApiStatus: 409 }) {}
+export class DelegationRejected extends Schema.TaggedError<DelegationRejected, { readonly brand: unique symbol }>()("DelegationRejected", { reason: Schema.String }, { httpApiStatus: 409 }) {}
 export class DelegationReserved extends Domain.Event("DelegationReserved", { delegationId: Schema.NonEmptyString, childThreadId: Schema.NonEmptyString, childRunId: Schema.NonEmptyString, owner: Schema.NonEmptyString, reservation: Reservation }) {}
 export class DelegationStarted extends Domain.Event("DelegationStarted", {}) {}
 export class DelegationCancellationRequested extends Domain.Event("DelegationCancellationRequested", { reason: Schema.NonEmptyString }) {}

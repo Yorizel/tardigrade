@@ -4,8 +4,8 @@ import { Schema } from "effect"
 import { ReceiptOwnerGuard, Session } from "../Actor.context"
 import { ThreadId, RunLimits, Run, Step, Prompt, Response, Receipt, ChildBinding, RunRequest } from "./Thread.schemas"
 
-export class RunRejected extends Domain.Rejection("RunRejected", { reason: Schema.String }, { httpApiStatus: 409 }) {}
-export class NotOwner extends Domain.Rejection("NotOwner", {}, { httpApiStatus: 403 }) {}
+export class RunRejected extends Schema.TaggedError<RunRejected, { readonly brand: unique symbol }>()("RunRejected", { reason: Schema.String }, { httpApiStatus: 409 }) {}
+export class NotOwner extends Schema.TaggedError<NotOwner, { readonly brand: unique symbol }>()("NotOwner", {}, { httpApiStatus: 403 }) {}
 export class ThreadOpened extends Domain.Event("ThreadOpened", { actor: Schema.NonEmptyString, instance: Schema.NonEmptyString, name: Schema.NonEmptyString, owner: Schema.NonEmptyString, limits: RunLimits }) {}
 export class RunRequested extends Domain.Event("RunRequested", { run: Run }) {}
 export class RunAcknowledged extends Domain.Event("RunAcknowledged", { receipt: Receipt }) {}

@@ -165,8 +165,8 @@ test("delegation keys distinguish separators and the native model verifies", () 
 test("native Api validates the owner for reads and cancellation", () => run(Effect.scoped(Effect.gen(function* () {
   const delegations = yield* Delegation
   yield* delegations.send(key, ReserveDelegation.make(reservation))
-  const alice = yield* DelegationApi.clientInProcess.pipe(Effect.provide(Layer.succeed(Session, effect => effect.pipe(Effect.provideService(CurrentCaller, { subject: "alice" })))))
-  const bob = yield* DelegationApi.clientInProcess.pipe(Effect.provide(Layer.succeed(Session, effect => effect.pipe(Effect.provideService(CurrentCaller, { subject: "bob" })))))
+  const alice = yield* DelegationApi.clientInProcess.pipe(Effect.provideService(Session, effect => effect.pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))))
+  const bob = yield* DelegationApi.clientInProcess.pipe(Effect.provideService(Session, effect => effect.pipe(Effect.provideService(CurrentCaller, { subject: "bob" }))))
   const visible = yield* alice.Delegation.get(key)
   expect(visible?._tag).toBe("Reserved")
   const hidden = yield* bob.Delegation.get(key).pipe(Effect.result)

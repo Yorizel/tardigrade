@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import * as Domain from "@alchemy.run/domain"
-import { Effect, Layer, Option, Result, Schema, Stream } from "effect"
+import { Context, Effect, Layer, Option, Record, Result, Schema, String as Str, Stream } from "effect"
 import { Headers } from "effect/http"
 import { CurrentCaller, Session, Unauthorized } from "../src/Actor.context"
 import { ReceiptOwnerGuardLive } from "../src/ReceiptOwnerGuard.middleware"
@@ -11,14 +11,15 @@ import { workspaceKey } from "../src/Workspace/Workspace.schemas"
 
 const SpillModel = Domain.Model("SpillCatalogTest", { aggregates: [SpillCatalog] })
 const platform = SpillModel.layer(Layer.empty).pipe(Layer.provide(Domain.InMemory))
-const target = workspaceKey("alice", "thread")
-const digest = "a".repeat(64)
-const otherDigest = "b".repeat(64)
+const target = await Effect.runPromise(workspaceKey("alice", "thread"))
+const digest = Str.repeat(64)("a")
+const otherDigest = Str.repeat(64)("b")
 const identity = { ref: "result", digest, chars: 5, bytes: 5 }
 const policy = { ...DEFAULT_SPILL_POLICY, maxValues: 2, maxValueBytes: 10, maxTotalBytes: 12 }
-const run = <A, E>(program: Effect.Effect<A, E, Effect.Services<typeof SpillCatalog> | CurrentCaller>) => Effect.runPromise(program.pipe(
-  Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(platform),
-))
+const run = <A, E>(program: Effect.Effect<A, E, Effect.Services<typeof SpillCatalog> | CurrentCaller>) => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+  const services = yield* Layer.build(platform)
+  return yield* program.pipe(Effect.provideContext(Context.add(services, CurrentCaller, { subject: "alice" })))
+})))
 
 class SpillApi extends Domain.Api("SpillCatalogTest", {
   model: SpillModel,
@@ -53,7 +54,7 @@ test("spill reservations retain immutable identity and confirmation retries pres
   const state = yield* catalogs.state(target)
   if (state._tag !== "Open") return yield* Effect.die("Expected open catalog")
   expect(state.values.length).toBe(1)
-  expect(Object.keys(state).sort()).toEqual(["_tag", "owner", "policy", "threadId", "values"])
+  expect(Record.keys(state).sort()).toEqual(["_tag", "owner", "policy", "threadId", "values"])
 })))
 
 test("a reserved ref cannot change digest or length and confirmation needs the reserved digest", () => run(Effect.gen(function* () {
@@ -85,7 +86,7 @@ test("pending reservations precharge count and byte budgets at their exact bound
   const count = yield* catalogs.send(target, ReserveSpill.make({ ref: "third", digest, chars: 0, bytes: 0 })).pipe(Effect.result)
   expect(Result.isFailure(count)).toBe(true)
   if (Result.isFailure(count)) expect(count.failure._tag === "SpillRejected" && count.failure.reason).toBe("ValueCountExceeded")
-  const storageTarget = workspaceKey("alice", "storage")
+  const storageTarget = yield* workspaceKey("alice", "storage")
   yield* catalogs.send(storageTarget, OpenSpillCatalog.make({ threadId: "storage", policy: { ...policy, maxValues: 3 } }))
   yield* catalogs.send(storageTarget, ReserveSpill.make({ ...identity, chars: 10, bytes: 10 }))
   const storage = yield* catalogs.send(storageTarget, ReserveSpill.make({ ref: "overflow", digest, chars: 3, bytes: 3 })).pipe(Effect.result)
@@ -112,10 +113,10 @@ test("value, reference and UTF8 size boundaries refuse invalid metadata without 
   yield* catalogs.send(target, ReserveSpill.make({ ref: "é", digest, chars: 1, bytes: 2 }))
   const state = yield* catalogs.state(target)
   expect(state._tag === "Open" && state.values.length).toBe(2)
-  expect(Result.isFailure(Schema.decodeUnknownResult(SpillIdentity)({ ...identity, digest: "a".repeat(63) }))).toBe(true)
-  expect(Result.isFailure(Schema.decodeUnknownResult(SpillIdentity)({ ...identity, digest: "A".repeat(64) }))).toBe(true)
-  expect(Result.isFailure(Schema.decodeUnknownResult(SpillIdentity)({ ...identity, bytes: Number.MAX_SAFE_INTEGER + 1 }))).toBe(true)
-  expect(Result.isFailure(Schema.decodeUnknownResult(SpillPolicy)({ ...policy, maxTotalBytes: 0 }))).toBe(true)
+  expect(Result.isFailure(Schema.decodeResult(SpillIdentity)({ ...identity, digest: Str.repeat(63)("a") }))).toBe(true)
+  expect(Result.isFailure(Schema.decodeResult(SpillIdentity)({ ...identity, digest: Str.repeat(64)("A") }))).toBe(true)
+  expect(Result.isFailure(Schema.decodeResult(SpillIdentity)({ ...identity, bytes: Number.MAX_SAFE_INTEGER + 1 }))).toBe(true)
+  expect(Result.isFailure(Schema.decodeResult(SpillPolicy)({ ...policy, maxTotalBytes: 0 }))).toBe(true)
 })))
 
 test("catalog identity and policy are frozen across repeated open and owner boundaries", () => run(Effect.gen(function* () {
@@ -129,13 +130,16 @@ test("catalog identity and policy are frozen across repeated open and owner boun
   const foreign = yield* catalogs.send(target, ReserveSpill.make(identity)).pipe(Effect.provideService(CurrentCaller, { subject: "bob" }), Effect.result)
   expect(Result.isFailure(foreign)).toBe(true)
   if (Result.isFailure(foreign)) expect(foreign.failure._tag).toBe("SpillNotOwner")
-  const wrongThread = yield* catalogs.send(workspaceKey("alice", "other"), open).pipe(Effect.result)
+  const otherThreadTarget = yield* workspaceKey("alice", "other")
+  const wrongThread = yield* catalogs.send(otherThreadTarget, open).pipe(Effect.result)
   expect(Result.isFailure(wrongThread)).toBe(true)
   if (Result.isFailure(wrongThread)) expect(wrongThread.failure._tag === "SpillRejected" && wrongThread.failure.reason).toBe("ScopeConflict")
   const noncanonical = yield* catalogs.send('{"threadId":"thread","owner":"alice"}', open).pipe(Effect.result)
   expect(Result.isFailure(noncanonical)).toBe(true)
   if (Result.isFailure(noncanonical)) expect(noncanonical.failure._tag === "SpillRejected" && noncanonical.failure.reason).toBe("InvalidCatalogId")
-  expect(workspaceKey("a:b", "c")).not.toBe(workspaceKey("a", "b:c"))
+  const leftTarget = yield* workspaceKey("a:b", "c")
+  const rightTarget = yield* workspaceKey("a", "b:c")
+  expect(leftTarget).not.toBe(rightTarget)
 })))
 
 test("reserve and confirm require an opened catalog", () => run(Effect.gen(function* () {
@@ -149,7 +153,8 @@ test("reserve and confirm require an opened catalog", () => run(Effect.gen(funct
 })))
 
 test("native spill API protects empty reads and cached command receipts for their owner", () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
-  const api = yield* SpillApi.clientInProcess
+  const services = yield* Layer.build(Layer.merge(platform, session))
+  const api = yield* SpillApi.clientInProcess.pipe(Effect.provideContext(services))
   const emptyForeign = yield* api.SpillCatalog.get(target, { headers: bob }).pipe(Effect.result)
   expect(Result.isFailure(emptyForeign)).toBe(true)
   if (Result.isFailure(emptyForeign)) expect(emptyForeign.failure._tag).toBe("SpillNotOwner")
@@ -168,7 +173,7 @@ test("native spill API protects empty reads and cached command receipts for thei
   const missing = yield* api.SpillCatalog.get(target).pipe(Effect.result)
   expect(Result.isFailure(missing)).toBe(true)
   if (Result.isFailure(missing)) expect(missing.failure._tag).toBe("Unauthorized")
-})).pipe(Effect.provide(platform), Effect.provide(session))))
+}))))
 
 test("native spill declarations verify without definition errors", () => {
   expect(Domain.verify(SpillModel)).toEqual([])

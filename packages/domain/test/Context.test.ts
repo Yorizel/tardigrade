@@ -1,5 +1,5 @@
 import * as Domain from "@alchemy.run/domain"
-import { Effect, Layer, Result, Schema } from "effect"
+import { Array as Arr, Effect, Layer, Result, Schema, String as Str } from "effect"
 import { expect, test } from "bun:test"
 import { Prompt, Response } from "effect/ai"
 import * as InMemory from "@alchemy.run/domain/InMemory"
@@ -11,38 +11,44 @@ import { planCompaction, compactedPrompt, promptChars } from "../src/Execution/C
 
 const policy = { triggerChars: 1800, retainChars: 500, maxSummaryChars: 100, maxOutputTokens: 64 }
 const input = Prompt.make("Preserve the user's original research task")
-const old = Prompt.fromMessages([Prompt.assistantMessage({ content: [Prompt.textPart({ text: "source fact ".repeat(250) })] })])
+const old = Prompt.fromMessages([Prompt.assistantMessage({ content: [Prompt.textPart({ text: Str.repeat(250)("source fact ") })] })])
 const recent = Prompt.fromMessages([Prompt.assistantMessage({ content: [Prompt.textPart({ text: "recent context" })] })])
 const context = Prompt.concat(Prompt.concat(input, old), recent)
 const usage = Response.Usage.make({ inputTokens: { total: 2 }, outputTokens: { total: 3 } })
 const TestModel = Domain.Model("ContextTest", { aggregates: [Thread] })
 const platform = TestModel.layer(Layer.empty).pipe(Layer.provide(Domain.InMemory))
-const run = <A, E>(program: Effect.Effect<A, E, Effect.Services<typeof Thread> | CurrentCaller>) => Effect.runPromise(program.pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(platform)))
+const run = <A, E>(program: Effect.Effect<A, E, Effect.Services<typeof Thread> | CurrentCaller>) => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+  const services = yield* Layer.build(platform)
+  return yield* program.pipe(Effect.provideContext(services), Effect.provideService(CurrentCaller, { subject: "alice" }))
+})))
 
-test("context planner preserves the original task and recent data without privileged summary", () => {
-  const selected = planCompaction(context, input, policy)
+test("context planner preserves the original task and recent data without privileged summary", () => Effect.runPromise(Effect.gen(function* () {
+  const selected = yield* planCompaction(context, input, policy)
   expect(selected.reason).toBeNull()
   expect(selected.plan).not.toBeNull()
   if (selected.plan === null) return
   const prompt = compactedPrompt(selected.plan, "Earlier source fact")
   expect(Schema.toEquivalence(Prompt.Prompt)(Prompt.fromMessages(prompt.content.slice(0, input.content.length)), input)).toBe(true)
-  expect(prompt.content.some(message => message.role === "system")).toBe(false)
-  expect(promptChars(prompt)).toBeLessThan(policy.triggerChars)
+  expect(Arr.some(prompt.content, message => message.role === "system")).toBe(false)
+  const measured = yield* promptChars(prompt)
+  expect(measured).toBeLessThan(policy.triggerChars)
   expect(selected.plan.source.content.length + selected.plan.retained.content.length).toBe(context.content.length)
-  expect(planCompaction(input, input, policy).plan).toBeNull()
-})
+  const small = yield* planCompaction(input, input, policy)
+  expect(small.plan).toBeNull()
+})))
 
-test("context planner never cuts an unfinished tool exchange", () => {
+test("context planner never cuts an unfinished tool exchange", () => Effect.runPromise(Effect.gen(function* () {
   const call = Prompt.fromMessages([Prompt.assistantMessage({ content: [Prompt.toolCallPart({ id: "c", name: "lookup", params: {}, providerExecuted: false })] })])
-  expect(planCompaction(Prompt.concat(context, call), input, policy).reason).toBe("UnsettledContext")
+  const unfinished = yield* planCompaction(Prompt.concat(context, call), input, policy)
+  expect(unfinished.reason).toBe("UnsettledContext")
   const result = Prompt.fromMessages([Prompt.toolMessage({ content: [Prompt.toolResultPart({ id: "c", name: "lookup", result: "fact", isFailure: false, providerExecuted: false })] })])
   const settled = Prompt.concat(Prompt.concat(context, call), result)
-  const selection = planCompaction(settled, input, policy)
+  const selection = yield* planCompaction(settled, input, policy)
   expect(selection.reason).toBeNull()
   if (selection.plan === null) return
-  expect(selection.plan.retained.content.some(message => message.role === "assistant" && message.content.some(part => part.type === "tool-call"))).toBe(true)
-  expect(selection.plan.retained.content.some(message => message.role === "tool")).toBe(true)
-})
+  expect(Arr.some(selection.plan.retained.content, message => message.role === "assistant" && Arr.some(message.content, part => part.type === "tool-call"))).toBe(true)
+  expect(Arr.some(selection.plan.retained.content, message => message.role === "tool")).toBe(true)
+})))
 
 const prepare = Effect.fn("ContextTest.prepare")(function* () {
   const thread = yield* Thread
@@ -71,7 +77,8 @@ test("Domain owns compaction admission, replay and charged model usage", () => r
   expect(state.active.turns).toBe(2)
   expect(state.active.compactions.length).toBe(1)
   expect(state.active.input).toEqual(input)
-  expect(promptChars(state.active.prompt)).toBeLessThan(policy.triggerChars)
+  const compactedChars = yield* promptChars(state.active.prompt)
+  expect(compactedChars).toBeLessThan(policy.triggerChars)
   expect(state.active.settlements[0]?.prompt).toEqual(Prompt.concat(old, recent))
 })))
 
@@ -97,7 +104,7 @@ test("compaction cannot bypass model-turn and summary bounds", () => run(Effect.
   const thread = yield* prepare()
   yield* thread.send("t", BeginCompaction.make({ runId: "r", stepId: "r:2" }))
   yield* thread.send("t", ConfirmDispatch.make({ runId: "r", stepId: "r:2" }))
-  const oversized = yield* thread.send("t", RecordCompaction.make({ runId: "r", stepId: "r:2", summary: "x".repeat(policy.maxSummaryChars + 1), usage })).pipe(Effect.result)
+  const oversized = yield* thread.send("t", RecordCompaction.make({ runId: "r", stepId: "r:2", summary: Str.repeat(policy.maxSummaryChars + 1)("x"), usage })).pipe(Effect.result)
   expect(Result.isFailure(oversized)).toBe(false)
   const discarded = yield* thread.state("t")
   if (discarded._tag !== "Open" || discarded.active === null) return yield* Effect.die("Missing run")
@@ -151,17 +158,17 @@ test("expired summary records its paid usage without replacing the accepted cont
 })
 
 
-test("provider-executed results remain valid compaction source data", () => {
+test("provider-executed results remain valid compaction source data", () => Effect.runPromise(Effect.gen(function* () {
   const completed = Prompt.fromMessages([Prompt.assistantMessage({ content: [
     Prompt.toolCallPart({ id: "native-search", name: "web_search", params: {}, providerExecuted: true }),
-    Prompt.toolResultPart({ id: "native-search", name: "web_search", result: "source fact ".repeat(250), providerExecuted: true, isFailure: false }),
+    Prompt.toolResultPart({ id: "native-search", name: "web_search", result: Str.repeat(250)("source fact "), providerExecuted: true, isFailure: false }),
   ] })])
-  const selected = planCompaction(Prompt.concat(Prompt.concat(input, completed), recent), input, policy)
+  const selected = yield* planCompaction(Prompt.concat(Prompt.concat(input, completed), recent), input, policy)
   expect(selected.reason).toBeNull()
   expect(selected.plan).not.toBeNull()
   if (selected.plan === null) return
   expect(selected.plan.source.content[1]).toEqual(completed.content[0])
-})
+})))
 
 test("a summary response after ExpireRun preserves cost and failed status", () => {
   const clock = { now: 0 }

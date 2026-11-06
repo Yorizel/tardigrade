@@ -50,6 +50,7 @@ import { GrepSpills, ReadSpill } from "../../src/cluster/spill-tools"
 const ToolCodeResult = Schema.Struct({ outcome: CodeOutcome, logs: Schema.Array(Schema.String) })
 
 test.each(["output-valid", "output-invalid", "output-malformed", "code", "code-agents", "delegation", "fetch-direct", "fetch-code", "workspace-direct", "workspace-code", "spill", "spill-rejected"] as const)("default Alchemy agent executes %s through the real OpenAI HTTP provider and native policies", scenario => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+  const spillTarget = yield* workspaceKey("alice", "default-code")
   const directory = yield* Effect.acquireRelease(Effect.promise(() => mkdtemp(join(tmpdir(), "tardigrade-default-code-agent-"))), path => Effect.promise(() => rm(path, { recursive: true, force: true })))
   const requests = yield* Ref.make<ReadonlyArray<typeof OpenAiSchema.CreateResponse.Type>>([])
   const observedResult = yield* Ref.make<string | null>(null)
@@ -379,14 +380,14 @@ test.each(["output-valid", "output-invalid", "output-malformed", "code", "code-a
     if (code._tag !== "Open") return yield* Effect.die("Expected the authoritative Code result")
     expect(code.status).toBe("completed")
     expect(code.outcome).toEqual({ _tag: "Returned", value: spilledValue })
-    const catalog = yield* Context.get(state, SpillCatalog).state(workspaceKey("alice", "default-code"))
+    const catalog = yield* Context.get(state, SpillCatalog).state(spillTarget)
     expect(catalog._tag === "Open" && catalog.values).toEqual([])
     expect((yield* Ref.get(requests)).length).toBe(2)
     return
   }
   if (scenario === "spill") {
     expect(completed._tag === "Open" && completed.active?.text).toBe("Native spill completed.")
-    const catalog = yield* Context.get(state, SpillCatalog).state(workspaceKey("alice", "default-code"))
+    const catalog = yield* Context.get(state, SpillCatalog).state(spillTarget)
     if (catalog._tag !== "Open") return yield* Effect.die("Expected a native spill catalog")
     expect(catalog.values.length).toBe(1)
     expect(catalog.values[0]).toMatchObject({ ref: yield* Ref.get(spilledRef), chars: spilledJson.length, status: "stored" })
@@ -418,7 +419,7 @@ test.each(["output-valid", "output-invalid", "output-malformed", "code", "code-a
     yield* threads.send("default-code", RequestRun.make({ runId: "reuse", digest: "workspace-reuse", prompt: Prompt.make("Read the stored note using the accepted workspace policy.") })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
     const reused = yield* Effect.repeat(threads.state("default-code"), { until: value => value._tag === "Open" && value.active?.runId === "reuse" && ["completed", "failed", "cancelled", "unknown"].includes(value.active.status), schedule: Schedule.spaced("10 millis") }).pipe(Effect.timeout("10 seconds"))
     expect(reused._tag === "Open" && reused.active?.status).toBe("completed")
-    const saved = yield* workspaces.state(workspaceKey("alice", "default-code"))
+    const saved = yield* workspaces.state(spillTarget)
     if (saved._tag !== "Open") return yield* Effect.die("Expected stored workspace")
     expect(saved.policy).toEqual(workspacePolicy)
     expect(saved.entries).toEqual([{ key: "note", value: "abcdef" }])
@@ -463,7 +464,7 @@ test.each(["output-valid", "output-invalid", "output-malformed", "code", "code-a
   if (scenario === "workspace-code") {
     expect(code.calls.length).toBe(3)
     expect(code.calls.map(call => ({ method: call.request.method, mutation: call.request.mutation }))).toEqual([{ method: WriteText.name, mutation: true }, { method: ReadText.name, mutation: false }, { method: ListTexts.name, mutation: false }])
-    const saved = yield* workspaces.state(workspaceKey("alice", "default-code"))
+    const saved = yield* workspaces.state(spillTarget)
     if (saved._tag !== "Open") return yield* Effect.die("Expected stored workspace")
     expect(saved.policy).toEqual(workspacePolicy)
     expect(saved.entries).toEqual([{ key: "note", value: "abcdef" }])

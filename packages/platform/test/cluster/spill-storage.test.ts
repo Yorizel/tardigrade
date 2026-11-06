@@ -66,7 +66,8 @@ test("native SQL payloads survive layer recreation with complete text, scoped re
     expect(yield* storage.read({ scope, input: { ref: first.tmp, length: 0 } })).toEqual({ slice: "", size: 11 })
     expect(yield* storage.put({ scope, ref: "value", value, policy: { ...policy, previewChars: 1 } })).toEqual(first)
     const catalogs = yield* SpillCatalog
-    const catalog = yield* catalogs.state(workspaceKey(scope.owner, scope.threadId))
+    const target = yield* workspaceKey(scope.owner, scope.threadId)
+    const catalog = yield* catalogs.state(target)
     if (catalog._tag !== "Open") return yield* Effect.die("Expected stored catalog")
     expect(catalog.policy).toEqual(policy)
     expect(catalog.values).toHaveLength(1)
@@ -128,6 +129,7 @@ test("missing and corrupted committed SQL payloads preserve a concrete integrity
   yield* Effect.gen(function* () {
     const storage = yield* SpillStorage
     const store = yield* KeyValueStore.KeyValueStore
+    const target = yield* workspaceKey(scope.owner, scope.threadId)
     yield* storage.put({ scope, ref: "value", value: "complete", policy })
     const keys = yield* store.keys
     const key = keys[0]
@@ -182,7 +184,8 @@ test("native schema storage preserves BOM, Unicode and controls while malformed 
     expect(Result.isFailure(invalid)).toBe(true)
     if (Result.isFailure(invalid)) expect(invalid.failure).toMatchObject({ _tag: "SpillRejected", reason: "InvalidTextEncoding" })
     const catalogs = yield* SpillCatalog
-    const catalog = yield* catalogs.state(workspaceKey(scope.owner, scope.threadId))
+    const target = yield* workspaceKey(scope.owner, scope.threadId)
+    const catalog = yield* catalogs.state(target)
     if (catalog._tag !== "Open") return yield* Effect.die("Expected the accepted Unicode spill")
     expect(catalog.values.map(record => record.ref)).toEqual(["unicode"])
   }).pipe(Effect.provide(SpillStorageLive), Effect.provide(ArtifactKeyValueStoreLive), Effect.provideService(ConfigProvider.ConfigProvider, config))
@@ -194,6 +197,7 @@ test("committed retries do not update SQL and failed SQL publication retains a r
   yield* Effect.gen(function* () {
     const storage = yield* SpillStorage
     const store = yield* KeyValueStore.KeyValueStore
+    const target = yield* workspaceKey(scope.owner, scope.threadId)
     yield* storage.put({ scope, ref: "stored", value: "first", policy })
     yield* Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient
@@ -209,7 +213,7 @@ test("committed retries do not update SQL and failed SQL publication retains a r
       if (Exit.isFailure(failed)) expect(Cause.hasDies(failed.cause)).toBe(true)
       expect(yield* store.size).toBe(1)
       const catalogs = yield* SpillCatalog
-      const pending = yield* catalogs.state(workspaceKey(scope.owner, scope.threadId))
+      const pending = yield* catalogs.state(target)
       if (pending._tag !== "Open") return yield* Effect.die("Expected the reserved spill")
       expect(pending.values.find(record => record.ref === "pending")?.status).toBe("reserved")
       const unreadable = yield* storage.read({ scope, input: { ref: "pending" } }).pipe(Effect.result)
@@ -219,7 +223,7 @@ test("committed retries do not update SQL and failed SQL publication retains a r
       yield* storage.put({ scope, ref: "pending", value: "second", policy })
       expect(yield* storage.read({ scope, input: { ref: "pending" } })).toEqual({ slice: "secon", size: 6 })
       expect(yield* store.size).toBe(2)
-      const completed = yield* catalogs.state(workspaceKey(scope.owner, scope.threadId))
+      const completed = yield* catalogs.state(target)
       if (completed._tag !== "Open") return yield* Effect.die("Expected the published spill")
       expect(completed.values.find(record => record.ref === "pending")?.status).toBe("stored")
     }).pipe(Effect.provide(SqliteClient.layerConfig({ filename: Config.NonEmptyString("TARDIGRADE_ARTIFACT_DB") })))

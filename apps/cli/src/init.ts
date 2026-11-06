@@ -7,7 +7,7 @@ import type { ModelProtocol } from "@clavia/tardigrade-model/providers/directory
 
 import { actorTemplate, ALCHEMY_TEMPLATE_FILES, DEFAULT_INIT_TEMPLATE, type InitTemplate } from "./template"
 import type { SetupAnswers, SetupFiles } from "./setup"
-import { dependencyVersionIn, versionIn } from "./version"
+import { copyProjectPatches, dependencyVersionIn, projectPatchesFrom, versionIn } from "./version"
 import { shellWord } from "./workflow"
 import { emptyModelLock, MODEL_LOCK_FILE, type ModelLock } from "./model-lock"
 import { PROVIDER_REGISTRY_FILE, providerRegistrySource } from "./provider-registry"
@@ -142,6 +142,7 @@ const initAlchemyActor = async (name: string, options: InitActorOptions): Promis
   const packageVersion = options.packageVersion ?? await versionIn(import.meta.url)
   const dependencies = Object.fromEntries(await Promise.all(["alchemy", "@alchemy.run/cloudflare", "@alchemy.run/domain", "@effect/platform-bun", "@effect/ai-openai", "@effect/sql-sqlite-bun", "effect"].map(async dependency => [dependency, await dependencyVersionIn(dependency, import.meta.url)] as const)))
   if (packageVersion.endsWith("-unknown") || Object.values(dependencies).some(version => version.endsWith("-unknown"))) throw new Error("cannot determine native project dependency versions")
+  const projectPatches = await projectPatchesFrom(import.meta.url)
   const created = await mkdir(directory, { recursive: true })
   if (created === undefined) throw new Error(`init target already exists at ${directory}. Choose a new directory.`)
   try {
@@ -157,8 +158,9 @@ const initAlchemyActor = async (name: string, options: InitActorOptions): Promis
         await writeFile(resolve(directory, file), content, "utf8")
       }
     }
+    await copyProjectPatches(projectPatches, directory)
     await writeFile(resolve(directory, ".gitignore"), ".env\n.env.*\n!.env.example\n.alchemy/\nrunner.sqlite*\nartifacts.sqlite*\nnode_modules/\n", "utf8")
-    await writeFile(resolve(directory, DEFAULT_PACKAGE_MANIFEST), `${JSON.stringify({ private: true, type: "module", scripts: { dev: "alchemy dev", "dev:cloudflare": "alchemy dev", "dev:memory": "bun --env-file=.env server.ts", "dev:runner": "bun --env-file=.env runner.ts", "plan:cloudflare": "alchemy plan", "deploy:cloudflare": "alchemy deploy", "destroy:cloudflare": "alchemy destroy", cli: "bun --env-file=.env client.ts" }, dependencies: { ...dependencies, tardie: packageVersion } }, null, 2)}\n`, "utf8")
+    await writeFile(resolve(directory, DEFAULT_PACKAGE_MANIFEST), `${JSON.stringify({ private: true, type: "module", scripts: { dev: "alchemy dev", "dev:cloudflare": "alchemy dev", "dev:memory": "bun --env-file=.env server.ts", "dev:runner": "bun --env-file=.env runner.ts", "plan:cloudflare": "alchemy plan", "deploy:cloudflare": "alchemy deploy", "destroy:cloudflare": "alchemy destroy", cli: "bun --env-file=.env client.ts" }, dependencies: { ...dependencies, tardie: packageVersion }, patchedDependencies: projectPatches.patchedDependencies }, null, 2)}\n`, "utf8")
     return { name, directory, entry: resolve(directory, "AgentExecution.ts"), server: resolve(directory, "server.ts"), worker: resolve(directory, "worker.ts"), alchemy: resolve(directory, "alchemy.run.ts"), manifest: resolve(directory, ".env.example"), packageManifest: resolve(directory, DEFAULT_PACKAGE_MANIFEST), template: options.template ?? "alchemy" }
   } catch (error) {
     await rm(directory, { recursive: true, force: true })

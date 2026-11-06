@@ -4,7 +4,7 @@ import { SpillCatalog } from "../src/Spill/Spill.aggregate"
 import { Workspace } from "../src/Workspace/Workspace.aggregate"
 import { expect, test } from "bun:test"
 import * as Domain from "@alchemy.run/domain"
-import { Effect, Exit, Layer, Option, Ref, Schema } from "effect"
+import { Array as Arr, Effect, Exit, Layer, Option, Ref, Schema } from "effect"
 import { Prompt, Response } from "effect/ai"
 import { ReceiptOwnerGuardLive } from "../src/ReceiptOwnerGuard.middleware"
 import { ActorInternalApi } from "../src/ActorInternal.api"
@@ -25,7 +25,7 @@ const TestModel = Domain.Model("RemoteExecutionTest", { aggregates: [Thread, Cod
 const TestSession = Layer.succeed(Session, (effect, { headers }) => {
   const owner = Headers.get(headers, "x-tardigrade-owner")
   if (Option.isNone(owner)) return Effect.fail(Unauthorized.make())
-  return Schema.decodeUnknownEffect(CurrentCaller.schema)({ subject: owner.value }).pipe(
+  return Schema.decodeEffect(CurrentCaller.schema)({ subject: owner.value }).pipe(
     Effect.mapError(() => Unauthorized.make()),
     Effect.flatMap(caller => Effect.provideService(effect, CurrentCaller, caller)),
   )
@@ -39,15 +39,15 @@ test.each([
   { threadId: "thread", runId: "r", modelOperation: "6:threadr:1", toolOperation: "6:threadr:2" },
   { threadId: "a:b", runId: "c", modelOperation: "3:a:bc:1", toolOperation: "3:a:bc:2" },
   { threadId: "a", runId: "b:c", modelOperation: "1:ab:c:1", toolOperation: "1:ab:c:2" },
-])("native saga isolates external operations for $threadId / $runId", ({ threadId, runId, modelOperation, toolOperation }) => Effect.runPromise(Effect.gen(function* () {
+])("native saga isolates external operations for $threadId / $runId", ({ threadId, runId, modelOperation, toolOperation }) => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
   const calls = yield* Ref.make({ models: 0, tools: 0 })
   const adapter = AgentExecution.toLayer(Effect.succeed({
     compact: () => Effect.die("Unexpected compaction"),
     infer: Effect.fn("Fixture.infer")(function* (input) {
       expect(input.remainingTokens).toBeGreaterThan(0)
-      if (!input.prompt.content.some(message => message.role === "tool")) expect(input.operationId).toBe(modelOperation)
+      if (!Arr.some(input.prompt.content, message => message.role === "tool")) expect(input.operationId).toBe(modelOperation)
       yield* Ref.update(calls, value => ({ ...value, models: value.models + 1 }))
-      if (input.prompt.content.some(message => message.role === "tool")) return { prompt: Prompt.make([{ role: "assistant", content: "The tool returned 42." }]), usage, text: "The tool returned 42.", tools: [] }
+      if (Arr.some(input.prompt.content, message => message.role === "tool")) return { prompt: Prompt.make([{ role: "assistant", content: "The tool returned 42." }]), usage, text: "The tool returned 42.", tools: [] }
       const call = Prompt.toolCallPart({ id: "call-1", name: "read_number", params: {}, providerExecuted: false })
       return { prompt: Prompt.fromMessages([Prompt.assistantMessage({ content: [call] })]), usage, text: "", tools: [{ call, execution: { _tag: "External" as const }, mutation: false, requiresApproval: false }] }
     }),
@@ -58,6 +58,7 @@ test.each([
     }),
   }))
   const world = ExecuteRunLive.pipe(Layer.provide(SpillStorageLive.pipe(Layer.provide(KeyValueStore.layerMemory))), Layer.provideMerge(clientLayer), Layer.provide(adapter), Layer.provideMerge(WorkflowEngine.layerMemory), Layer.provide(Digest.layerWebCrypto))
+  const services = yield* Layer.build(world)
   yield* Effect.gen(function* () {
     const threads = yield* Thread
     yield* threads.send(threadId, OpenThread.make({ actor: "agent", instance: "i", name: "main", limits: DEFAULT_RUN_LIMITS }))
@@ -71,14 +72,15 @@ test.each([
     expect(state.active?.turns).toBe(2)
     expect(state.active?.toolCalls).toBe(1)
     expect(state.active?.tokens).toBe(10)
-    expect(yield* Ref.get(calls)).toEqual({ models: 2, tools: 1 })
-  }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(world))
-})), 15_000)
+    const counts = yield* Ref.get(calls)
+    expect(counts).toEqual({ models: 2, tools: 1 })
+  }).pipe(Effect.provideContext(services), Effect.provideService(CurrentCaller, { subject: "alice" }))
+}))), 15_000)
 
 test("the native model definitions are valid", () => expect(Domain.verify(TestModel)).toEqual([]))
 
 
-test("a mismatched workflow owner cannot dispatch or fail another owner's run", () => Effect.runPromise(Effect.gen(function* () {
+test("a mismatched workflow owner cannot dispatch or fail another owner's run", () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
   const calls = yield* Ref.make(0)
   const adapter = AgentExecution.toLayer(Effect.succeed({
     compact: () => Effect.die("Unexpected compaction"),
@@ -86,6 +88,7 @@ test("a mismatched workflow owner cannot dispatch or fail another owner's run", 
     invoke: () => Ref.update(calls, count => count + 1).pipe(Effect.andThen(Effect.die("Unauthorized dispatch"))),
   }))
   const world = ExecuteRunLive.pipe(Layer.provide(SpillStorageLive.pipe(Layer.provide(KeyValueStore.layerMemory))), Layer.provideMerge(clientLayer), Layer.provide(adapter), Layer.provideMerge(WorkflowEngine.layerMemory), Layer.provide(Digest.layerWebCrypto))
+  const services = yield* Layer.build(world)
   yield* Effect.gen(function* () {
     const threads = yield* Thread
     yield* threads.send("private", OpenThread.make({ actor: "agent", instance: "i", name: "main", limits: DEFAULT_RUN_LIMITS }))
@@ -93,7 +96,9 @@ test("a mismatched workflow owner cannot dispatch or fail another owner's run", 
     const before = yield* threads.state("private")
     const result = yield* ExecuteRun.execute({ key: executionKey({ threadId: "private", runId: "r", owner: "bob" }), threadId: "private", runId: "r", owner: "bob" }).pipe(Effect.exit)
     expect(Exit.isFailure(result)).toBe(true)
-    expect(yield* threads.state("private")).toEqual(before)
-    expect(yield* Ref.get(calls)).toBe(0)
-  }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(world))
-})))
+    const after = yield* threads.state("private")
+    expect(after).toEqual(before)
+    const count = yield* Ref.get(calls)
+    expect(count).toBe(0)
+  }).pipe(Effect.provideContext(services), Effect.provideService(CurrentCaller, { subject: "alice" }))
+}))))

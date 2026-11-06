@@ -58,6 +58,7 @@ test("native text tools persist empty values, bounded slices and lexical cursor 
 
 test("tool write receipts survive later overwrites and changed payload retries reach Domain conflict checks", () => Effect.runPromise(Effect.gen(function* () {
   yield* setup
+  const target = yield* workspaceKey(scope.owner, scope.threadId)
   const original = yield* invokeWorkspaceTool(scope, "original", WriteText.name, { key: "value", value: "first" })
   yield* invokeWorkspaceTool(scope, "replacement", WriteText.name, { key: "value", value: "second" })
   expect(yield* invokeWorkspaceTool(scope, "original", WriteText.name, { key: "value", value: "first" })).toEqual(original)
@@ -66,7 +67,7 @@ test("tool write receipts survive later overwrites and changed payload retries r
   if (Result.isFailure(conflict)) expect(conflict.failure).toMatchObject({ _tag: "WorkspaceRejected", reason: "OperationConflict" })
   expect(yield* invokeWorkspaceTool(scope, "read", ReadText.name, { key: "value" })).toMatchObject({ value: "sec", totalChars: 6 })
   const workspaces = yield* Workspace
-  const saved = yield* workspaces.state(workspaceKey(scope.owner, scope.threadId))
+  const saved = yield* workspaces.state(target)
   if (saved._tag !== "Open") return yield* Effect.die("Expected durable workspace")
   expect(saved.entries).toEqual([{ key: "value", value: "second" }])
   expect(saved.receipts.length).toBe(2)
@@ -74,6 +75,8 @@ test("tool write receipts survive later overwrites and changed payload retries r
 
 test("trusted scope is checked against the actual parent before any workspace is created", () => Effect.runPromise(Effect.gen(function* () {
   yield* setup
+  const bobTarget = yield* workspaceKey("alice", "bob")
+  const target = yield* workspaceKey(scope.owner, scope.threadId)
   const workspaces = yield* Workspace
   const threads = yield* Thread
   yield* threads.send("bob", OpenThread.make(opened)).pipe(Effect.provideService(CurrentCaller, { subject: "bob" }))
@@ -81,40 +84,42 @@ test("trusted scope is checked against the actual parent before any workspace is
   const foreign = yield* invokeWorkspaceTool({ ...scope, threadId: "bob" }, "foreign", WriteText.name, { key: "secret", value: "wrong" }).pipe(Effect.result)
   expect(Result.isFailure(foreign)).toBe(true)
   if (Result.isFailure(foreign)) expect(foreign.failure._tag).toBe("NotOwner")
-  expect(yield* workspaces.state(workspaceKey("alice", "bob"))).toEqual({ _tag: "Unopened" })
+  expect(yield* workspaces.state(bobTarget)).toEqual({ _tag: "Unopened" })
   const otherRun = yield* invokeWorkspaceTool({ ...scope, runId: "other" }, "wrong-run", ListTexts.name).pipe(Effect.result)
   expect(Result.isFailure(otherRun)).toBe(true)
   if (Result.isFailure(otherRun)) expect(otherRun.failure).toMatchObject({ _tag: "WorkspaceToolRejected", reason: "ParentRunTerminal" })
   const forged = yield* invokeWorkspaceTool(scope, "forged", WriteText.name, { key: "secret", value: "wrong", owner: "bob" }).pipe(Effect.result)
   expect(Result.isFailure(forged)).toBe(true)
   if (Result.isFailure(forged)) expect(forged.failure).toMatchObject({ _tag: "WorkspaceToolRejected", reason: "InvalidInput" })
-  expect(yield* workspaces.state(workspaceKey(scope.owner, scope.threadId))).toEqual({ _tag: "Unopened" })
+  expect(yield* workspaces.state(target)).toEqual({ _tag: "Unopened" })
   yield* threads.send(scope.threadId, CancelRun.make({ runId: scope.runId, reason: "Cancelled" }))
   const late = yield* invokeWorkspaceTool(scope, "late", WriteText.name, { key: "late", value: "wrong" }).pipe(Effect.result)
   expect(Result.isFailure(late)).toBe(true)
   if (Result.isFailure(late)) expect(late.failure).toMatchObject({ _tag: "WorkspaceToolRejected", reason: "ParentRunTerminal" })
-  expect(yield* workspaces.state(workspaceKey(scope.owner, scope.threadId))).toEqual({ _tag: "Unopened" })
+  expect(yield* workspaces.state(target)).toEqual({ _tag: "Unopened" })
 }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(world))))
 
 test("an existing workspace retains its accepted policy across adapter configuration changes", () => Effect.runPromise(Effect.gen(function* () {
   yield* setup
+  const target = yield* workspaceKey(scope.owner, scope.threadId)
   yield* invokeWorkspaceTool(scope, "write", WriteText.name, { key: "value", value: "abcdef" })
   const changed = ConfigProvider.fromUnknown({ TARDIGRADE_WORKSPACE_POLICY: "invalid replacement configuration" })
   const read = yield* invokeWorkspaceTool(scope, "read", ReadText.name, { key: "value" }).pipe(Effect.provideService(ConfigProvider.ConfigProvider, changed))
   expect(read).toEqual({ key: "value", value: "abc", offset: 0, totalChars: 6, truncated: true, maxChars: 3 })
   const workspaces = yield* Workspace
-  const saved = yield* workspaces.state(workspaceKey(scope.owner, scope.threadId))
+  const saved = yield* workspaces.state(target)
   if (saved._tag !== "Open") return yield* Effect.die("Expected durable workspace")
   expect(saved.policy).toEqual(policy)
 }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(world))))
 
 test("workspace tool inputs reject invalid offsets before creation and missing keys stay typed failures", () => Effect.runPromise(Effect.gen(function* () {
   yield* setup
+  const target = yield* workspaceKey(scope.owner, scope.threadId)
   const invalid = yield* invokeWorkspaceTool(scope, "negative", ReadText.name, { key: "value", offset: -1 }).pipe(Effect.result)
   expect(Result.isFailure(invalid)).toBe(true)
   if (Result.isFailure(invalid)) expect(invalid.failure).toMatchObject({ _tag: "WorkspaceToolRejected", reason: "InvalidInput" })
   const workspaces = yield* Workspace
-  expect(yield* workspaces.state(workspaceKey(scope.owner, scope.threadId))).toEqual({ _tag: "Unopened" })
+  expect(yield* workspaces.state(target)).toEqual({ _tag: "Unopened" })
   const missing = yield* invokeWorkspaceTool(scope, "missing", ReadText.name, { key: "missing" }).pipe(Effect.result)
   expect(Result.isFailure(missing)).toBe(true)
   if (Result.isFailure(missing)) expect(missing.failure._tag).toBe("WorkspaceRejected")

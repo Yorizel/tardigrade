@@ -7,7 +7,7 @@ import { ContextPolicy, ContextSummary } from "./Context.schemas"
 import { OutputDeclaration } from "../Output/Output.schemas"
 import { RunScope } from "./Run.workflow"
 
-export class ExecutionRejected extends Domain.Rejection("ExecutionRejected", { reason: Schema.String }) {}
+export class ExecutionRejected extends Schema.TaggedError<ExecutionRejected, { readonly brand: unique symbol }>()("ExecutionRejected", { reason: Schema.String }) {}
 export const ToolExecution = Schema.Union([
   Schema.TaggedStruct("External", {}),
   Schema.TaggedStruct("Code", { catalog: CodeInput.fields.catalog, limits: CodeInput.fields.limits, spill: CodeInput.fields.spill }),
