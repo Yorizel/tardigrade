@@ -10,7 +10,7 @@ import { WorkflowEngine } from "effect/workflow"
 import { FetchHttpClient, Headers } from "effect/http"
 import { ActorInternalApi } from "@clavia/tardigrade-domain/ActorInternal.api"
 import { CurrentCaller, Session, Unauthorized } from "@clavia/tardigrade-domain/Actor.context"
-import { ReceiptOwnerGuardLive } from "@clavia/tardigrade-domain/Actor.model"
+import { ReceiptOwnerGuardLive } from "@clavia/tardigrade-domain/ReceiptOwnerGuard.middleware"
 import { Thread } from "@clavia/tardigrade-domain/Thread/Thread.aggregate"
 import { CancelRun, OpenThread, RequestRun } from "@clavia/tardigrade-domain/Thread/Thread.commands"
 import { DEFAULT_RUN_LIMITS } from "@clavia/tardigrade-domain/Thread/Thread.schemas"
@@ -87,7 +87,8 @@ test.each(["completed", "unknown", "cancelled"] as const)("guest agents.run uses
     yield* threads.send("parent", RequestRun.make({ runId: "run", digest: "run", prompt: Prompt.make("Run a recursive task") }))
     const request = { threadId: "parent", runId: "run", digest: "code", code: 'const child = await agents.run({text: "child task", budget: 1}); return child.text;', catalog, ambient: { at: 123, seed: "code" }, limits: DEFAULT_CODE_LIMITS }
     const executionId = "recursive-code"
-    const childId = delegationKey("parent", "run", codeAgentRequestId(executionId, 0))
+    const childRequestId = yield* codeAgentRequestId(executionId, 0)
+    const childId = delegationKey("parent", "run", childRequestId)
     const child = yield* Effect.gen(function* () {
       yield* Effect.repeat(threads.state(childId), { until: state => state._tag === "Open" && state.active !== null, schedule: Schedule.spaced("10 millis") }).pipe(Effect.timeout("3 seconds"))
       const stored = yield* threads.state(childId)
@@ -159,7 +160,8 @@ test.each([
     if (stored._tag !== "Open") return yield* Effect.die("Expected Code admission")
     expect(stored.status).toBe("failed")
     expect(stored.calls[0]?.status).toBe("cancelled")
-    const childId = delegationKey("parent", "run", codeAgentRequestId("blocked", 0))
+    const childRequestId = yield* codeAgentRequestId("blocked", 0)
+    const childId = delegationKey("parent", "run", childRequestId)
     expect((yield* delegations.state(childId))._tag).toBe("Unreserved")
     expect((yield* threads.state(childId))._tag).toBe("Unopened")
   }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(world))
@@ -193,7 +195,8 @@ test("an uncertain mutation inside guest agents.run blocks the actual root workf
     yield* threads.send("parent", OpenThread.make({ actor: "agent", instance: "instance", name: "main", limits: DEFAULT_RUN_LIMITS }))
     yield* threads.send("parent", RequestRun.make({ runId: "run", digest: "run", prompt: Prompt.make("Root task") }))
     const executionId = runKey("parent", "run:2")
-    const childId = delegationKey("parent", "run", codeAgentRequestId(executionId, 0))
+    const childRequestId = yield* codeAgentRequestId(executionId, 0)
+    const childId = delegationKey("parent", "run", childRequestId)
     const child = yield* Effect.gen(function* () {
       yield* Effect.repeat(threads.state(childId), { until: value => value._tag === "Open" && value.active !== null, schedule: Schedule.spaced("10 millis") }).pipe(Effect.timeout("3 seconds"))
       const stored = yield* threads.state(childId)

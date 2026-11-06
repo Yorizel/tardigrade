@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { Tool } from "effect/ai"
 import { Handle, Reservation } from "./Delegation.schemas"
 
@@ -21,4 +21,6 @@ export const AgentsRun = Tool.make("run_agent", {
 }).annotate(Tool.Readonly, false)
 
 const CodeAgentRequest = Schema.TaggedStruct("CodeAgent", { executionId: Schema.NonEmptyString, ordinal: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)) })
-export const codeAgentRequestId = (executionId: string, ordinal: number) => Schema.encodeSync(Schema.fromJsonString(CodeAgentRequest))({ _tag: "CodeAgent", executionId, ordinal })
+export const codeAgentRequestId = Effect.fn("AgentsRun.codeAgentRequestId")(function* (executionId: string, ordinal: number): Effect.fn.Return<string> {
+  return yield* Schema.encodeEffect(Schema.fromJsonString(CodeAgentRequest))({ _tag: "CodeAgent", executionId, ordinal }).pipe(Effect.orDie)
+})

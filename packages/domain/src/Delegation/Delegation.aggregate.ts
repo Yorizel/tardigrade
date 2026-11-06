@@ -1,5 +1,5 @@
 import * as Domain from "@alchemy.run/domain"
-import { Array, Effect, Schema } from "effect"
+import { Array as EffectArray, Effect, Option, Schema } from "effect"
 import { Prompt } from "effect/ai"
 import { NotOwner } from "../Thread/Thread.commands"
 import { CurrentCaller, Session } from "../Actor.context"
@@ -27,7 +27,7 @@ export class Delegation extends Domain.Aggregate("Delegation", {
         return []
       }
       if (id !== delegationKey(command.parentThreadId, command.parentRunId, command.requestId)) return yield* new DelegationRejected({ reason: "DelegationIdentityConflict" })
-      if (command.lineage.length === 0 || command.lineage.at(-1) !== command.parentThreadId || Array.dedupe(command.lineage).length !== command.lineage.length || command.lineage.includes(id)) return yield* new DelegationRejected({ reason: "InvalidLineage" })
+      if (command.lineage.length === 0 || command.lineage.at(-1) !== command.parentThreadId || EffectArray.dedupe(command.lineage).length !== command.lineage.length || command.lineage.includes(id)) return yield* new DelegationRejected({ reason: "InvalidLineage" })
       if (command.lineage.length > command.limits.maxDepth) return yield* new DelegationRejected({ reason: "DepthBudgetExceeded" })
       if (command.toolCalls > command.limits.maxToolCalls) return yield* new DelegationRejected({ reason: "ToolBudgetExceeded" })
       return [DelegationReserved.make({ delegationId: id, childThreadId: id, childRunId: command.requestId, owner: caller.subject, reservation: command })]
@@ -54,7 +54,7 @@ export class Delegation extends Domain.Aggregate("Delegation", {
       const expected = childBindingOf(state)
       if (proof._tag === "ChildReserved" && !Schema.toEquivalence(ChildBinding)(proof.binding, expected)) return new DelegationRejected({ reason: "ChildFenceIdentityConflict" })
       if (proof._tag === "Open" && !Schema.toEquivalence(ChildBinding)(proof.child.binding, expected)) return new DelegationRejected({ reason: "ChildFenceIdentityConflict" })
-      if (state.status === "cancelled" && state.inbox.some(entry => entry.content._tag === "Result" && entry.content.outcome.receipt === null && entry.content.outcome.reason === "CancelledBeforeStart")) return []
+      if (state.status === "cancelled" && EffectArray.some(state.inbox, entry => entry.content._tag === "Result" && entry.content.outcome.receipt === null && entry.content.outcome.reason === "CancelledBeforeStart")) return []
       if (state.status !== "cancel_requested") return new DelegationRejected({ reason: "DelegationNotCancelling" })
       const outcome = { status: "cancelled" as const, receipt: null, reason: "CancelledBeforeStart" }
       return [ChildOutcomeRecorded.make({ entry: { sequence: state.inbox.length + 1, messageId: state.childRunId, content: { _tag: "Result", outcome } } })]
@@ -62,7 +62,7 @@ export class Delegation extends Domain.Aggregate("Delegation", {
     RecordChildMessage: (state, command) => {
       if (state._tag !== "Reserved") return new DelegationRejected({ reason: "UnknownDelegation" })
       if (command.childThreadId !== state.childThreadId) return new DelegationRejected({ reason: "ChildThreadIdentityConflict" })
-      const previous = state.inbox.find(entry => entry.messageId === command.messageId && entry.content._tag !== "Result" && entry.content._tag !== "Reconciled")
+      const previous = Option.getOrUndefined(EffectArray.findFirst(state.inbox, entry => entry.messageId === command.messageId && entry.content._tag !== "Result" && entry.content._tag !== "Reconciled"))
       if (previous !== undefined) {
         if (Schema.is(ChildMessage)(previous.content) && Schema.toEquivalence(ChildMessage)(previous.content, command.content)) return []
         return new DelegationRejected({ reason: "MessageIdentityConflict" })
@@ -70,7 +70,7 @@ export class Delegation extends Domain.Aggregate("Delegation", {
       if (state.status !== "running") return new DelegationRejected({ reason: "ChildNotRunning" })
       if (state.inbox.length >= state.reservation.limits.maxInboxMessages - 2) return new DelegationRejected({ reason: "InboxBudgetExceeded" })
       const content = command.content
-      if (content._tag === "Request" && state.inbox.some(entry => entry.content._tag === "Request" && entry.content.requestId === content.requestId)) return new DelegationRejected({ reason: "ChildRequestIdentityConflict" })
+      if (content._tag === "Request" && EffectArray.some(state.inbox, entry => entry.content._tag === "Request" && entry.content.requestId === content.requestId)) return new DelegationRejected({ reason: "ChildRequestIdentityConflict" })
       return [ChildMessageRecorded.make({ entry: { sequence: state.inbox.length + 1, messageId: command.messageId, content: command.content } })]
     },
     RecordChildOutcome: (state, command) => {
@@ -78,7 +78,7 @@ export class Delegation extends Domain.Aggregate("Delegation", {
       if (command.childThreadId !== state.childThreadId) return new DelegationRejected({ reason: "ChildThreadIdentityConflict" })
       if (!Schema.toEquivalence(Prompt.Prompt)(state.reservation.prompt, command.receipt.input)) return new DelegationRejected({ reason: "ChildInputIdentityConflict" })
       if (command.receipt.runId !== state.childRunId) return new DelegationRejected({ reason: "ChildRunIdentityConflict" })
-      const previous = state.inbox.find(entry => entry.content._tag === "Result")
+      const previous = Option.getOrUndefined(EffectArray.findFirst(state.inbox, entry => entry.content._tag === "Result"))
       if (previous?.content._tag === "Result") {
         if (previous.content.outcome.receipt !== null && Schema.toEquivalence(Receipt)(previous.content.outcome.receipt, command.receipt)) return []
         return new DelegationRejected({ reason: "ChildOutcomeConflict" })
@@ -97,7 +97,7 @@ export class Delegation extends Domain.Aggregate("Delegation", {
     },
     ResolveDelegation: Effect.fn("Delegation.resolve")(function* (state, command) {
       const current = yield* owned(state)
-      const previous = current.inbox.find(entry => entry.content._tag === "Reconciled")
+      const previous = Option.getOrUndefined(EffectArray.findFirst(current.inbox, entry => entry.content._tag === "Reconciled"))
       if (previous?.content._tag === "Reconciled") {
         if (previous.content.resolution === command.resolution && previous.content.evidence === command.evidence) return []
         return yield* new DelegationRejected({ reason: "ResolutionConflict" })
@@ -107,13 +107,13 @@ export class Delegation extends Domain.Aggregate("Delegation", {
     }),
     ReplyToChild: Effect.fn("Delegation.reply")(function* (state, command) {
       const current = yield* owned(state)
-      const previous = current.replies.find(reply => reply.requestId === command.requestId)
+      const previous = Option.getOrUndefined(EffectArray.findFirst(current.replies, reply => reply.requestId === command.requestId))
       if (previous !== undefined) {
         if (previous.text === command.text) return []
         return yield* new DelegationRejected({ reason: "ReplyIdentityConflict" })
       }
       if (current.status !== "running") return yield* new DelegationRejected({ reason: "ChildNotRunning" })
-      if (!current.inbox.some(entry => entry.content._tag === "Request" && entry.content.requestId === command.requestId)) return yield* new DelegationRejected({ reason: "UnknownChildRequest" })
+      if (!EffectArray.some(current.inbox, entry => entry.content._tag === "Request" && entry.content.requestId === command.requestId)) return yield* new DelegationRejected({ reason: "UnknownChildRequest" })
       return [ChildReplyRecorded.make({ reply: command })]
     }),
     AcknowledgeDelegationInbox: Effect.fn("Delegation.acknowledge")(function* (state, command) {

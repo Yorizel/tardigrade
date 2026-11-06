@@ -3,10 +3,11 @@ import * as Domain from "@alchemy.run/domain"
 import { BunHttpServer, BunServices } from "@effect/platform-bun"
 import { ActorApi } from "@clavia/tardigrade-domain/Actor.api"
 import { CurrentCaller, Session, Unauthorized } from "@clavia/tardigrade-domain/Actor.context"
-import { ReceiptOwnerGuardLive } from "@clavia/tardigrade-domain/Actor.model"
+import { ReceiptOwnerGuardLive } from "@clavia/tardigrade-domain/ReceiptOwnerGuard.middleware"
 import { Thread } from "@clavia/tardigrade-domain/Thread/Thread.aggregate"
 import { CompleteRun } from "@clavia/tardigrade-domain/Thread/Thread.commands"
 import { ThreadDirectory } from "@clavia/tardigrade-domain/Thread/ThreadDirectory.view"
+import { OutputDeclaration } from "@clavia/tardigrade-domain/Output/Output.schemas"
 import { DEFAULT_RUN_LIMITS } from "@clavia/tardigrade-domain/Thread/Thread.schemas"
 import { Array as Arr, ConfigProvider, Console, Effect, Fiber, Layer, Option, Result, Schema, Stream } from "effect"
 import { Prompt } from "effect/ai"
@@ -170,4 +171,30 @@ test("native CLI rejects obsolete local runtime flags before acquiring its remot
     }
   }
   expect(help.length).toBe(7)
+}))))
+
+
+test("one-shot CLI persists its declared output and returns the validated native result", () => Effect.runPromise(withWorld(Effect.gen(function* () {
+  const setup = yield* fixture
+  yield* setup.api.OpenThread("structured", open, { headers: authorization })
+  const output = yield* Schema.decodeEffect(OutputDeclaration)({ name: "report", schema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"], additionalProperties: false } })
+  const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(OutputDeclaration))(output)
+  const threads = yield* Thread
+  const complete = yield* setup.api.Thread.watch("structured", { headers: authorization }).pipe(
+    Stream.filter(({ state }) => state?._tag === "Open" && state.active?.runId === "structured-run"),
+    Stream.take(1), Stream.runDrain,
+    Effect.andThen(threads.send("structured", CompleteRun.make({ runId: "structured-run", text: '{"answer":"Native result"}' }))),
+    Effect.forkChild,
+  )
+  const run = Command.runWith(cli, { version: "test", renderErrors: false })
+  yield* run(["--thread", "structured", "--run-id", "structured-run", "--message", "Return a report", "--output", encoded]).pipe(Effect.provideService(ConfigProvider.ConfigProvider, setup.config))
+  yield* Fiber.join(complete)
+  const final = yield* setup.api.Thread.get("structured", { headers: authorization })
+  if (final?._tag !== "Open" || final.active === null) return yield* Effect.die("Missing structured run")
+  expect(final.active.output).toEqual(output)
+  expect(final.active.result).toEqual({ answer: "Native result" })
+  expect(final.lastReceipt?.result).toEqual({ answer: "Native result" })
+  yield* run(["--thread", "structured", "--run-id", "structured-run", "--message", "Return a report", "--output", encoded]).pipe(Effect.provideService(ConfigProvider.ConfigProvider, setup.config))
+  const replayed = yield* threads.state("structured")
+  expect(replayed).toEqual(final)
 }))))

@@ -1,4 +1,4 @@
-import { ReceiptOwnerGuardLive } from "@clavia/tardigrade-domain/Actor.model"
+import { ReceiptOwnerGuardLive } from "@clavia/tardigrade-domain/ReceiptOwnerGuard.middleware"
 import { CurrentCaller, Session, Unauthorized } from "@clavia/tardigrade-domain/Actor.context"
 import { Config, Effect, Layer, Option, Redacted, Schema } from "effect"
 import { Headers } from "effect/http"

@@ -1,4 +1,5 @@
-export { ActorModel, ReceiptOwnerGuardLive } from "./Actor.model"
+export { ActorModel } from "./Actor.model"
+export { ReceiptOwnerGuardLive } from "./ReceiptOwnerGuard.middleware"
 export { ActorApi } from "./Actor.api"
 export { Thread } from "./Thread/Thread.aggregate"
 export { ThreadDirectory, ThreadRegistered } from "./Thread/ThreadDirectory.view"
@@ -34,3 +35,5 @@ export { SpillPolicy, DEFAULT_SPILL_POLICY, SpillPointer } from "./Spill/Spill.s
 
 export { ContextPolicy, ContextSummary, DEFAULT_CONTEXT_POLICY } from "./Execution/Context.schemas"
 export { AgentsRun } from "./Delegation/AgentsRun"
+
+export { OutputDeclaration, OutputSchema } from "./Output/Output.schemas"

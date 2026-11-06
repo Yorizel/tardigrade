@@ -5,7 +5,7 @@ import { Prompt, Response } from "effect/ai"
 import * as InMemory from "@alchemy.run/domain/InMemory"
 import { CurrentCaller } from "../src/Actor.context"
 import { Thread } from "../src/Thread/Thread.aggregate"
-import { OpenThread, RequestRun, BeginStep, ConfirmDispatch, RecordStep, BeginCompaction, RecordCompaction, CancelRun } from "../src/Thread/Thread.commands"
+import { OpenThread, RequestRun, BeginStep, ConfirmDispatch, RecordStep, BeginCompaction, RecordCompaction, CancelRun, ExpireRun } from "../src/Thread/Thread.commands"
 import { DEFAULT_RUN_LIMITS } from "../src/Thread/Thread.schemas"
 import { planCompaction, compactedPrompt, promptChars } from "../src/Execution/Context.compaction"
 
@@ -83,11 +83,14 @@ test("cancellation prevents late compaction replacement", () => run(Effect.gen(f
   yield* thread.send("t", ConfirmDispatch.make({ runId: "r", stepId: "r:2" }))
   yield* thread.send("t", CancelRun.make({ runId: "r", reason: "stop" }))
   const late = yield* thread.send("t", RecordCompaction.make({ runId: "r", stepId: "r:2", summary: "late", usage })).pipe(Effect.result)
-  expect(Result.isFailure(late)).toBe(true)
+  expect(Result.isFailure(late)).toBe(false)
+  yield* thread.send("t", RecordCompaction.make({ runId: "r", stepId: "r:2", summary: "late", usage }))
   const state = yield* thread.state("t")
   if (state._tag !== "Open" || state.active === null) return yield* Effect.die("Missing run")
   expect(state.active.prompt).toEqual(context)
-  expect(state.active.compactions).toEqual([])
+  expect(state.active.status).toBe("cancelled")
+  expect(state.active.tokens).toBe(10)
+  expect(state.active.compactions).toEqual([{ stepId: "r:2", summary: "late", usage }])
 })))
 
 test("compaction cannot bypass model-turn and summary bounds", () => run(Effect.gen(function* () {
@@ -146,3 +149,59 @@ test("expired summary records its paid usage without replacing the accepted cont
   expect(state.active.tokens).toBe(10)
   }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(clockPlatform)))
 })
+
+
+test("provider-executed results remain valid compaction source data", () => {
+  const completed = Prompt.fromMessages([Prompt.assistantMessage({ content: [
+    Prompt.toolCallPart({ id: "native-search", name: "web_search", params: {}, providerExecuted: true }),
+    Prompt.toolResultPart({ id: "native-search", name: "web_search", result: "source fact ".repeat(250), providerExecuted: true, isFailure: false }),
+  ] })])
+  const selected = planCompaction(Prompt.concat(Prompt.concat(input, completed), recent), input, policy)
+  expect(selected.reason).toBeNull()
+  expect(selected.plan).not.toBeNull()
+  if (selected.plan === null) return
+  expect(selected.plan.source.content[1]).toEqual(completed.content[0])
+})
+
+test("a summary response after ExpireRun preserves cost and failed status", () => {
+  const clock = { now: 0 }
+  const clockPlatform = TestModel.layer(Layer.empty).pipe(Layer.provide(InMemory.make({ now: () => clock.now }).layer))
+  return Effect.runPromise(Effect.gen(function* () {
+    const thread = yield* prepare()
+    yield* thread.send("t", BeginCompaction.make({ runId: "r", stepId: "r:2" }))
+    yield* thread.send("t", ConfirmDispatch.make({ runId: "r", stepId: "r:2" }))
+    clock.now += DEFAULT_RUN_LIMITS.maxDurationMs + 1
+    yield* thread.send("t", ExpireRun.make({ runId: "r" }))
+    const record = RecordCompaction.make({ runId: "r", stepId: "r:2", summary: "Late summary", usage })
+    yield* thread.send("t", record)
+    yield* thread.send("t", record)
+    const state = yield* thread.state("t")
+    if (state._tag !== "Open" || state.active === null) return yield* Effect.die("Missing run")
+    expect(state.active.prompt).toEqual(context)
+    expect(state.active.status).toBe("failed")
+    expect(state.active.reason).toBe("DurationBudgetExceeded")
+    expect(state.active.tokens).toBe(10)
+    expect(state.active.compactions.length).toBe(1)
+  }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(clockPlatform)))
+})
+
+
+test("a paid summary settles the archived cancelled run without touching its successor", () => run(Effect.gen(function* () {
+  const thread = yield* prepare()
+  yield* thread.send("t", BeginCompaction.make({ runId: "r", stepId: "r:2" }))
+  yield* thread.send("t", ConfirmDispatch.make({ runId: "r", stepId: "r:2" }))
+  yield* thread.send("t", CancelRun.make({ runId: "r", reason: "Stop" }))
+  yield* thread.send("t", RequestRun.make({ runId: "next", digest: "next", prompt: Prompt.make("Next task") }))
+  const before = yield* thread.state("t")
+  const record = RecordCompaction.make({ runId: "r", stepId: "r:2", summary: "Late paid summary", usage })
+  yield* thread.send("t", record)
+  yield* thread.send("t", record)
+  const after = yield* thread.state("t")
+  if (before._tag !== "Open" || after._tag !== "Open") return yield* Effect.die("Missing thread")
+  expect(after.active).toEqual(before.active)
+  expect(after.lastReceipt).toEqual(before.lastReceipt)
+  expect(after.history).toEqual(before.history)
+  expect(after.receipts[0]).toMatchObject({ runId: "r", status: "cancelled", tokens: 10, step: null, compactions: [{ stepId: "r:2", summary: "Late paid summary", usage }] })
+  const conflict = yield* thread.send("t", RecordCompaction.make({ runId: "r", stepId: "r:2", summary: "Conflicting summary", usage })).pipe(Effect.result)
+  expect(Result.isFailure(conflict)).toBe(true)
+})))

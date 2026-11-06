@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit, Layer, Queue, Ref, Schema, Semaphore, Scope, Stream } from "effect"
+import { Array as EffectArray, Cause, Effect, Exit, Function, Layer, Option, Queue, Ref, Schema, Semaphore, Scope, Stream } from "effect"
 import { Prompt } from "effect/ai"
 import { AgentsRun, AgentRunResult, codeAgentRequestId } from "../Delegation/AgentsRun"
 import { delegationLineage } from "../Delegation/Delegation.lineage"
@@ -12,7 +12,10 @@ import { CodeRuntime, CodeAttempt, GuestCall } from "./CodeRuntime.external"
 import { CodeCall, CodeOutcome, HostCallInput } from "./Code.schemas"
 
 export const CodeExecutionScope = Schema.Struct({ executionId: Schema.NonEmptyString, owner: Schema.NonEmptyString })
-export const codeExecutionKey = (owner: string, executionId: string) => `${owner.length}:${owner}${executionId.length}:${executionId}`
+export const codeExecutionKey: {
+  (executionId: string): (owner: string) => string
+  (owner: string, executionId: string): string
+} = Function.dual(2, (owner: string, executionId: string) => `${owner.length}:${owner}${executionId.length}:${executionId}`)
 export const codeApproval = (ordinal: number) => DurableDeferred.make(`code-approval:${ordinal}`)
 
 export const ExecuteCode = Workflow.make("Tardigrade/ExecuteCode", {
@@ -46,7 +49,7 @@ export const ExecuteCodeLive = Layer.unwrap(Effect.gen(function* () {
       if (call.request.execution !== undefined) {
         const capability = call.request.execution
         const current = yield* authority()
-        const entry = current.code.calls.find(value => value.request.ordinal === call.request.ordinal)
+        const entry = Option.getOrUndefined(EffectArray.findFirst(current.code.calls, value => value.request.ordinal === call.request.ordinal))
         if (entry === undefined) return yield* Effect.die("Code delegation call is unavailable")
         if (entry.outcome !== null) return
         if (current.code.status !== "running" || current.run === null || current.run.runId !== current.code.request.runId || ["completed", "failed", "cancelled", "unknown"].includes(current.run.status)) return yield* Effect.die("Code execution is terminal")
@@ -58,7 +61,8 @@ export const ExecuteCodeLive = Layer.unwrap(Effect.gen(function* () {
             if (toolCalls > capability.toolCalls || toolCalls > current.parent.limits.maxToolCalls) return yield* Effect.die("Delegation tool-call budget exceeded")
             const scope = { threadId: current.code.request.threadId, runId: current.code.request.runId, owner }
             const lineage = yield* delegationLineage(scope, capability.limits).pipe(Effect.provideService(ActorInternalApi.Client, api))
-            return { requestId: codeAgentRequestId(executionId, entry.request.ordinal), parentThreadId: scope.threadId, parentRunId: scope.runId, targetActor: capability.targetActor, lineage, toolCalls, limits: capability.limits, prompt: Prompt.make(params.text) }
+            const requestId = yield* codeAgentRequestId(executionId, entry.request.ordinal)
+            return { requestId, parentThreadId: scope.threadId, parentRunId: scope.runId, targetActor: capability.targetActor, lineage, toolCalls, limits: capability.limits, prompt: Prompt.make(params.text) }
           }),
         })
         const delegationId = delegationKey(reservation.parentThreadId, reservation.parentRunId, reservation.requestId)
@@ -70,7 +74,7 @@ export const ExecuteCodeLive = Layer.unwrap(Effect.gen(function* () {
           yield* api.MarkCodeCallUnknown(executionId, { ordinal: entry.request.ordinal, reason: "Delegated child outcome is unknown; reconciliation required" }, { headers, commandId: commandId(`unknown:${entry.request.ordinal}`) }).pipe(Effect.orDie)
           return yield* Effect.die("Delegated child outcome is unknown")
         }
-        const result = delegated.inbox.find(message => message.content._tag === "Result")
+        const result = Option.getOrUndefined(EffectArray.findFirst(delegated.inbox, message => message.content._tag === "Result"))
         if (delegated.status === "completed" && result?.content._tag === "Result" && result.content.outcome.receipt?.status === "completed") {
           const value = yield* Schema.encodeEffect(AgentRunResult)({ delegationId, childThreadId: delegated.childThreadId, childRunId: delegated.childRunId, targetActor: delegated.reservation.targetActor, status: "completed", text: result.content.outcome.receipt.text }).pipe(Effect.orDie)
           yield* api.SettleCodeCall(executionId, { ordinal: entry.request.ordinal, outcome: { _tag: "Returned", value } }, { headers, commandId: commandId(`settle:${entry.request.ordinal}`) }).pipe(Effect.orDie)
@@ -83,7 +87,7 @@ export const ExecuteCodeLive = Layer.unwrap(Effect.gen(function* () {
         name: `invoke-${call.request.ordinal}`, success: CodeOutcome,
         execute: Effect.gen(function* () {
           const current = yield* authority()
-          const entry = current.code.calls.find(value => value.request.ordinal === call.request.ordinal)
+          const entry = Option.getOrUndefined(EffectArray.findFirst(current.code.calls, value => value.request.ordinal === call.request.ordinal))
           if (current.code.status !== "running" || current.run === null || current.run.runId !== current.code.request.runId || ["completed", "failed", "cancelled", "unknown"].includes(current.run.status) || entry === undefined) return yield* Effect.die("Code execution is terminal")
           if (entry.outcome !== null) return entry.outcome
           if (entry.status === "dispatched") {
@@ -105,14 +109,14 @@ export const ExecuteCodeLive = Layer.unwrap(Effect.gen(function* () {
         yield* api.CancelCode(executionId, { reason: "ParentRunTerminal" }, { headers, commandId: commandId("parent-terminal") }).pipe(Effect.catchTag("CodeRejected", () => Effect.void), Effect.orDie)
         return { outcome: { _tag: "Failed", reason: "ParentRunTerminal" } }
       }
-      const revision = `${code.calls.length}:${code.calls.filter(call => call.settlementSequence !== null).length}`
+      const revision = `${code.calls.length}:${EffectArray.filter(code.calls, call => call.settlementSequence !== null).length}`
       const attempt = yield* Activity.make({
         name: `vm-${revision}`, success: CodeAttempt,
         execute: runtime.evaluate({ request: code.request, calls: code.calls }).pipe(Effect.orDie),
       })
       if (attempt._tag === "Completed") {
         const outcome = attempt.outcome
-        const returned = code.calls.find(call => call.request.ordinal === attempt.returnedCallOrdinal)?.outcome
+        const returned = Option.getOrUndefined(EffectArray.findFirst(code.calls, call => call.request.ordinal === attempt.returnedCallOrdinal))?.outcome
         if (outcome._tag === "Returned" && returned?._tag === "Returned" && returned.modelOutput !== undefined && Schema.toEquivalence(Schema.UndefinedOr(Schema.Json))(returned.value, outcome.value)) {
           const content = { ...outcome, modelOutput: returned.modelOutput }
           yield* api.CompleteCode(executionId, { observedCalls: attempt.observedCalls, outcome: content, logs: attempt.logs }, { headers, commandId: commandId(`complete:${revision}`) }).pipe(Effect.orDie)
@@ -131,20 +135,20 @@ export const ExecuteCodeLive = Layer.unwrap(Effect.gen(function* () {
       }), { concurrency: 1, discard: true })
       const prepared = yield* authority()
       if (prepared.code.status !== "running") return { outcome: { _tag: "Failed", reason: prepared.code.reason ?? prepared.code.status } }
-      const pending = prepared.code.calls.filter(call => call.outcome === null)
+      const pending = EffectArray.filter(prepared.code.calls, call => call.outcome === null)
       const running = yield* Ref.get(live)
-      const ready = pending.filter(call => !running.has(call.request.ordinal) && call.approved)
+      const ready = EffectArray.filter(pending, call => !running.has(call.request.ordinal) && call.approved)
       yield* Effect.forEach(ready, call => Effect.gen(function* () {
         yield* Ref.update(live, values => new Set([...values, call.request.ordinal]))
         yield* Effect.forkScoped(settle(call).pipe(permits.withPermits(1), Effect.onExit(exit => Effect.gen(function* () {
-          yield* Ref.update(live, values => new Set([...values].filter(ordinal => ordinal !== call.request.ordinal)))
+          yield* Ref.update(live, values => new Set(EffectArray.filter([...values], ordinal => ordinal !== call.request.ordinal)))
           yield* Queue.offer(notifications, exit)
         }))))
       }), { concurrency: 1, discard: true })
       const changed = api.CodeExecution.watch(executionId, { headers }).pipe(
         Stream.filter(({ state }) => {
           if (state._tag !== "Open" || state.status !== "running") return true
-          return pending.some(call => !call.approved && state.calls.some(entry => entry.request.ordinal === call.request.ordinal && entry.approved))
+          return EffectArray.some(pending, call => !call.approved && EffectArray.some(state.calls, entry => entry.request.ordinal === call.request.ordinal && entry.approved))
         }),
         Stream.runHead, Effect.orDie, Effect.asVoid,
       )
@@ -158,7 +162,7 @@ export const ExecuteCodeLive = Layer.unwrap(Effect.gen(function* () {
         yield* Effect.raceFirst(settled, Effect.raceFirst(changed, parentChanged))
         return yield* loop()
       }
-      if (pending.some(call => call.request.requiresApproval && !call.approved)) {
+      if (EffectArray.some(pending, call => call.request.requiresApproval && !call.approved)) {
         yield* Effect.raceFirst(changed, parentChanged)
         return yield* loop()
       }
@@ -167,7 +171,7 @@ export const ExecuteCodeLive = Layer.unwrap(Effect.gen(function* () {
     })
     return yield* Effect.gen(function* () {
       if (initial.code.status === "running") {
-        yield* Effect.forEach(initial.code.calls.filter(call => call.status === "dispatched"), settle, {
+        yield* Effect.forEach(EffectArray.filter(initial.code.calls, call => call.status === "dispatched"), settle, {
           concurrency: initial.code.request.limits.maxCalls, discard: true,
         })
       }

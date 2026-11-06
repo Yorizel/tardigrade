@@ -1,4 +1,4 @@
-import { Cause, Context, Effect, Layer, Option, Schema, Stream } from "effect"
+import { Array as EffectArray, Cause, Context, Effect, Layer, Option, Schema, Stream } from "effect"
 import { Activity, Workflow } from "effect/workflow"
 import { ActorInternalApi } from "../ActorInternal.api"
 import { ChildBinding, Receipt } from "../Thread/Thread.schemas"
@@ -24,7 +24,7 @@ export const ExecuteDelegationLive = Layer.unwrap(Effect.gen(function* () {
       if (parent === null || parent._tag !== "Open" || parent.owner !== owner) return yield* Effect.die("Unauthorized parent scope")
       const run = parent.active
       if (run?.runId === delegation.reservation.parentRunId) return { delegation, parent, run }
-      const receipt = parent.receipts.find(entry => entry.runId === delegation.reservation.parentRunId)
+      const receipt = Option.getOrUndefined(EffectArray.findFirst(parent.receipts, entry => entry.runId === delegation.reservation.parentRunId))
       if (receipt === undefined) return yield* Effect.die("Delegation parent run was not admitted")
       return { delegation, parent, run: receipt }
     })

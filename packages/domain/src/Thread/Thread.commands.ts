@@ -14,7 +14,7 @@ export class StepPrepared extends Domain.Event("StepPrepared", { runId: Schema.N
 export class StepDispatched extends Domain.Event("StepDispatched", { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString, turnsAfter: Schema.Int, toolCallsAfter: Schema.Int }) {}
 export class StepRecorded extends Domain.Event("StepRecorded", { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString, prompt: Prompt.Prompt, tokensAfter: Schema.Int, usage: Response.Usage }) {}
 export class RunApproved extends Domain.Event("RunApproved", { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString }) {}
-export class RunCompleted extends Domain.Event("RunCompleted", { runId: Schema.NonEmptyString, text: Schema.String }) {}
+export class RunCompleted extends Domain.Event("RunCompleted", { runId: Schema.NonEmptyString, text: Schema.String, result: Schema.NullOr(Schema.Json) }) {}
 export class RunFailed extends Domain.Event("RunFailed", { runId: Schema.NonEmptyString, reason: Schema.String }) {}
 export class RunCancelled extends Domain.Event("RunCancelled", { runId: Schema.NonEmptyString, reason: Schema.String }) {}
 export class RunBecameUnknown extends Domain.Event("RunBecameUnknown", { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString, reason: Schema.String }) {}
@@ -25,7 +25,7 @@ export class BeginStep extends Domain.Command("BeginStep", { target: ThreadId, i
 export class ConfirmDispatch extends Domain.Command("ConfirmDispatch", { target: ThreadId, input: { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString }, events: [StepDispatched], rejects: [RunRejected] }) {}
 export class RecordStep extends Domain.Command("RecordStep", { target: ThreadId, input: { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString, prompt: Prompt.Prompt, usage: Response.Usage }, events: [StepRecorded, StepOutputRejected, RunFailed], rejects: [RunRejected] }) {}
 export class ApproveRun extends Domain.Command("ApproveRun", { target: ThreadId, middleware: [ReceiptOwnerGuard, Session], input: { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString }, events: [RunApproved], rejects: [NotOwner, RunRejected] }) {}
-export class CompleteRun extends Domain.Command("CompleteRun", { target: ThreadId, input: { runId: Schema.NonEmptyString, text: Schema.String }, events: [RunCompleted], rejects: [RunRejected] }) {}
+export class CompleteRun extends Domain.Command("CompleteRun", { target: ThreadId, input: { runId: Schema.NonEmptyString, text: Schema.String }, events: [RunCompleted, RunFailed], rejects: [RunRejected] }) {}
 export class FailRun extends Domain.Command("FailRun", { target: ThreadId, input: { runId: Schema.NonEmptyString, reason: Schema.String }, events: [RunFailed, RunBecameUnknown], rejects: [RunRejected] }) {}
 export class CancelRun extends Domain.Command("CancelRun", { target: ThreadId, middleware: [ReceiptOwnerGuard, Session], input: { runId: Schema.NonEmptyString, reason: Schema.String }, events: [RunCancelled, RunBecameUnknown], rejects: [NotOwner, RunRejected] }) {}
 export class MarkUnknown extends Domain.Command("MarkUnknown", { target: ThreadId, input: { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString, reason: Schema.String }, events: [RunBecameUnknown], rejects: [RunRejected] }) {}

@@ -5,7 +5,7 @@ import { CodeCall, CodeInput, CodeOutcome, HostCallInput, CodeSettlementSequence
 
 export class CodeRejected extends Domain.Rejection("CodeRejected", { reason: Schema.NonEmptyString }, { httpApiStatus: 409 }) {}
 export class CodeNotOwner extends Domain.Rejection("CodeNotOwner", {}, { httpApiStatus: 403 }) {}
-export class CodeStarted extends Domain.Event("CodeStarted", { owner: Schema.NonEmptyString, request: CodeInput, startedAt: Schema.Number, deadlineAt: Schema.Number }) {}
+export class CodeStarted extends Domain.Event("CodeStarted", { owner: Schema.NonEmptyString, request: CodeInput, startedAt: Schema.Finite, deadlineAt: Schema.Finite }) {}
 export class CodeCallPrepared extends Domain.Event("CodeCallPrepared", { call: CodeCall }) {}
 export class CodeCallReplayed extends Domain.Event("CodeCallReplayed", { ordinal: Schema.Int }) {}
 export class CodeCallApproved extends Domain.Event("CodeCallApproved", { ordinal: Schema.Int }) {}

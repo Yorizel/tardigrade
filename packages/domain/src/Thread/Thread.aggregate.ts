@@ -2,10 +2,12 @@ import { CompactionSettlement } from "../Execution/Context.schemas"
 import { planCompaction, compactedPrompt, promptChars } from "../Execution/Context.compaction"
 import { BeginCompaction, RecordCompaction, ContextCompactionPlanned, ContextCompacted, ContextCompactionDiscarded } from "./Thread.commands"
 import * as Domain from "@alchemy.run/domain"
-import { DateTime, Effect, Schema } from "effect"
+import { DateTime, Effect, Option, Schema } from "effect"
 import { delegationKey } from "../Delegation/Delegation.schemas"
 import { CurrentCaller, Session } from "../Actor.context"
-import { ThreadId, ThreadState, RunLimits, Prompt, StepSettlement, OpenState, RunRequest, ChildBinding, ChildAdmission } from "./Thread.schemas"
+import { ThreadId, ThreadState, RunLimits, Prompt, StepSettlement, OpenState, Run, RunRequest, ChildBinding, ChildAdmission } from "./Thread.schemas"
+import { validateOutput } from "../Output/Output"
+import { OutputDeclaration } from "../Output/Output.schemas"
 import { OpenThread, RequestRun, BeginStep, ConfirmDispatch, RecordStep, ApproveRun, CompleteRun, FailRun, CancelRun, MarkUnknown, ThreadOpened, RunRequested, StepPrepared, StepDispatched, StepRecorded, RunApproved, RunCompleted, RunFailed, RunCancelled, RunBecameUnknown, RunRejected, NotOwner, RunAcknowledged, StepOutputRejected, ExpireRun, StepReconciled, ResolveUnknown, ChildAdmissionReserved, ChildAdmissionClosed, ChildThreadOpened, ReserveChildThread, OpenChildThread, RequestChildRun, FenceChildThread } from "./Thread.commands"
 
 const owned = Effect.fn("Thread.owned")(function* (state: typeof ThreadState.Type) {
@@ -21,22 +23,24 @@ const working = (state: typeof ThreadState.Type, runId: string) => {
   return { thread: state, run: state.active }
 }
 
+const receiptOf = (run: typeof Run.Type) => ({ runId: run.runId, digest: run.digest, input: run.input, output: run.output, status: run.status, tokens: run.tokens, compactions: run.compactions, step: run.step, text: run.text, result: run.result, reason: run.reason })
+
 const admitRun = Effect.fn("Thread.admitRun")(function* (current: typeof OpenState.Type, command: typeof RunRequest.Type, now: DateTime.Utc) {
       const previous = current.receipts.find(receipt => receipt.runId === command.runId)
       if (previous !== undefined) {
-        if (previous.digest !== command.digest || !Schema.toEquivalence(Prompt.Prompt)(previous.input, command.prompt)) return yield* new RunRejected({ reason: "RunIdConflict" })
+        if (previous.digest !== command.digest || !Schema.toEquivalence(Prompt.Prompt)(previous.input, command.prompt) || !Schema.toEquivalence(Schema.NullOr(OutputDeclaration))(previous.output, command.output ?? null)) return yield* new RunRejected({ reason: "RunIdConflict" })
         return [RunAcknowledged.make({ receipt: previous })]
       }
       if (current.active !== null && current.active.runId === command.runId) {
-        if (current.active.digest !== command.digest || !Schema.toEquivalence(Prompt.Prompt)(current.active.input, command.prompt)) return yield* new RunRejected({ reason: "RunIdConflict" })
-        return [RunAcknowledged.make({ receipt: { runId: current.active.runId, digest: current.active.digest, input: current.active.input, status: current.active.status, text: current.active.text, reason: current.active.reason } })]
+        if (current.active.digest !== command.digest || !Schema.toEquivalence(Prompt.Prompt)(current.active.input, command.prompt) || !Schema.toEquivalence(Schema.NullOr(OutputDeclaration))(current.active.output, command.output ?? null)) return yield* new RunRejected({ reason: "RunIdConflict" })
+        return [RunAcknowledged.make({ receipt: receiptOf(current.active) })]
       }
       if (current.active !== null && !["completed", "failed", "cancelled"].includes(current.active.status)) return yield* new RunRejected({ reason: "RunBusy" })
       if (current.active !== null && current.receipts.length + 1 >= current.limits.maxRuns) return yield* new RunRejected({ reason: "RunHistoryLimit" })
       const prompt = Prompt.concat(current.history, command.prompt)
       if (prompt.content.length > current.limits.maxMessages) return yield* new RunRejected({ reason: "MessageBudgetExceeded" })
       const startedAt = DateTime.toEpochMillis(now)
-      return [RunRequested.make({ run: { runId: command.runId, digest: command.digest, input: command.prompt, prompt, status: "pending", startedAt, deadlineAt: startedAt + current.limits.maxDurationMs, turns: 0, toolCalls: 0, tokens: 0, stepSerial: 0, settlements: [], compactions: [], step: null, text: "", reason: null } })]
+      return [RunRequested.make({ run: { runId: command.runId, digest: command.digest, output: command.output ?? null, input: command.prompt, prompt, status: "pending", startedAt, deadlineAt: startedAt + current.limits.maxDurationMs, turns: 0, toolCalls: 0, tokens: 0, stepSerial: 0, settlements: [], compactions: [], step: null, text: "", result: null, reason: null } })]
 })
 
 const admissionOf = (state: typeof ThreadState.Type) => {
@@ -147,6 +151,20 @@ export class Thread extends Domain.Aggregate("Thread", {
       return [planned, StepPrepared.make({ runId: command.runId, step: { stepId: command.stepId, kind: "compaction", mutation: false, requiresApproval: false, approved: true, dispatched: false } })]
     },
     RecordCompaction: (state, command, { now }) => {
+      if (state._tag === "Open" && state.active?.runId !== command.runId) {
+        const archived = state.receipts.find(receipt => receipt.runId === command.runId)
+        if (archived === undefined) return new RunRejected({ reason: "UnknownRun" })
+        const settled = archived.compactions.find(entry => entry.stepId === command.stepId)
+        if (settled !== undefined) {
+          if (Schema.toEquivalence(CompactionSettlement)(settled, { stepId: command.stepId, summary: command.summary, usage: command.usage })) return []
+          return new RunRejected({ reason: "StepResultConflict" })
+        }
+        if (archived.step === null || archived.step.kind !== "compaction" || archived.step.stepId !== command.stepId || !archived.step.dispatched) return new RunRejected({ reason: "UnknownStep" })
+        const input = command.usage.inputTokens.total
+        const output = command.usage.outputTokens.total
+        if (input === undefined || output === undefined || input < 0 || output < 0) return new RunRejected({ reason: "UsageUnavailable" })
+        return [ContextCompactionDiscarded.make({ runId: command.runId, stepId: command.stepId, summary: command.summary, usage: command.usage, tokensAfter: archived.tokens + input + output, reason: archived.reason ?? "RunTerminal" })]
+      }
       if (state._tag === "Open" && state.active?.runId === command.runId) {
         const settled = state.active.compactions.find(step => step.stepId === command.stepId)
         if (settled !== undefined) {
@@ -154,20 +172,22 @@ export class Thread extends Domain.Aggregate("Thread", {
           return new RunRejected({ reason: "StepResultConflict" })
         }
       }
-      const current = working(state, command.runId)
-      if ("_tag" in current) return current
+      if (state._tag !== "Open" || state.active === null || state.active.runId !== command.runId) return new RunRejected({ reason: "UnknownRun" })
+      const current = { thread: state, run: state.active }
       const step = current.run.step
       if (step === null || step.stepId !== command.stepId || step.kind !== "compaction" || !step.dispatched) return new RunRejected({ reason: "UnknownStep" })
       const policy = current.thread.limits.context
       if (policy === undefined) return new RunRejected({ reason: "ContextDisabled" })
-      const selection = planCompaction(current.run.prompt, current.run.input, policy)
-      if (selection.reason !== null) return new RunRejected({ reason: selection.reason })
-      if (selection.plan === null) return new RunRejected({ reason: "ContextPlanMissing" })
       const input = command.usage.inputTokens.total
       const output = command.usage.outputTokens.total
       if (input === undefined || output === undefined || input < 0 || output < 0) return new RunRejected({ reason: "UsageUnavailable" })
       const tokensAfter = current.run.tokens + input + output
-      const discard = (reason: string) => [ContextCompactionDiscarded.make({ runId: command.runId, stepId: command.stepId, summary: command.summary, usage: command.usage, tokensAfter, reason }), RunFailed.make({ runId: command.runId, reason })]
+      const discarded = (reason: string) => ContextCompactionDiscarded.make({ runId: command.runId, stepId: command.stepId, summary: command.summary, usage: command.usage, tokensAfter, reason })
+      if (["completed", "failed", "cancelled", "unknown"].includes(current.run.status)) return [discarded(current.run.reason ?? "RunTerminal")]
+      const discard = (reason: string) => [discarded(reason), RunFailed.make({ runId: command.runId, reason })]
+      const selection = planCompaction(current.run.prompt, current.run.input, policy)
+      if (selection.reason !== null) return discard(selection.reason)
+      if (selection.plan === null) return discard("ContextPlanMissing")
       if (command.summary.trim().length === 0 || command.summary.length > policy.maxSummaryChars) return discard("SummaryBudgetExceeded")
       if (output > policy.maxOutputTokens) return discard("SummaryOutputBudgetExceeded")
       if (DateTime.toEpochMillis(now) >= current.run.deadlineAt) return discard("DurationBudgetExceeded")
@@ -240,7 +260,10 @@ export class Thread extends Domain.Aggregate("Thread", {
       if ("_tag" in current) return current
       if (DateTime.toEpochMillis(now) >= current.run.deadlineAt) return new RunRejected({ reason: "DurationBudgetExceeded" })
       if (current.run.step !== null) return new RunRejected({ reason: "StepPending" })
-      return [RunCompleted.make({ runId: command.runId, text: command.text })]
+      if (current.run.output === null) return [RunCompleted.make({ runId: command.runId, text: command.text, result: null })]
+      const result = validateOutput(current.run.output, command.text)
+      if (Option.isNone(result)) return [RunFailed.make({ runId: command.runId, reason: "output_validation_failed" })]
+      return [RunCompleted.make({ runId: command.runId, text: command.text, result: result.value })]
     },
     FailRun: (state, command) => {
       if (state._tag === "Open" && state.active?.runId === command.runId && state.active.status === "failed" && state.active.reason === command.reason) return []
@@ -279,8 +302,14 @@ export class Thread extends Domain.Aggregate("Thread", {
   evolve: {
     ContextCompactionPlanned: state => state,
     ContextCompactionDiscarded: (state, event) => {
-      if (state._tag !== "Open" || state.active === null) return state
-      return { ...state, active: { ...state.active, tokens: event.tokensAfter, compactions: [...state.active.compactions, { stepId: event.stepId, summary: event.summary, usage: event.usage }], step: null } }
+      if (state._tag !== "Open") return state
+      if (state.active?.runId !== event.runId) return { ...state, receipts: state.receipts.map(receipt => {
+        if (receipt.runId !== event.runId) return receipt
+        return { ...receipt, tokens: event.tokensAfter, compactions: [...receipt.compactions, { stepId: event.stepId, summary: event.summary, usage: event.usage }], step: null }
+      }) }
+      const active = { ...state.active, tokens: event.tokensAfter, compactions: [...state.active.compactions, { stepId: event.stepId, summary: event.summary, usage: event.usage }], step: null }
+      if (state.lastReceipt?.runId === event.runId) return { ...state, active, lastReceipt: receiptOf(active) }
+      return { ...state, active }
     },
     ContextCompacted: (state, event) => {
       if (state._tag !== "Open" || state.active === null) return state
@@ -306,9 +335,9 @@ export class Thread extends Domain.Aggregate("Thread", {
     },
     RunRequested: (state, event) => {
       if (state._tag !== "Open") return state
-      const lastReceipt = { runId: event.run.runId, digest: event.run.digest, input: event.run.input, status: event.run.status, text: event.run.text, reason: event.run.reason }
+      const lastReceipt = receiptOf(event.run)
       if (state.active === null) return { ...state, active: event.run, lastReceipt }
-      return { ...state, active: event.run, lastReceipt, receipts: [...state.receipts, { runId: state.active.runId, digest: state.active.digest, input: state.active.input, status: state.active.status, text: state.active.text, reason: state.active.reason }] }
+      return { ...state, active: event.run, lastReceipt, receipts: [...state.receipts, receiptOf(state.active)] }
     },
     StepReconciled: (state, event) => {
       if (state._tag !== "Open" || state.active === null) return state
@@ -341,11 +370,13 @@ export class Thread extends Domain.Aggregate("Thread", {
     },
     RunCompleted: (state, event) => {
       if (state._tag !== "Open" || state.active === null) return state
-      return { ...state, history: state.active.prompt, active: { ...state.active, status: "completed" as const, text: event.text } }
+      const active = { ...state.active, status: "completed" as const, text: event.text, result: event.result }
+      return { ...state, history: active.prompt, active, lastReceipt: receiptOf(active) }
     },
     RunFailed: (state, event) => {
       if (state._tag !== "Open" || state.active === null) return state
-      return { ...state, active: { ...state.active, status: "failed" as const, reason: event.reason } }
+      const active = { ...state.active, status: "failed" as const, reason: event.reason }
+      return { ...state, active, lastReceipt: receiptOf(active) }
     },
     RunCancelled: (state, event) => {
       if (state._tag !== "Open" || state.active === null) return state

@@ -1,22 +1,121 @@
+import * as Domain from "@alchemy.run/domain"
 import { Effect, Schema } from "effect"
-import { actorMethod, event, atom, defineActor, durableAtom } from "@clavia/tardigrade-core"
+import { CurrentCaller, ReceiptOwnerGuard, Session } from "@clavia/tardigrade-domain"
 
-const Message = event({ type: "NoteReceived", id: Schema.String, text: Schema.String })
-const messages = durableAtom({ name: "examples.inbox.messages",
-  input: Message,
-  schema: Schema.Array(Schema.Struct({ id: Schema.String, text: Schema.String })),
-  initial: [],
-  reduce: (state, event: typeof Message.Type) => [...state, { id: event.id, text: event.text }],
+const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0))
+
+export const InboxPolicy = Schema.Struct({
+  maxMessages: PositiveInt,
+  maxMessageIdChars: PositiveInt,
+  maxTextChars: PositiveInt,
 })
-export const actor = defineActor("inbox", Effect.succeed({
-  atom: atom(get => ({ messages: get(messages) })), methods: {
-    message: actorMethod({
-      inputSchema: Schema.Struct({ text: Schema.String }), outputSchema: Schema.String,
-      onReceive: Message.from((input, context) => ({ id: context.id, text: input.text })),
-      result: (_, get, context) => {
-        const message = get(messages).find(message => message.id === context.id)
-        return message ? { status: "completed" as const, output: message.text } : undefined
-      },
+
+export const DEFAULT_INBOX_POLICY: typeof InboxPolicy.Type = {
+  maxMessages: 100,
+  maxMessageIdChars: 128,
+  maxTextChars: 4_000,
+}
+
+const InboxId = Schema.NonEmptyString
+const Message = Schema.Struct({ id: Schema.NonEmptyString, text: Schema.String })
+const InboxState = Schema.Union([
+  Schema.Struct({ _tag: Schema.Literal("Unopened") }),
+  Schema.Struct({
+    _tag: Schema.Literal("Open"),
+    owner: Schema.NonEmptyString,
+    policy: InboxPolicy,
+    messages: Schema.Array(Message),
+  }),
+])
+
+export class InboxRejected extends Domain.Rejection("InboxRejected", { reason: Schema.Literals(["AlreadyOpen", "NotOpen", "MessageIdTooLong", "MessageTooLong", "MessageLimitExceeded", "MessageIdConflict"]) }, { httpApiStatus: 409 }) {}
+export class InboxNotOwner extends Domain.Rejection("InboxNotOwner", {}, { httpApiStatus: 403 }) {}
+
+export class InboxOpened extends Domain.Event("InboxOpened", { owner: Schema.NonEmptyString, policy: InboxPolicy }) {}
+export class InboxMessageReceived extends Domain.Event("InboxMessageReceived", { message: Message }) {}
+export class InboxMessageAcknowledged extends Domain.Event("InboxMessageAcknowledged", { message: Message }) {}
+
+export class OpenInbox extends Domain.Command("OpenInbox", {
+  target: InboxId,
+  middleware: [ReceiptOwnerGuard, Session],
+  input: { policy: InboxPolicy },
+  events: [InboxOpened],
+  rejects: [InboxRejected, InboxNotOwner],
+}) {}
+export class PostInboxMessage extends Domain.Command("PostInboxMessage", {
+  target: InboxId,
+  middleware: [ReceiptOwnerGuard, Session],
+  input: { id: Schema.NonEmptyString, text: Schema.String },
+  events: [InboxMessageReceived, InboxMessageAcknowledged],
+  reply: { text: Schema.NullOr(Schema.String) },
+  rejects: [InboxRejected, InboxNotOwner],
+}) {}
+
+const owned = Effect.fn("ExampleInbox.owned")(function* (state: typeof InboxState.Type) {
+  const caller = yield* CurrentCaller
+  if (state._tag === "Unopened" || state.owner !== caller.subject) return yield* new InboxNotOwner()
+  return state
+})
+
+export class Inbox extends Domain.Aggregate("ExampleInbox", {
+  id: InboxId,
+  state: InboxState,
+  initial: { _tag: "Unopened" },
+  commands: [OpenInbox, PostInboxMessage],
+  decide: {
+    OpenInbox: Effect.fn("ExampleInbox.OpenInbox")(function* (state, command) {
+      const caller = yield* CurrentCaller
+      if (state._tag === "Open") {
+        if (state.owner !== caller.subject) return yield* new InboxNotOwner()
+        if (!Schema.toEquivalence(InboxPolicy)(state.policy, command.policy)) return yield* new InboxRejected({ reason: "AlreadyOpen" })
+        return []
+      }
+      return [InboxOpened.make({ owner: caller.subject, policy: command.policy })]
+    }),
+    PostInboxMessage: Effect.fn("ExampleInbox.PostInboxMessage")(function* (state, command) {
+      const current = yield* owned(state)
+      if (command.id.length > current.policy.maxMessageIdChars) return yield* new InboxRejected({ reason: "MessageIdTooLong" })
+      const previous = current.messages.find(message => message.id === command.id)
+      if (previous !== undefined) {
+        if (!Schema.toEquivalence(Message)(previous, command)) return yield* new InboxRejected({ reason: "MessageIdConflict" })
+        return [InboxMessageAcknowledged.make({ message: previous })]
+      }
+      if (command.text.length > current.policy.maxTextChars) return yield* new InboxRejected({ reason: "MessageTooLong" })
+      if (current.messages.length >= current.policy.maxMessages) return yield* new InboxRejected({ reason: "MessageLimitExceeded" })
+      return [InboxMessageReceived.make({ message: { id: command.id, text: command.text } })]
     }),
   },
-}))
+  evolve: {
+    InboxOpened: (_state, event) => ({ _tag: "Open" as const, owner: event.owner, policy: event.policy, messages: [] }),
+    InboxMessageReceived: (state, event) => {
+      if (state._tag !== "Open") return state
+      return { ...state, messages: [...state.messages, event.message] }
+    },
+    InboxMessageAcknowledged: state => state,
+  },
+  reply: {
+    PostInboxMessage: (_state, events) => {
+      const settled = events.find(event => event._tag === "InboxMessageReceived" || event._tag === "InboxMessageAcknowledged")
+      if (settled === undefined) return { text: null }
+      return { text: settled.message.text }
+    },
+  },
+  read: {
+    middleware: [Session],
+    rejects: [InboxRejected, InboxNotOwner],
+    validate: Effect.fn("ExampleInbox.read")(function* (_request, state) {
+      if (state === null) return yield* new InboxNotOwner()
+      yield* owned(state)
+    }),
+  },
+}) {}
+
+export const InboxModel = Domain.Model("ExampleInbox", { aggregates: [Inbox] })
+
+export class InboxApi extends Domain.Api("ExampleInbox", {
+  model: InboxModel,
+  commands: ["OpenInbox", "PostInboxMessage"],
+  aggregates: ["ExampleInbox"],
+  views: [],
+  streams: [],
+}) {}

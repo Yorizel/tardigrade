@@ -1,8 +1,9 @@
-import { OpenAiLanguageModel } from "@effect/ai-openai"
+import { OpenAiConfig, OpenAiSchema, OpenAiLanguageModel } from "@effect/ai-openai"
 import { AgentExecution, AgentsRun, CodeMethods, CodeTool, CodeLimits, DEFAULT_CODE_LIMITS, DelegateTool, DelegationLimits, DEFAULT_DELEGATION_LIMITS, ExecutionRejected, RunScope, SpillStorage, SpillPolicy, DEFAULT_SPILL_POLICY } from "tardie/domain"
 import { Config, Context, DateTime, Effect, Layer, Result, Schema, Stream } from "effect"
 import { FetchGet, FetchRequest, FetchTools, FetchToolsLive, WriteText, ReadText, ListTexts, WorkspaceTools, invokeWorkspaceTool, ReadSpill, GrepSpills, SpillTools } from "tardie/platform/cluster"
 import { LanguageModel, Prompt, Tool, Toolkit } from "effect/ai"
+import { HttpClient, HttpClientRequest } from "effect/http"
 
 const CurrentTime = Tool.make("current_time", {
   description: "Read the current UTC time.",
@@ -198,7 +199,7 @@ export const AgentExecutionLive = AgentExecution.toLayer(Effect.gen(function* ()
     infer: Effect.fn("AgentExecution.infer")(function* (input) {
       if (input.actor !== actor) return yield* new ExecutionRejected({ reason: "UnknownActor" })
       if (input.remainingTokens <= 0) return yield* new ExecutionRejected({ reason: "TokenBudgetExceeded" })
-      const response = yield* LanguageModel.generateText({
+      const generate = LanguageModel.generateText({
         prompt: Prompt.concat(Prompt.make([{ role: "system", content: system }]), input.prompt),
         toolkit: modelTools,
         disableToolCallResolution: true,
@@ -206,6 +207,22 @@ export const AgentExecutionLive = AgentExecution.toLayer(Effect.gen(function* ()
         OpenAiLanguageModel.withConfigOverride({ max_output_tokens: input.remainingTokens }),
         Effect.provideService(LanguageModel.LanguageModel, model),
       )
+      const response = yield* Effect.gen(function* () {
+        const declaration = input.output
+        if (declaration === undefined || declaration === null) return yield* generate
+        const inherited = yield* OpenAiConfig.OpenAiConfig.getOrUndefined
+        const formatRequest = HttpClient.mapRequestEffect(Effect.fn("AgentExecution.outputFormat")(function* (request) {
+          if (!request.url.endsWith("/responses")) return request
+          if (request.body._tag !== "Uint8Array") return yield* Effect.die("Expected native OpenAI JSON request body")
+          const body = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(OpenAiSchema.CreateResponse))(new TextDecoder().decode(request.body.body)).pipe(Effect.orDie)
+          const schema = yield* Schema.decodeUnknownEffect(Schema.Record(Schema.String, Schema.Json))(declaration.schema).pipe(Effect.orDie)
+          return yield* HttpClientRequest.schemaBodyJson(OpenAiSchema.CreateResponse)(request, { ...body, text: { ...body.text, format: { type: "json_schema", name: declaration.name, schema, strict: true } } }).pipe(Effect.orDie)
+        }))
+        return yield* generate.pipe(OpenAiConfig.withClientTransform(client => {
+          if (inherited?.transformClient !== undefined) return formatRequest(inherited.transformClient(client))
+          return formatRequest(client)
+        }))
+      })
       if (new Set(response.toolCalls.map(call => call.id)).size !== response.toolCalls.length) return yield* new ExecutionRejected({ reason: "DuplicateToolCallId" })
       const planned = yield* Effect.forEach(response.toolCalls, Effect.fn("AgentExecution.planTool")(function* (call) {
         if (call.providerExecuted) return yield* new ExecutionRejected({ reason: "UnexposedTool" })

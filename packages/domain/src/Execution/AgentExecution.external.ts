@@ -4,6 +4,7 @@ import { AgentRunCapability } from "../Delegation/AgentsRun"
 import { CodeInput } from "../Code/Code.schemas"
 import { AiError, Prompt, Response } from "effect/ai"
 import { ContextPolicy, ContextSummary } from "./Context.schemas"
+import { OutputDeclaration } from "../Output/Output.schemas"
 import { RunScope } from "./Run.workflow"
 
 export class ExecutionRejected extends Domain.Rejection("ExecutionRejected", { reason: Schema.String }) {}
@@ -21,7 +22,7 @@ export class AgentExecution extends Domain.ExternalSystem("AgentExecution", {
     error: [AiError.AiError, ExecutionRejected],
   },
   infer: {
-    args: { actor: Schema.NonEmptyString, operationId: Schema.NonEmptyString, prompt: Prompt.Prompt, remainingTokens: Schema.Int },
+    args: { actor: Schema.NonEmptyString, operationId: Schema.NonEmptyString, prompt: Prompt.Prompt, remainingTokens: Schema.Int, output: Schema.optionalKey(Schema.NullOr(OutputDeclaration)) },
     success: ModelTurn,
     error: [AiError.AiError, ExecutionRejected],
   },

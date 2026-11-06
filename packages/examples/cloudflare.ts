@@ -1,14 +1,14 @@
-/// <reference types="@cloudflare/workers-types" />
+import * as Cloudflare from "@alchemy.run/cloudflare"
+import * as DomainCloudflare from "@alchemy.run/cloudflare/Domain"
+import { SessionLive } from "@clavia/tardigrade-platform/alchemy"
+import { Effect, Layer } from "effect"
+import { InboxApi, InboxModel } from "./agents/inbox"
 
-import { Layer } from "effect"
-import { createActorWorker } from "@clavia/tardigrade-platform/cloudflare"
-
-import { actor } from "./agents/inbox"
-
-const worker = createActorWorker({ actor, services: () => Layer.empty })
-export const ActorDO = worker.ActorObject
-export const ThreadDO = worker.ThreadObject
-
-export default {
-  fetch: worker.fetch,
-}
+export default class InboxWorker extends Cloudflare.Worker<InboxWorker>()(
+  "Inbox",
+  { main: import.meta.url, compatibility: { date: "2026-11-06", flags: ["nodejs_compat"] } },
+  Effect.gen(function* () {
+    const api = yield* InboxApi.pipe(Effect.provide(SessionLive))
+    return { fetch: api.fetch }
+  }).pipe(Effect.provide(InboxModel.layer(Layer.empty).pipe(Layer.provide(DomainCloudflare.layerDurableObjects())))),
+) {}

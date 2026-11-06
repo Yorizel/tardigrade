@@ -1,5 +1,5 @@
 import { Ownership } from "../Actor.context"
-import { Schema } from "effect"
+import { Function, Schema } from "effect"
 import { Prompt } from "effect/ai"
 import { Receipt, ChildBinding, ChildReservedState, OpenState, ChildAdmission } from "../Thread/Thread.schemas"
 
@@ -59,7 +59,10 @@ export const ReservedState = Schema.TaggedStruct("Reserved", {
   replies: Schema.Array(ChildReply),
 })
 export const DelegationState = Schema.Union([Schema.TaggedStruct("Unreserved", {}), ReservedState])
-export const delegationKey = (parentThreadId: string, parentRunId: string, requestId: string) => `${parentThreadId.length}:${parentThreadId}${parentRunId.length}:${parentRunId}${requestId}`
+export const delegationKey: {
+  (parentRunId: string, requestId: string): (parentThreadId: string) => string
+  (parentThreadId: string, parentRunId: string, requestId: string): string
+} = Function.dual(3, (parentThreadId: string, parentRunId: string, requestId: string) => `${parentThreadId.length}:${parentThreadId}${parentRunId.length}:${parentRunId}${requestId}`)
 
 export const FencedChildAbsent = Schema.Union([
   Schema.Struct({ ...ChildReservedState.fields, closed: Schema.Literal(true) }),
@@ -72,7 +75,10 @@ export const FencedChildAbsent = Schema.Union([
   }),
 ])
 export const DelegationExecutionScope = Schema.Struct({ delegationId: ReservedState.fields.delegationId, ...Ownership.fields })
-export const delegationExecutionKey = (owner: string, delegationId: string) => `${owner.length}:${owner}${delegationId.length}:${delegationId}`
+export const delegationExecutionKey: {
+  (delegationId: string): (owner: string) => string
+  (owner: string, delegationId: string): string
+} = Function.dual(2, (owner: string, delegationId: string) => `${owner.length}:${owner}${delegationId.length}:${delegationId}`)
 export const childBindingOf = (delegation: typeof ReservedState.Type) => ChildBinding.make({
   delegationId: delegation.delegationId,
   parentThreadId: delegation.reservation.parentThreadId,

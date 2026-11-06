@@ -5,7 +5,7 @@ import { expect, test } from "bun:test"
 import { Delegation } from "../src/Delegation/Delegation.aggregate"
 import { AcknowledgeDelegationInbox, ConfirmDelegationFencedNotStarted, MarkDelegationStarted, RecordChildMessage, RecordChildOutcome, ReplyToChild, RequestDelegationCancellation, ReserveDelegation, ResolveDelegation } from "../src/Delegation/Delegation.commands"
 import { DEFAULT_DELEGATION_LIMITS, delegationKey, FencedChildAbsent, childBindingOf } from "../src/Delegation/Delegation.schemas"
-import { ReceiptOwnerGuardLive } from "../src/Actor.model"
+import { ReceiptOwnerGuardLive } from "../src/ReceiptOwnerGuard.middleware"
 import { CurrentCaller, Session } from "../src/Actor.context"
 
 const TestModel = Domain.Model("DelegationTest", { aggregates: [Delegation] })
@@ -20,7 +20,7 @@ const reservation = {
   requestId: "request", parentThreadId: "parent", parentRunId: "parent-run", targetActor: "assistant", lineage: ["parent"], toolCalls: 3,
   limits: DEFAULT_DELEGATION_LIMITS, prompt: Prompt.make("Read the document"),
 }
-const completed = { runId: "request", digest: "child", input: reservation.prompt, status: "completed" as const, text: "Done", reason: null }
+const completed = { output: null, result: null, tokens: 0, compactions: [], step: null, runId: "request", digest: "child", input: reservation.prompt, status: "completed" as const, text: "Done", reason: null }
 const run = <A, E>(program: Effect.Effect<A, E, Layer.Success<typeof platform> | CurrentCaller>) => Effect.runPromise(program.pipe(
   Effect.provideService(CurrentCaller, { subject: "alice" }),
   Effect.provide(platform),

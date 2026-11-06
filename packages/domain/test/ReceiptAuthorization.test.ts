@@ -4,7 +4,7 @@ import { ConfigProvider, Deferred, Effect, Fiber, Layer, Result } from "effect"
 import { Prompt } from "effect/ai"
 import { SessionLive } from "../../platform/src/alchemy/session"
 import { ReceiptOwnerGuard } from "../src/Actor.context"
-import { ReceiptOwnerGuardLive } from "../src/Actor.model"
+import { ReceiptOwnerGuardLive } from "../src/ReceiptOwnerGuard.middleware"
 import { Thread } from "../src/Thread/Thread.aggregate"
 import { DEFAULT_RUN_LIMITS } from "../src/Thread/Thread.schemas"
 

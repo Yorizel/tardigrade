@@ -65,7 +65,7 @@ export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
             return yield* new ExecutionRejected({ reason: "ModelOutcomeUnknown" })
           }
           yield* commands.ConfirmDispatch(threadId, { runId, stepId: modelStep }, { headers, commandId: runKey(threadId, `dispatch:${modelStep}`) }).pipe(Effect.orDie)
-          return yield* execution.infer({ actor: state.actor, operationId: runKey(threadId, modelStep), prompt: accepted.prompt, remainingTokens: state.limits.maxTokens - state.active.tokens }).pipe(Effect.orDie)
+          return yield* execution.infer({ actor: state.actor, operationId: runKey(threadId, modelStep), prompt: accepted.prompt, output: state.active.output, remainingTokens: state.limits.maxTokens - state.active.tokens }).pipe(Effect.orDie)
         }),
       })
       yield* Activity.make({ name: `record-${modelStep}`, error: RunRejected, execute: commands.RecordStep(threadId, { runId, stepId: modelStep, prompt: model.prompt, usage: model.usage }, { headers, commandId: runKey(threadId, `record:${modelStep}`) }).pipe(Effect.orDie, Effect.asVoid) })

@@ -2,6 +2,7 @@ import { ContextPolicy, CompactionSettlement } from "../Execution/Context.schema
 import { Ownership } from "../Actor.context"
 import { Schema } from "effect"
 import { Prompt, Response } from "effect/ai"
+import { OutputDeclaration } from "../Output/Output.schemas"
 
 export const ThreadId = Schema.NonEmptyString
 export const RunLimits = Schema.Struct({
@@ -27,6 +28,7 @@ export const StepSettlement = Schema.Struct({ stepId: Schema.NonEmptyString, pro
 export const Run = Schema.Struct({
   runId: Schema.NonEmptyString,
   digest: Schema.NonEmptyString,
+  output: Schema.NullOr(OutputDeclaration),
   input: Prompt.Prompt,
   prompt: Prompt.Prompt,
   status: RunStatus,
@@ -40,10 +42,11 @@ export const Run = Schema.Struct({
   compactions: Schema.Array(CompactionSettlement),
   step: Schema.NullOr(Step),
   text: Schema.String,
+  result: Schema.NullOr(Schema.Json),
   reason: Schema.NullOr(Schema.String),
 })
-export const Receipt = Schema.Struct({ runId: Schema.NonEmptyString, digest: Schema.NonEmptyString, input: Prompt.Prompt, status: RunStatus, text: Schema.String, reason: Schema.NullOr(Schema.String) })
-export const RunRequest = Schema.Struct({ runId: Schema.NonEmptyString, digest: Schema.NonEmptyString, prompt: Prompt.Prompt })
+export const Receipt = Schema.Struct({ runId: Schema.NonEmptyString, digest: Schema.NonEmptyString, input: Prompt.Prompt, output: Schema.NullOr(OutputDeclaration), status: RunStatus, tokens: Schema.Int, compactions: Schema.Array(CompactionSettlement), step: Schema.NullOr(Step), text: Schema.String, result: Schema.NullOr(Schema.Json), reason: Schema.NullOr(Schema.String) })
+export const RunRequest = Schema.Struct({ runId: Schema.NonEmptyString, digest: Schema.NonEmptyString, prompt: Prompt.Prompt, output: Schema.optionalKey(OutputDeclaration) })
 export const ChildBinding = Schema.Struct({
   delegationId: Schema.NonEmptyString,
   parentThreadId: ThreadId,

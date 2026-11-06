@@ -5,7 +5,7 @@ import { Effect, Layer, Result, Schema } from "effect"
 import { CodeExecution } from "../src/Code/Code.aggregate"
 import { RequestCode, PrepareCodeCall, ApproveCodeCall, DispatchCodeCall, SettleCodeCall, CompleteCode, CancelCode, MarkCodeCallUnknown, ResolveCodeCall, CodeStarted, CodeInterrupted, CodeCallSettled, CodeRejected, ExpireCode } from "../src/Code/Code.commands"
 import { DEFAULT_CODE_LIMITS, CodeInput } from "../src/Code/Code.schemas"
-import { ReceiptOwnerGuardLive } from "../src/Actor.model"
+import { ReceiptOwnerGuardLive } from "../src/ReceiptOwnerGuard.middleware"
 import { CurrentCaller, Session } from "../src/Actor.context"
 import { DEFAULT_SPILL_POLICY } from "../src/Spill/Spill.schemas"
 

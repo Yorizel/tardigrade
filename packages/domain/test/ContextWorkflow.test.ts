@@ -6,7 +6,7 @@ import { expect, test } from "bun:test"
 import * as Domain from "@alchemy.run/domain"
 import { Deferred, Effect, Fiber, Layer, Option, Ref, Schema } from "effect"
 import { Prompt, Response } from "effect/ai"
-import { ReceiptOwnerGuardLive } from "../src/Actor.model"
+import { ReceiptOwnerGuardLive } from "../src/ReceiptOwnerGuard.middleware"
 import { ActorInternalApi } from "../src/ActorInternal.api"
 import { Headers } from "effect/http"
 import { Digest } from "effect/crypto"
@@ -87,7 +87,8 @@ test.each([false, true])("native summary Activity respects replay and in-flight 
     if (state._tag !== "Open" || state.active === null) return yield* Effect.die("Expected run")
     if (cancelled) {
       expect(state.active.status).toBe("cancelled")
-      expect(state.active.compactions.length).toBe(0)
+      expect(state.active.compactions.length).toBe(1)
+      expect(state.active.tokens).toBe(10)
       expect(state.active.prompt.content.length).toBe(3)
       expect(yield* Ref.get(calls)).toEqual({ summaries: 1, models: 0 })
       return

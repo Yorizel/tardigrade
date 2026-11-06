@@ -14,7 +14,7 @@ const contextBoundaries = (prompt: Prompt.Prompt) => prompt.content.reduce((stat
     const pending = new Set(state.pending)
     const invalid = message.content.reduce((bad, part) => {
       if (part.type === "tool-call" && !part.providerExecuted) pending.add(part.id)
-      if (part.type === "tool-result") {
+      if (part.type === "tool-result" && !part.providerExecuted) {
         if (!pending.has(part.id)) return true
         pending.delete(part.id)
       }

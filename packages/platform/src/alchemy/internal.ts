@@ -1,6 +1,6 @@
 import { ActorInternalApi } from "@clavia/tardigrade-domain/ActorInternal.api"
 import { CurrentCaller, Session, Unauthorized } from "@clavia/tardigrade-domain/Actor.context"
-import { ReceiptOwnerGuardLive } from "@clavia/tardigrade-domain/Actor.model"
+import { ReceiptOwnerGuardLive } from "@clavia/tardigrade-domain/ReceiptOwnerGuard.middleware"
 import { Config, Effect, Layer, Option, Redacted, Schema } from "effect"
 import { Headers } from "effect/http"
 import { HttpServerRequest } from "effect/http/HttpServerRequest"
