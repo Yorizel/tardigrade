@@ -4,14 +4,11 @@ import { KeyValueStore } from "effect/persistence"
 import { SpillCatalog } from "@clavia/tardigrade-domain/Spill/Spill.aggregate"
 import { Workspace } from "@clavia/tardigrade-domain/Workspace/Workspace.aggregate"
 import { expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
 import * as Domain from "@alchemy.run/domain"
 import { Internals } from "@alchemy.run/domain/Model"
-import { BunHttpServer } from "@effect/platform-bun"
+import { BunHttpServer, BunServices } from "@effect/platform-bun"
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient"
-import { ConfigProvider, Context, Deferred, Duration, Effect, Exit, Layer, Option, Ref, Result, Schedule, Schema, Stream } from "effect"
+import { Array as Arr, ConfigProvider, Context, Deferred, Duration, Effect, Exit, FileSystem, Layer, Path, Option, Ref, Result, Schedule, Schema, String as Str, Stream } from "effect"
 import { Prompt, Response } from "effect/ai"
 import { ClusterWorkflowEngine, SingleRunner } from "effect/cluster"
 import { Digest } from "effect/crypto"
@@ -51,11 +48,11 @@ const headers = { "x-tardigrade-owner": "alice" }
 const usage = Response.Usage.make({ inputTokens: { total: 1 }, outputTokens: { total: 1 } })
 const terminal = (status: string) => ["completed", "failed", "cancelled", "unknown"].includes(status)
 
-const fixture = Effect.fn("DelegationHttp.fixture")(function* (pauseReservation = false, failAfterStart = false) {
-  const directory = yield* Effect.acquireRelease(
-    Effect.promise(() => mkdtemp(join(tmpdir(), "tardigrade-delegation-policy-"))),
-    path => Effect.promise(() => rm(path, { recursive: true, force: true })),
-  )
+const fixture = Effect.fn("DelegationHttp.fixture")(function* (pauseReservation: boolean = false, failAfterStart: boolean = false) {
+  const services = yield* Layer.build(BunServices.layer)
+  const fs = Context.get(services, FileSystem.FileSystem)
+  const path = Context.get(services, Path.Path)
+  const directory = yield* fs.makeTempDirectoryScoped({ prefix: "tardigrade-delegation-policy-" })
   const domainServerContext = yield* Layer.build(BunHttpServer.layer({ hostname: "127.0.0.1", port: 0 }))
   const runnerServerContext = yield* Layer.build(BunHttpServer.layer({ hostname: "127.0.0.1", port: 0 }))
   const domainServer = Context.get(domainServerContext, HttpServer.HttpServer)
@@ -87,7 +84,8 @@ const fixture = Effect.fn("DelegationHttp.fixture")(function* (pauseReservation 
   const stateContext = yield* Layer.build(StateModel.layer(Layer.mergeAll(RunExecutionLive, delegationPolicy, failure)).pipe(Layer.provide(Domain.InMemory), Layer.provide(config)))
   const threads = Context.get(stateContext, Thread)
   const delegations = Context.get(stateContext, Delegation)
-  const endpoint = yield* internalApi.pipe(Effect.provide(stateContext), Effect.provide(config))
+  const configContext = yield* Layer.build(config)
+  const endpoint = yield* internalApi.pipe(Effect.provide(Context.merge(stateContext, configContext)))
   const domainEndpoint = Effect.gen(function* () {
     if (yield* Ref.get(unavailable)) return HttpServerResponse.empty({ status: 503 })
     return yield* endpoint
@@ -103,7 +101,7 @@ const fixture = Effect.fn("DelegationHttp.fixture")(function* (pauseReservation 
         return { prompt: Prompt.fromMessages([Prompt.assistantMessage({ content: [call] })]), usage, text: "", tools: [{ call, execution: { _tag: "External" }, mutation: true, requiresApproval: true }] }
       }
       yield* Ref.update(calls, value => ({ ...value, childModels: value.childModels + 1 }))
-      if (input.prompt.content.some(message => message.role === "tool")) return { prompt: Prompt.make([{ role: "assistant", content: "Child read 42." }]), usage, text: "Child read 42.", tools: [] }
+      if (Arr.some(input.prompt.content, message => message.role === "tool")) return { prompt: Prompt.make([{ role: "assistant", content: "Child read 42." }]), usage, text: "Child read 42.", tools: [] }
       const call = Prompt.toolCallPart({ id: "child-tool", name: "read_number", params: {}, providerExecuted: false })
       return { prompt: Prompt.fromMessages([Prompt.assistantMessage({ content: [call] })]), usage, text: "", tools: [{ call, execution: { _tag: "External" }, mutation: input.actor === "approval-child", requiresApproval: input.actor === "approval-child" }] }
     }),
@@ -112,7 +110,7 @@ const fixture = Effect.fn("DelegationHttp.fixture")(function* (pauseReservation 
       return Prompt.fromMessages([Prompt.toolMessage({ content: [Prompt.toolResultPart({ id: input.call.id, name: input.call.name, result: 42, isFailure: false, providerExecuted: false })] })])
     }),
   }))
-  const database = SqliteClient.layer({ filename: join(directory, "runner.sqlite") })
+  const database = SqliteClient.layer({ filename: path.join(directory, "runner.sqlite") })
   const runner = Layer.mergeAll(ExecuteRunLive, ExecuteDelegationLive, RunRpcHandlers, DelegationRpcHandlers).pipe(
     Layer.provide(SpillStorageLive.pipe(Layer.provide(KeyValueStore.layerMemory))),
     Layer.provide(DomainClientLive), Layer.provide(adapter),
@@ -121,12 +119,14 @@ const fixture = Effect.fn("DelegationHttp.fixture")(function* (pauseReservation 
   )
   const runnerContext = yield* Layer.build(runner)
   expect(Option.isNone(Context.getOption(runnerContext, Internals))).toBe(true)
-  const runnerEndpoint = yield* RpcServer.toHttpEffect(RunnerRpcs).pipe(Effect.provide(runnerContext), Effect.provide(RpcSerialization.layerNdjson))
+  const serializationContext = yield* Layer.build(RpcSerialization.layerNdjson)
+  const runnerEndpoint = yield* RpcServer.toHttpEffect(RunnerRpcs).pipe(Effect.provide(Context.merge(runnerContext, serializationContext)))
   yield* Layer.build(HttpServer.serve()(runnerEndpoint).pipe(Layer.provide(Layer.succeedContext(runnerServerContext))))
   const clientContext = yield* Layer.build(DomainClientLive.pipe(Layer.provide(config)))
   const api = Context.get(clientContext, ActorInternalApi.Client)
   const protocol = RpcClient.layerProtocolHttp({ url: runnerUrl }).pipe(Layer.provide(Layer.mergeAll(FetchHttpClient.layer, RpcSerialization.layerNdjson)))
-  const control = yield* RpcClient.make(RunnerRpcs).pipe(Effect.provide(protocol))
+  const protocolContext = yield* Layer.build(protocol)
+  const control = yield* RpcClient.make(RunnerRpcs).pipe(Effect.provide(protocolContext))
   const options = { headers: { authorization: `Bearer ${runnerToken}` } }
   yield* Effect.addFinalizer(() => Effect.gen(function* () {
     yield* Ref.set(unavailable, false)
@@ -158,36 +158,43 @@ const credentialsAbsent = Effect.fn("DelegationHttp.credentialsAbsent")(function
   const messages = yield* sql`SELECT payload, headers FROM cluster_messages`.pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ payload: Schema.NullOr(Schema.String), headers: Schema.NullOr(Schema.String) })))))
   const replies = yield* sql`SELECT payload FROM cluster_replies`.pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ payload: Schema.NullOr(Schema.String) })))))
   for (const token of [domainToken, runnerToken]) {
-    expect(messages.some(row => row.payload?.includes(token) || row.headers?.includes(token))).toBe(false)
-    expect(replies.some(row => row.payload?.includes(token))).toBe(false)
+    expect(Arr.some(messages, row => (row.payload !== null && Str.includes(token)(row.payload)) || (row.headers !== null && Str.includes(token)(row.headers)))).toBe(false)
+    expect(Arr.some(replies, row => row.payload !== null && Str.includes(token)(row.payload))).toBe(false)
   }
 })
 
 test("native HTTP policies execute a delegated child and retain its real result", () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
-  const setup = yield* fixture()
+  const modelContext = yield* Layer.build(ModelAccessFixture)
+  const setup = yield* fixture().pipe(Effect.provide(modelContext))
   const scope = { delegationId: id, owner: "alice", key: delegationExecutionKey("alice", id) }
   const unauthorized = yield* setup.control["Tardigrade/ExecuteDelegationDiscard"](scope, { headers: { authorization: "Bearer wrong-fixture-token" } }).pipe(Effect.result)
   expect(Result.isFailure(unauthorized) && unauthorized.failure._tag).toBe("DelegationControlUnauthorized")
   for (const mismatched of [{ ...scope, owner: "bob" }, { ...scope, delegationId: "unrelated" }]) {
-    expect(Exit.isFailure(yield* setup.control["Tardigrade/ExecuteDelegationDiscard"](mismatched, setup.options).pipe(Effect.exit))).toBe(true)
-    expect(Exit.isFailure(yield* setup.control.ResumeDelegation(mismatched, setup.options).pipe(Effect.exit))).toBe(true)
-    expect(Exit.isFailure(yield* setup.control.PollDelegation(mismatched, setup.options).pipe(Effect.exit))).toBe(true)
+    const observed1 = yield* setup.control["Tardigrade/ExecuteDelegationDiscard"](mismatched, setup.options).pipe(Effect.exit)
+    expect(Exit.isFailure(observed1)).toBe(true)
+    const observed2 = yield* setup.control.ResumeDelegation(mismatched, setup.options).pipe(Effect.exit)
+    expect(Exit.isFailure(observed2)).toBe(true)
+    const observed3 = yield* setup.control.PollDelegation(mismatched, setup.options).pipe(Effect.exit)
+    expect(Exit.isFailure(observed3)).toBe(true)
   }
-  expect(Option.isNone(yield* setup.control.PollDelegation(scope, setup.options))).toBe(true)
+  const observed4 = yield* setup.control.PollDelegation(scope, setup.options)
+  expect(Option.isNone(observed4)).toBe(true)
   yield* setup.delegations.send(id, reserve("child-agent")).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
   const result = yield* setup.api.Delegation.watch(id, { headers }).pipe(Stream.filter(({ state }) => state !== null && state._tag === "Reserved" && state.status === "completed"), Stream.runHead, Effect.orDie, Effect.timeout("5 seconds"))
   if (Option.isNone(result) || result.value.state === null || result.value.state._tag !== "Reserved") return yield* Effect.die("Missing completed delegation")
   expect(result.value.state.inbox).toMatchObject([{ content: { _tag: "Result", outcome: { status: "completed", receipt: { runId: "work", text: "Child read 42." } } } }])
-  expect(yield* Ref.get(setup.calls)).toEqual({ parentModels: 1, childModels: 2, tools: 1 })
+  const observed5 = yield* Ref.get(setup.calls)
+  expect(observed5).toEqual({ parentModels: 1, childModels: 2, tools: 1 })
   const child = yield* setup.api.Thread.get(id, { headers })
   expect(child !== null && child._tag === "Open" && child.limits.maxToolCalls).toBe(2)
   const complete = yield* Effect.repeat(setup.control.PollDelegation(scope, setup.options), { until: value => Option.isSome(value) && value.value._tag === "Complete", schedule: Schedule.spaced("10 millis") }).pipe(Effect.timeout("5 seconds"))
   expect(Option.isSome(complete) && complete.value._tag === "Complete").toBe(true)
   yield* credentialsAbsent(Context.get(setup.runnerContext, SqlClient.SqlClient))
-})).pipe(Effect.provide(ModelAccessFixture))), 20_000)
+}))), 20_000)
 
 test("cancellation before delegation policy dispatch fences the child before confirming absence", () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
-  const setup = yield* fixture(true)
+  const modelContext = yield* Layer.build(ModelAccessFixture)
+  const setup = yield* fixture(true).pipe(Effect.provide(modelContext))
   yield* setup.delegations.send(id, reserve("approval-child")).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
   yield* Deferred.await(setup.reservedPolicyEntered)
   yield* setup.delegations.send(id, RequestDelegationCancellation.make({ reason: "Cancel before process admission" })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
@@ -195,12 +202,15 @@ test("cancellation before delegation policy dispatch fences the child before con
   const result = yield* setup.api.Delegation.watch(id, { headers }).pipe(Stream.filter(({ state }) => state !== null && state._tag === "Reserved" && state.status === "cancelled"), Stream.runHead, Effect.orDie, Effect.timeout("5 seconds"))
   if (Option.isNone(result) || result.value.state === null || result.value.state._tag !== "Reserved") return yield* Effect.die("Missing cancellation")
   expect(result.value.state.started).toBe(false)
-  expect(Schema.is(FencedChildAbsent)(yield* setup.api.Thread.get(id, { headers }))).toBe(true)
-  expect(yield* Ref.get(setup.calls)).toEqual({ parentModels: 1, childModels: 0, tools: 0 })
-})).pipe(Effect.provide(ModelAccessFixture))), 20_000)
+  const observed6 = yield* setup.api.Thread.get(id, { headers })
+  expect(Schema.is(FencedChildAbsent)(observed6)).toBe(true)
+  const observed7 = yield* Ref.get(setup.calls)
+  expect(observed7).toEqual({ parentModels: 1, childModels: 0, tools: 0 })
+}))), 20_000)
 
 test("cancellation after child precharge records the fenced run and prevents a late mutation", () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
-  const setup = yield* fixture()
+  const modelContext = yield* Layer.build(ModelAccessFixture)
+  const setup = yield* fixture().pipe(Effect.provide(modelContext))
   yield* setup.delegations.send(id, reserve("approval-child")).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
   yield* setup.api.Delegation.watch(id, { headers }).pipe(Stream.filter(({ state }) => state !== null && state._tag === "Reserved" && state.started), Stream.runHead, Effect.orDie, Effect.timeout("5 seconds"))
   yield* setup.api.Thread.watch(id, { headers }).pipe(Stream.filter(({ state }) => state !== null && state._tag === "Open" && state.active?.status === "awaiting_approval"), Stream.runHead, Effect.orDie, Effect.timeout("5 seconds"))
@@ -208,19 +218,21 @@ test("cancellation after child precharge records the fenced run and prevents a l
   const result = yield* setup.api.Delegation.watch(id, { headers }).pipe(Stream.filter(({ state }) => state !== null && state._tag === "Reserved" && state.status === "cancelled"), Stream.runHead, Effect.orDie, Effect.timeout("5 seconds"))
   if (Option.isNone(result) || result.value.state === null || result.value.state._tag !== "Reserved") return yield* Effect.die("Missing cancellation")
   expect(result.value.state.started).toBe(true)
-  const receipt = result.value.state.inbox.find(entry => entry.content._tag === "Result")
-  expect(receipt?.content).toMatchObject({ _tag: "Result", outcome: { status: "cancelled", receipt: { runId: "work", status: "cancelled" } } })
+  const receipt = Arr.findFirst(result.value.state.inbox, entry => entry.content._tag === "Result")
+  expect(Option.getOrUndefined(receipt)?.content).toMatchObject({ _tag: "Result", outcome: { status: "cancelled", receipt: { runId: "work", status: "cancelled" } } })
   const child = yield* setup.api.Thread.get(id, { headers })
   expect(child !== null && child._tag === "Open" && child.child?.closed).toBe(true)
   const late = yield* setup.threads.send(id, ApproveRun.make({ runId: "work", stepId: "work:2" })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.result)
   expect(Result.isFailure(late)).toBe(true)
   if (Result.isFailure(late) && late.failure._tag === "RunRejected") expect(late.failure.reason).toBe("ChildAdmissionClosed")
-  expect(yield* Ref.get(setup.calls)).toEqual({ parentModels: 1, childModels: 1, tools: 0 })
-})).pipe(Effect.provide(ModelAccessFixture))), 20_000)
+  const observed8 = yield* Ref.get(setup.calls)
+  expect(observed8).toEqual({ parentModels: 1, childModels: 1, tools: 0 })
+}))), 20_000)
 
 
 test("a real Domain HTTP failure suspends delegation and cancellation resumes it to fence the precharged child", () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
-  const setup = yield* fixture(false, true)
+  const modelContext = yield* Layer.build(ModelAccessFixture)
+  const setup = yield* fixture(false, true).pipe(Effect.provide(modelContext))
   const scope = { delegationId: id, owner: "alice", key: delegationExecutionKey("alice", id) }
   yield* setup.delegations.send(id, reserve("approval-child")).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
   const suspended = yield* Effect.repeat(setup.control.PollDelegation(scope, setup.options), {
@@ -231,23 +243,27 @@ test("a real Domain HTTP failure suspends delegation and cancellation resumes it
   const charged = yield* setup.delegations.state(id)
   expect(charged._tag === "Reserved" && charged.started).toBe(true)
   expect(charged._tag === "Reserved" && charged.status).toBe("running")
-  expect(yield* Ref.get(setup.unavailable)).toBe(true)
+  const observed9 = yield* Ref.get(setup.unavailable)
+  expect(observed9).toBe(true)
   yield* Ref.set(setup.unavailable, false)
   yield* setup.delegations.send(id, RequestDelegationCancellation.make({ reason: "Cancel after interrupted admission" })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
   const result = yield* setup.api.Delegation.watch(id, { headers }).pipe(Stream.filter(({ state }) => state !== null && state._tag === "Reserved" && state.status === "cancelled"), Stream.runHead, Effect.orDie, Effect.timeout("5 seconds"))
   if (Option.isNone(result) || result.value.state === null || result.value.state._tag !== "Reserved") return yield* Effect.die("Missing recovered cancellation")
   expect(result.value.state.started).toBe(true)
-  expect(Schema.is(FencedChildAbsent)(yield* setup.api.Thread.get(id, { headers }))).toBe(true)
+  const observed10 = yield* setup.api.Thread.get(id, { headers })
+  expect(Schema.is(FencedChildAbsent)(observed10)).toBe(true)
   expect(result.value.state.inbox).toMatchObject([{ content: { _tag: "Result", outcome: { status: "cancelled", receipt: null } } }])
-  expect(yield* Ref.get(setup.calls)).toEqual({ parentModels: 1, childModels: 0, tools: 0 })
+  const observed11 = yield* Ref.get(setup.calls)
+  expect(observed11).toEqual({ parentModels: 1, childModels: 0, tools: 0 })
   const complete = yield* Effect.repeat(setup.control.PollDelegation(scope, setup.options), { until: value => Option.isSome(value) && value.value._tag === "Complete", schedule: Schedule.spaced("10 millis") }).pipe(Effect.timeout("5 seconds"))
   expect(Option.isSome(complete) && complete.value._tag === "Complete" && Exit.isSuccess(complete.value.exit)).toBe(true)
   yield* credentialsAbsent(Context.get(setup.runnerContext, SqlClient.SqlClient))
-})).pipe(Effect.provide(ModelAccessFixture))), 20_000)
+}))), 20_000)
 
 
 test("native workflow compensation fences a child when its delegation process is interrupted", () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
-  const setup = yield* fixture()
+  const modelContext = yield* Layer.build(ModelAccessFixture)
+  const setup = yield* fixture().pipe(Effect.provide(modelContext))
   yield* setup.delegations.send(id, reserve("approval-child")).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
   yield* setup.api.Delegation.watch(id, { headers }).pipe(Stream.filter(({ state }) => state !== null && state._tag === "Reserved" && state.started), Stream.runHead, Effect.orDie, Effect.timeout("5 seconds"))
   yield* setup.api.Thread.watch(id, { headers }).pipe(Stream.filter(({ state }) => state !== null && state._tag === "Open" && state.active?.status === "awaiting_approval"), Stream.runHead, Effect.orDie, Effect.timeout("5 seconds"))
@@ -267,5 +283,6 @@ test("native workflow compensation fences a child when its delegation process is
   expect(Option.isSome(complete) && complete.value._tag === "Complete").toBe(true)
   const persisted = yield* setup.delegations.state(id)
   expect(persisted._tag === "Reserved" && persisted.status).toBe("cancelled")
-  expect(yield* Ref.get(setup.calls)).toEqual({ parentModels: 1, childModels: 1, tools: 0 })
-})).pipe(Effect.provide(ModelAccessFixture))), 20_000)
+  const observed12 = yield* Ref.get(setup.calls)
+  expect(observed12).toEqual({ parentModels: 1, childModels: 1, tools: 0 })
+}))), 20_000)

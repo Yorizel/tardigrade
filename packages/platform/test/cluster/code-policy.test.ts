@@ -1,13 +1,10 @@
 import { SpillCatalog } from "@clavia/tardigrade-domain/Spill/Spill.aggregate"
 import { Workspace } from "@clavia/tardigrade-domain/Workspace/Workspace.aggregate"
 import { expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
 import * as Domain from "@alchemy.run/domain"
-import { BunHttpServer } from "@effect/platform-bun"
+import { BunHttpServer, BunServices } from "@effect/platform-bun"
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient"
-import { ConfigProvider, Context, Duration, Effect, Exit, Layer, Option, Ref, Schedule } from "effect"
+import { ConfigProvider, Context, Duration, Effect, Exit, FileSystem, Layer, Path, Option, Ref, Schedule } from "effect"
 import { Prompt } from "effect/ai"
 import { ClusterWorkflowEngine, SingleRunner } from "effect/cluster"
 import { Digest } from "effect/crypto"
@@ -34,10 +31,10 @@ import { CodeRpcHandlers, CodeRpcs } from "../../src/cluster/code-control"
 const StateModel = Domain.Model("CodePolicyState", { aggregates: [Thread, CodeExecution, Delegation, Workspace, SpillCatalog], policies: [CodeExecutionPolicy] })
 
 test("Code policies start, approve, cancel and expire real Cluster workflows over HTTP", () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
-  const directory = yield* Effect.acquireRelease(
-    Effect.promise(() => mkdtemp(join(tmpdir(), "tardigrade-code-policy-"))),
-    path => Effect.promise(() => rm(path, { recursive: true, force: true })),
-  )
+  const services = yield* Layer.build(BunServices.layer)
+  const fs = Context.get(services, FileSystem.FileSystem)
+  const path = Context.get(services, Path.Path)
+  const directory = yield* fs.makeTempDirectoryScoped({ prefix: "tardigrade-code-policy-" })
   const domainServerContext = yield* Layer.build(BunHttpServer.layer({ hostname: "127.0.0.1", port: 0 }))
   const runnerServerContext = yield* Layer.build(BunHttpServer.layer({ hostname: "127.0.0.1", port: 0 }))
   const domainServer = Context.get(domainServerContext, HttpServer.HttpServer)
@@ -53,7 +50,8 @@ test("Code policies start, approve, cancel and expire real Cluster workflows ove
   const stateContext = yield* Layer.build(StateModel.layer(CodeExecutionPolicyLive).pipe(Layer.provide(Domain.InMemory), Layer.provide(config)))
   const threads = Context.get(stateContext, Thread)
   const codes = Context.get(stateContext, CodeExecution)
-  const domainEndpoint = yield* internalApi.pipe(Effect.provide(Layer.succeedContext(stateContext)), Effect.provide(config))
+  const configContext = yield* Layer.build(config)
+  const domainEndpoint = yield* internalApi.pipe(Effect.provide(Context.merge(stateContext, configContext)))
   yield* Layer.build(HttpServer.serve()(domainEndpoint).pipe(Layer.provide(Layer.succeedContext(domainServerContext))))
   const invoked = yield* Ref.make<ReadonlyArray<string>>([])
   const catalog = { tools: ["write"] }
@@ -68,11 +66,12 @@ test("Code policies start, approve, cancel and expire real Cluster workflows ove
   const runner = Layer.mergeAll(ExecuteCodeLive, CodeRpcHandlers).pipe(
     Layer.provide(DomainClientLive), Layer.provide(CodeRuntimeLive), Layer.provide(methods),
     Layer.provideMerge(ClusterWorkflowEngine.layer.pipe(Layer.provideMerge(SingleRunner.layer({ shardingConfig: { entityMessagePollInterval: Duration.millis(20) } })))),
-    Layer.provide(SqliteClient.layer({ filename: join(directory, "runner.sqlite") })),
+    Layer.provide(SqliteClient.layer({ filename: path.join(directory, "runner.sqlite") })),
     Layer.provide(Digest.layerWebCrypto), Layer.provide(config),
   )
   const runnerContext = yield* Layer.build(runner)
-  const runnerEndpoint = yield* RpcServer.toHttpEffect(CodeRpcs).pipe(Effect.provide(Layer.succeedContext(runnerContext)), Effect.provide(RpcSerialization.layerNdjson))
+  const serializationContext = yield* Layer.build(RpcSerialization.layerNdjson)
+  const runnerEndpoint = yield* RpcServer.toHttpEffect(CodeRpcs).pipe(Effect.provide(Context.merge(runnerContext, serializationContext)))
   yield* Layer.build(HttpServer.serve()(runnerEndpoint).pipe(Layer.provide(Layer.succeedContext(runnerServerContext))))
   yield* Effect.gen(function* () {
     yield* threads.send("parent", OpenThread.make({ actor: "agent", instance: "instance", name: "parent", limits: DEFAULT_RUN_LIMITS }))
@@ -81,11 +80,13 @@ test("Code policies start, approve, cancel and expire real Cluster workflows ove
     yield* codes.send("approved", RequestCode.make(request))
     const pending = yield* Effect.repeat(codes.state("approved"), { until: state => state._tag === "Open" && state.calls.length === 1, schedule: Schedule.spaced("10 millis") }).pipe(Effect.timeout("5 seconds"))
     expect(pending._tag === "Open" && pending.calls[0]?.status).toBe("prepared")
-    expect(yield* Ref.get(invoked)).toEqual([])
+    const observed1 = yield* Ref.get(invoked)
+    expect(observed1).toEqual([])
     yield* codes.send("approved", ApproveCodeCall.make({ ordinal: 0 }))
     const completed = yield* Effect.repeat(codes.state("approved"), { until: state => state._tag === "Open" && state.status === "completed", schedule: Schedule.spaced("10 millis") }).pipe(Effect.timeout("5 seconds"))
     expect(completed._tag === "Open" && completed.outcome).toEqual({ _tag: "Returned", value: 42 })
-    expect((yield* Ref.get(invoked)).length).toBe(1)
+    const observed2 = yield* Ref.get(invoked)
+    expect((observed2).length).toBe(1)
     yield* codes.send("cancelled", RequestCode.make(request))
     yield* Effect.repeat(codes.state("cancelled"), { until: state => state._tag === "Open" && state.calls.length === 1, schedule: Schedule.spaced("10 millis") }).pipe(Effect.timeout("5 seconds"))
     yield* codes.send("cancelled", CancelCode.make({ reason: "UserCancelled" }))
@@ -95,33 +96,46 @@ test("Code policies start, approve, cancel and expire real Cluster workflows ove
     if (Option.isSome(cancelled) && cancelled.value._tag === "Complete" && Exit.isSuccess(cancelled.value.exit)) expect(cancelled.value.exit.value.outcome._tag).toBe("Failed")
     const cancelledState = yield* codes.state("cancelled")
     expect(cancelledState._tag === "Open" && cancelledState.status).toBe("cancelled")
-    expect(Exit.isFailure(yield* codes.send("cancelled", ApproveCodeCall.make({ ordinal: 0 })).pipe(Effect.exit))).toBe(true)
+    const observed3 = yield* codes.send("cancelled", ApproveCodeCall.make({ ordinal: 0 })).pipe(Effect.exit)
+    expect(Exit.isFailure(observed3)).toBe(true)
     yield* codes.send("expired", RequestCode.make({ ...request, limits: { ...DEFAULT_CODE_LIMITS, maxDurationMs: 200 } }))
     const expired = yield* Effect.repeat(codes.state("expired"), { until: state => state._tag === "Open" && state.status === "failed", schedule: Schedule.spaced("10 millis") }).pipe(Effect.timeout("5 seconds"))
     expect(expired._tag === "Open" && expired.reason).toBe("DurationBudgetExceeded")
-    expect(Exit.isFailure(yield* codes.send("expired", ApproveCodeCall.make({ ordinal: 0 })).pipe(Effect.exit))).toBe(true)
+    const observed4 = yield* codes.send("expired", ApproveCodeCall.make({ ordinal: 0 })).pipe(Effect.exit)
+    expect(Exit.isFailure(observed4)).toBe(true)
     const expiredId = yield* ExecuteCode.executionId({ key: codeExecutionKey("alice", "expired"), executionId: "expired", owner: "alice" })
     yield* Effect.repeat(ExecuteCode.poll(expiredId), { until: value => Option.isSome(value) && value.value._tag === "Complete", schedule: Schedule.spaced("10 millis") }).pipe(Effect.timeout("5 seconds"))
-    expect((yield* Ref.get(invoked)).length).toBe(1)
+    const observed5 = yield* Ref.get(invoked)
+    expect((observed5).length).toBe(1)
     const protocol = RpcClient.layerProtocolHttp({ url: runnerUrl }).pipe(Layer.provide(Layer.mergeAll(FetchHttpClient.layer, RpcSerialization.layerNdjson)))
+    const protocolContext = yield* Layer.build(protocol)
     yield* Effect.scoped(Effect.gen(function* () {
       const client = yield* RpcClient.make(CodeRpcs)
       const payload = { key: codeExecutionKey("alice", "approved"), executionId: "approved", owner: "alice" }
       const options = { headers: { authorization: "Bearer policy-runner-fixture-token" } }
-      expect(Exit.isFailure(yield* client.PollCode(payload).pipe(Effect.exit))).toBe(true)
+      const observed6 = yield* client.PollCode(payload).pipe(Effect.exit)
+      expect(Exit.isFailure(observed6)).toBe(true)
       for (const conflicting of [{ ...payload, owner: "bob" }, { ...payload, executionId: "other" }]) {
-        expect(Exit.isFailure(yield* client.PollCode(conflicting, options).pipe(Effect.exit))).toBe(true)
-        expect(Exit.isFailure(yield* client.ResumeCode(conflicting, options).pipe(Effect.exit))).toBe(true)
-        expect(Exit.isFailure(yield* client.InterruptCode(conflicting, options).pipe(Effect.exit))).toBe(true)
-        expect(Exit.isFailure(yield* client.SignalCodeApproval({ ...conflicting, ordinal: 0 }, options).pipe(Effect.exit))).toBe(true)
-        expect(Exit.isFailure(yield* client["Tardigrade/ExecuteCodeDiscard"](conflicting, options).pipe(Effect.exit))).toBe(true)
-        expect(Exit.isFailure(yield* client["Tardigrade/ExecuteCode"](conflicting, options).pipe(Effect.exit))).toBe(true)
+        const observed7 = yield* client.PollCode(conflicting, options).pipe(Effect.exit)
+        expect(Exit.isFailure(observed7)).toBe(true)
+        const observed8 = yield* client.ResumeCode(conflicting, options).pipe(Effect.exit)
+        expect(Exit.isFailure(observed8)).toBe(true)
+        const observed9 = yield* client.InterruptCode(conflicting, options).pipe(Effect.exit)
+        expect(Exit.isFailure(observed9)).toBe(true)
+        const observed10 = yield* client.SignalCodeApproval({ ...conflicting, ordinal: 0 }, options).pipe(Effect.exit)
+        expect(Exit.isFailure(observed10)).toBe(true)
+        const observed11 = yield* client["Tardigrade/ExecuteCodeDiscard"](conflicting, options).pipe(Effect.exit)
+        expect(Exit.isFailure(observed11)).toBe(true)
+        const observed12 = yield* client["Tardigrade/ExecuteCode"](conflicting, options).pipe(Effect.exit)
+        expect(Exit.isFailure(observed12)).toBe(true)
       }
       const foreign = { ...payload, owner: "bob", key: codeExecutionKey("bob", "approved") }
-      expect(Exit.isFailure(yield* client["Tardigrade/ExecuteCode"](foreign, options).pipe(Effect.exit))).toBe(true)
+      const observed13 = yield* client["Tardigrade/ExecuteCode"](foreign, options).pipe(Effect.exit)
+      expect(Exit.isFailure(observed13)).toBe(true)
       const replay = yield* client["Tardigrade/ExecuteCode"](payload, options)
       expect(replay.outcome).toEqual({ _tag: "Returned", value: 42 })
-      expect((yield* Ref.get(invoked)).length).toBe(1)
-    })).pipe(Effect.provide(protocol))
+      const observed14 = yield* Ref.get(invoked)
+      expect((observed14).length).toBe(1)
+    })).pipe(Effect.provide(protocolContext))
   }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(runnerContext))
 }))), 20_000)
