@@ -9,7 +9,6 @@
   },
   "scripts": {
     "cloudflare": "alchemy dev",
-    "models:lock": "bun ../../apps/cli/src/main.ts models lock",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.cloudflare.json",
     "bun": "bun bun.ts"
   },
@@ -19,13 +18,10 @@
     "alchemy": "2.0.0-beta.85"
   },
   "dependencies": {
-    "@clavia/tardigrade-core": "workspace:*",
     "@clavia/tardigrade-domain": "workspace:*",
-    "@clavia/tardigrade-agent": "workspace:*",
-    "@clavia/tardigrade-libraries": "workspace:*",
     "@clavia/tardigrade-platform": "workspace:*",
-    "@clavia/tardigrade-model": "workspace:*",
     "effect": "4.1.2",
-    "@alchemy.run/domain": "2.0.0-beta.85"
+    "@alchemy.run/domain": "2.0.0-beta.85",
+    "@effect/platform-bun": "4.1.2"
   }
 }

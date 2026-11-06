@@ -1,34 +1,24 @@
-import { actorContext } from "@clavia/tardigrade-agent/actor/context"
-import { Cause, Config, Console, Effect, Exit } from "effect"
-import { createBunHost } from "@clavia/tardigrade-platform/bun"
+import { BunRuntime } from "@effect/platform-bun"
+import { RunLimits } from "@clavia/tardigrade-domain/Thread/Thread.schemas"
+import { Config, Console, Effect, Redacted, Schema } from "effect"
+import { DEFAULT_MEESEEKS_INSTRUCTIONS, DEFAULT_MEESEEKS_LIMITS, MeeseeksInterrupted, meeseeks } from "./agents/meeseeks"
 import { services } from "./services"
 
-import { meeseeks } from "./agents/meeseeks"
+export const runMeeseeks = Effect.gen(function* () {
+  const token = yield* Config.schema(Schema.Redacted(Schema.NonEmptyString), "TARDIGRADE_TOKEN")
+  const receipt = yield* meeseeks({
+    threadId: yield* Config.NonEmptyString("TARDIGRADE_THREAD_ID"),
+    runId: yield* Config.NonEmptyString("TARDIGRADE_RUN_ID"),
+    actor: yield* Config.NonEmptyString("TARDIGRADE_ACTOR"),
+    instance: yield* Config.NonEmptyString("TARDIGRADE_INSTANCE"),
+    name: yield* Config.NonEmptyString("TARDIGRADE_THREAD_NAME"),
+    instructions: yield* Config.NonEmptyString("TARDIGRADE_INSTRUCTIONS").pipe(Config.withDefault(DEFAULT_MEESEEKS_INSTRUCTIONS)),
+    text: yield* Config.NonEmptyString("TARDIGRADE_MESSAGE"),
+    limits: yield* Config.schema(Schema.fromJsonString(RunLimits), "TARDIGRADE_RUN_LIMITS").pipe(Config.withDefault(DEFAULT_MEESEEKS_LIMITS)),
+  }, { authorization: `Bearer ${Redacted.value(token)}` })
+  yield* Console.log(receipt)
+  if (receipt.status !== "completed") return yield* MeeseeksInterrupted.make({ reason: `${receipt.status}: ${receipt.reason}` })
+  return receipt
+}).pipe(Effect.provide(services))
 
-const run = Effect.scoped(Effect.gen(function* () {
-  const host = yield* Effect.acquireRelease(createBunHost({
-    actor: meeseeks,
-    actorContext,
-    storage: yield* Config.String("EXPERIMENTAL_STORAGE").pipe(Config.withDefault(".tardigrade/experimental-example")),
-    services: () => services,
-  }), host => host.close.pipe(Effect.orDie))
-
-  const thread = yield* host.allocateRootThread({ instance: "example", name: "main" })
-
-  yield* Console.log("Threads:", [thread].map(thread => thread.coordinate))
-
-  const response = yield* thread.methods.message({
-    text: yield* Config.String("EXPERIMENTAL_MESSAGE").pipe(Config.withDefault("Hello")),
-  }, { id: "example-message" })
-
-  yield* Console.log({ response })
-  yield* thread.wait
-}))
-
-if (import.meta.main) {
-  const result = await Effect.runPromiseExit(run)
-  if (Exit.isFailure(result)) {
-    console.error(Cause.pretty(result.cause))
-    process.exitCode = 1
-  }
-}
+if (import.meta.main) BunRuntime.runMain(runMeeseeks)

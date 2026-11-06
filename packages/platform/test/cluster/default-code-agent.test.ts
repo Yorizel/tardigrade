@@ -6,12 +6,15 @@ import * as Domain from "@alchemy.run/domain"
 import { OpenAiClient, OpenAiSchema } from "@effect/ai-openai"
 import { BunHttpServer } from "@effect/platform-bun"
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient"
-import { Config, ConfigProvider, Context, DateTime, Duration, Effect, Layer, Ref, Schedule, Schema } from "effect"
+import { Config, ConfigProvider, Context, DateTime, Duration, Effect, Layer, Ref, Result, Schedule, Schema } from "effect"
 import { Prompt } from "effect/ai"
 import { ClusterWorkflowEngine, SingleRunner } from "effect/cluster"
 import { Digest } from "effect/crypto"
 import { FetchHttpClient, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http"
 import { RpcSerialization, RpcServer } from "effect/rpc"
+import { meeseeks, DEFAULT_MEESEEKS_INSTRUCTIONS, DEFAULT_MEESEEKS_LIMITS } from "../../../examples/agents/meeseeks"
+import { ActorApi } from "@clavia/tardigrade-domain/Actor.api"
+import { SessionLive } from "../../src/alchemy/session"
 import { ActorModel } from "@clavia/tardigrade-domain/Actor.model"
 import { CurrentCaller } from "@clavia/tardigrade-domain/Actor.context"
 import { Thread } from "@clavia/tardigrade-domain/Thread/Thread.aggregate"
@@ -69,6 +72,10 @@ test.each(["output-valid", "output-invalid", "output-malformed", "code", "code-a
     expect(httpRequest.url).toBe("/v1/responses")
     const body = yield* Schema.decodeUnknownEffect(OpenAiSchema.CreateResponse)(yield* httpRequest.json).pipe(Effect.orDie)
     const previous = yield* Ref.getAndUpdate(requests, values => [...values, body])
+    if (scenario === "fetch-direct" || scenario === "workspace-direct") {
+      const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(OpenAiSchema.CreateResponse))(body)
+      expect(encoded).toContain(DEFAULT_MEESEEKS_INSTRUCTIONS)
+    }
     const usage = { input_tokens: 20, output_tokens: 10, total_tokens: 30 }
     if (scenario.startsWith("output-")) {
       expect(body.text?.format).toEqual({ type: "json_schema", name: "research", schema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"], additionalProperties: false }, strict: true })
@@ -321,6 +328,7 @@ test.each(["output-valid", "output-invalid", "output-malformed", "code", "code-a
   if (providerServer.address._tag === "UnixPathAddress" || domainServer.address._tag === "UnixPathAddress" || runnerServer.address._tag === "UnixPathAddress") return yield* Effect.die("Expected TCP servers")
   const settings = {
     TARDIGRADE_DOMAIN_URL: `http://127.0.0.1:${domainServer.address.port}`, TARDIGRADE_RUNNER_URL: `http://127.0.0.1:${runnerServer.address.port}`,
+    TARDIGRADE_TOKEN: "meeseeks-fixture-token", TARDIGRADE_SUBJECT: "alice",
     RUNNER_TO_DOMAIN_TOKEN: "default-code-domain-fixture", WORKER_TO_RUNNER_TOKEN: "default-code-runner-fixture",
     TARDIGRADE_ACTOR: "default", TARDIGRADE_MODEL: "gpt-4.1-mini", TARDIGRADE_INSTRUCTIONS: "Use execute for the granted native tools.", OPENAI_API_KEY: "provider-fixture-token",
     TARDIGRADE_WORKSPACE_POLICY: Schema.encodeSync(Schema.fromJsonString(WorkspacePolicy))(workspacePolicy),
@@ -344,9 +352,22 @@ test.each(["output-valid", "output-invalid", "output-malformed", "code", "code-a
   const runnerContext = yield* Layer.build(runner)
   const runnerEndpoint = yield* RpcServer.toHttpEffect(RunRpcs.merge(CodeRpcs).merge(DelegationRpcs)).pipe(Effect.provide(Layer.succeedContext(runnerContext)), Effect.provide(RpcSerialization.layerNdjson))
   yield* Layer.build(HttpServer.serve()(runnerEndpoint).pipe(Layer.provide(Layer.succeedContext(runnerServerContext))))
-  yield* threads.send("default-code", OpenThread.make({ actor: "default", instance: "instance", name: "default", limits: DEFAULT_RUN_LIMITS })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
+  if (scenario !== "fetch-direct" && scenario !== "workspace-direct") yield* threads.send("default-code", OpenThread.make({ actor: "default", instance: "instance", name: "default", limits: DEFAULT_RUN_LIMITS })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
   const request = { runId: "run", digest: "default-code", prompt: Prompt.make({ "output-valid": "Return the declared research object.", "output-invalid": "Return invalid shape to verify terminal validation.", "output-malformed": "Return malformed JSON to verify terminal validation.", "code-agents": "Use agents.run inside Code to research a primary source.", code: "Read the current time using Code Mode.", delegation: "Delegate a child task and report its completed result.", "fetch-direct": "Read the granted URL with fetch_get.", "fetch-code": "Read the granted URL using Code Mode.", "workspace-direct": "Write text, read a bounded slice, and list the durable workspace.", "workspace-code": "Use Code Mode to write, read and list the durable workspace.", spill: "Return a large Code result then read and grep its complete persisted value.", "spill-rejected": "Report a known archive allowance refusal without retrying the completed Code." }[scenario]) }
-  if (scenario.startsWith("output-")) {
+  if (scenario === "fetch-direct" || scenario === "workspace-direct") {
+    const client = yield* ActorApi.clientInProcess.pipe(Effect.provide(SessionLive), Effect.provide(Layer.succeedContext(state)), Effect.provide(config))
+    const exampleRequest = { threadId: "default-code", runId: "run", actor: "default", instance: "instance", name: "default", instructions: DEFAULT_MEESEEKS_INSTRUCTIONS, text: "Use the granted native tools.", limits: DEFAULT_MEESEEKS_LIMITS }
+    const receipt = yield* meeseeks(exampleRequest, { authorization: "Bearer meeseeks-fixture-token" }).pipe(Effect.provideService(ActorApi.Client, client), Effect.provide(Digest.layerWebCrypto), Effect.timeout("10 seconds"))
+    const replay = yield* meeseeks(exampleRequest, { authorization: "Bearer meeseeks-fixture-token" }).pipe(Effect.provideService(ActorApi.Client, client), Effect.provide(Digest.layerWebCrypto))
+    expect(receipt.status).toBe("completed")
+    expect(replay).toEqual(receipt)
+    const beforeConflicts = (yield* Ref.get(requests)).length
+    const conflict = yield* meeseeks({ ...exampleRequest, text: "Conflicting retry." }, { authorization: "Bearer meeseeks-fixture-token" }).pipe(Effect.provideService(ActorApi.Client, client), Effect.provide(Digest.layerWebCrypto), Effect.result)
+    const unauthorized = yield* meeseeks(exampleRequest, { authorization: "Bearer wrong-token" }).pipe(Effect.provideService(ActorApi.Client, client), Effect.provide(Digest.layerWebCrypto), Effect.result)
+    expect(Result.isFailure(conflict)).toBe(true)
+    expect(Result.isFailure(unauthorized)).toBe(true)
+    expect((yield* Ref.get(requests)).length).toBe(beforeConflicts)
+  } else if (scenario.startsWith("output-")) {
     const output = yield* Schema.decodeUnknownEffect(OutputDeclaration)({ name: "research", schema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"], additionalProperties: false } }).pipe(Effect.orDie)
     yield* threads.send("default-code", RequestRun.make({ ...request, output })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
   } else {

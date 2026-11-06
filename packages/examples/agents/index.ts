@@ -1,3 +1,3 @@
-export { meeseeks } from "./meeseeks"
+export { meeseeks, MeeseeksRequest, MeeseeksInterrupted, DEFAULT_MEESEEKS_INSTRUCTIONS, DEFAULT_MEESEEKS_LIMITS } from "./meeseeks"
 export { Greet, Greeting, GreeterModel, GreeterApi, GreetWorkflow, GreetWorkflowLive, GreetingHandler, GreetingFailure, GreetingRejected, GreetingNotOwner, CancelGreeting, GreetingExecutionPolicy, GreetingExecutionPolicyLive, DEFAULT_GREETER_POLL_INTERVAL_MS, DEFAULT_GREETER_MAX_POLLS, GreetingState } from "./greeter"
 export { Inbox, InboxApi, InboxModel, InboxPolicy, DEFAULT_INBOX_POLICY, InboxRejected, InboxNotOwner, InboxOpened, InboxMessageReceived, InboxMessageAcknowledged, OpenInbox, PostInboxMessage } from "./inbox"
