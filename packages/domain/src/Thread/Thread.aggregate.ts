@@ -118,7 +118,7 @@ export class Thread extends Domain.Aggregate("Thread", {
       if (!Schema.toEquivalence(ChildBinding)(admission.binding, command.binding)) return yield* RunRejected.make({ reason: "ChildBindingConflict" })
       if (admission.closed) return yield* RunRejected.make({ reason: "ChildAdmissionClosed" })
       if (current._tag !== "Open") return yield* RunRejected.make({ reason: "ChildNotOpen" })
-      return yield* admitRun(current, { runId: admission.binding.childRunId, digest: command.digest, prompt: command.prompt }, now)
+      return yield* admitRun(current, { ...command, runId: admission.binding.childRunId }, now)
     }),
     FenceChildThread: Effect.fn("Thread.FenceChildThread")(function* (state, command, { id }) {
       const caller = yield* CurrentCaller

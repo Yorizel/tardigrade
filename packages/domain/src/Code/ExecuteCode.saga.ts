@@ -1,4 +1,4 @@
-import { Array as EffectArray, Cause, Effect, Exit, Function, Layer, Option, Queue, Ref, Schema, Semaphore, Scope, Stream } from "effect"
+import { Array as EffectArray, Cause, Effect, Exit, Function, Layer, Option, Queue, Ref, Schema, Semaphore, Scope, Stream, Struct } from "effect"
 import { Prompt } from "effect/ai"
 import { AgentsRun, AgentRunResult, codeAgentRequestId } from "../Delegation/AgentsRun"
 import { delegationLineage } from "../Delegation/Delegation.lineage"
@@ -62,7 +62,7 @@ export const ExecuteCodeLive = Layer.unwrap(Effect.gen(function* () {
             const scope = { threadId: current.code.request.threadId, runId: current.code.request.runId, owner }
             const lineage = yield* delegationLineage(scope, capability.limits).pipe(Effect.provideService(ActorInternalApi.Client, api))
             const requestId = yield* codeAgentRequestId(executionId, entry.request.ordinal)
-            return { requestId, parentThreadId: scope.threadId, parentRunId: scope.runId, targetActor: capability.targetActor, lineage, toolCalls, limits: capability.limits, prompt: Prompt.make(params.text) }
+            return { requestId, parentThreadId: scope.threadId, parentRunId: scope.runId, targetActor: capability.targetActor, lineage, toolCalls, limits: capability.limits, prompt: Prompt.make(params.text), ...Struct.pick(capability, ["output"]) }
           }),
         })
         const delegationId = delegationKey(reservation.parentThreadId, reservation.parentRunId, reservation.requestId)
@@ -76,7 +76,7 @@ export const ExecuteCodeLive = Layer.unwrap(Effect.gen(function* () {
         }
         const result = Option.getOrUndefined(EffectArray.findFirst(delegated.inbox, message => message.content._tag === "Result"))
         if (delegated.status === "completed" && result?.content._tag === "Result" && result.content.outcome.receipt?.status === "completed") {
-          const value = yield* Schema.encodeEffect(AgentRunResult)({ delegationId, childThreadId: delegated.childThreadId, childRunId: delegated.childRunId, targetActor: delegated.reservation.targetActor, status: "completed", text: result.content.outcome.receipt.text }).pipe(Effect.orDie)
+          const value = yield* Schema.encodeEffect(AgentRunResult)({ delegationId, childThreadId: delegated.childThreadId, childRunId: delegated.childRunId, targetActor: delegated.reservation.targetActor, status: "completed", text: result.content.outcome.receipt.text, result: result.content.outcome.receipt.result }).pipe(Effect.orDie)
           yield* api.SettleCodeCall(executionId, { ordinal: entry.request.ordinal, outcome: { _tag: "Returned", value } }, { headers, commandId: commandId(`settle:${entry.request.ordinal}`) }).pipe(Effect.orDie)
           return
         }

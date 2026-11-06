@@ -8,6 +8,7 @@ import { BunHttpServer } from "@effect/platform-bun"
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient"
 import { Config, ConfigProvider, Context, DateTime, Duration, Effect, Layer, Ref, Result, Schedule, Schema } from "effect"
 import { Prompt } from "effect/ai"
+import { toCodecOpenAI } from "effect/ai/OpenAiStructuredOutput"
 import { ClusterWorkflowEngine, SingleRunner } from "effect/cluster"
 import { Digest } from "effect/crypto"
 import { FetchHttpClient, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http"
@@ -19,7 +20,9 @@ import { ActorModel } from "@clavia/tardigrade-domain/Actor.model"
 import { CurrentCaller } from "@clavia/tardigrade-domain/Actor.context"
 import { Thread } from "@clavia/tardigrade-domain/Thread/Thread.aggregate"
 import { OpenThread, RequestRun } from "@clavia/tardigrade-domain/Thread/Thread.commands"
-import { OutputDeclaration } from "@clavia/tardigrade-domain/Output/Output.schemas"
+import { codeAgentRequestId } from "@clavia/tardigrade-domain/Delegation/AgentsRun"
+import { PrepareCodeCall } from "@clavia/tardigrade-domain/Code/Code.commands"
+import { ChildOutputCatalog, OutputDeclaration } from "@clavia/tardigrade-domain/Output/Output.schemas"
 import { DEFAULT_RUN_LIMITS, Receipt } from "@clavia/tardigrade-domain/Thread/Thread.schemas"
 import { CodeExecution } from "@clavia/tardigrade-domain/Code/Code.aggregate"
 import { CodeTool } from "@clavia/tardigrade-domain/Code/CodeTool"
@@ -29,7 +32,8 @@ import { RunCodeLive } from "@clavia/tardigrade-domain/Code/RunCode.saga"
 import { ExecuteRunLive } from "@clavia/tardigrade-domain/Execution/ExecuteRun.saga"
 import { runKey, ExecuteRun, executionKey } from "@clavia/tardigrade-domain/Execution/Run.workflow"
 import { FetchGet, FetchResponse } from "../../src/cluster/fetch-tool"
-import { AgentExecution } from "@clavia/tardigrade-domain/Execution/AgentExecution.external"
+import { DelegateTool } from "@clavia/tardigrade-domain/Delegation/DelegateTool"
+import { AgentExecution, ExecutionRejected } from "@clavia/tardigrade-domain/Execution/AgentExecution.external"
 import { AgentExecutionLive, CodeMethodsLive } from "../../../../examples/alchemy/AgentExecution"
 import { internalApi } from "../../src/alchemy/internal"
 import { ActorPoliciesLive } from "../../src/alchemy/policies"
@@ -52,8 +56,10 @@ import { ArtifactKeyValueStoreLive, SpillStorageLive } from "../../src/cluster/s
 import { GrepSpills, ReadSpill } from "../../src/cluster/spill-tools"
 
 const ToolCodeResult = Schema.Struct({ outcome: CodeOutcome, logs: Schema.Array(Schema.String) })
+const childOutput = OutputDeclaration.make({ name: "finding", schema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"], additionalProperties: false } })
+const parentOutput = OutputDeclaration.make({ name: "summary", schema: { type: "object", properties: { summary: { type: "string" } }, required: ["summary"], additionalProperties: false } })
 
-test.each(["meeseeks-multiturn", "output-valid", "output-invalid", "output-malformed", "code", "code-agents", "delegation", "fetch-direct", "fetch-code", "workspace-direct", "workspace-code", "spill", "spill-rejected"] as const)("default Alchemy agent executes %s through the real OpenAI HTTP provider and native policies", scenario => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+test.each(["child-output", "child-output-invalid", "child-output-unknown", "code-child-output", "code-child-output-invalid", "code-child-output-unknown", "meeseeks-multiturn", "output-valid", "output-invalid", "output-malformed", "code", "code-agents", "delegation", "fetch-direct", "fetch-code", "workspace-direct", "workspace-code", "spill", "spill-rejected"] as const)("default Alchemy agent executes %s through the real OpenAI HTTP provider and native policies", scenario => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
   const spillTarget = yield* workspaceKey("alice", "default-code")
   const directory = yield* Effect.acquireRelease(Effect.promise(() => mkdtemp(join(tmpdir(), "tardigrade-default-code-agent-"))), path => Effect.promise(() => rm(path, { recursive: true, force: true })))
   const requests = yield* Ref.make<ReadonlyArray<typeof OpenAiSchema.CreateResponse.Type>>([])
@@ -78,6 +84,67 @@ test.each(["meeseeks-multiturn", "output-valid", "output-invalid", "output-malfo
       if (scenario !== "meeseeks-multiturn" || previous.length < 2) expect(encoded).toContain(DEFAULT_MEESEEKS_INSTRUCTIONS)
     }
     const usage = { input_tokens: 20, output_tokens: 10, total_tokens: 30 }
+    if (scenario.includes("child-output")) {
+      const unknown = scenario.endsWith("unknown")
+      const invalid = scenario.endsWith("invalid")
+      const code = scenario.startsWith("code-")
+      if (previous.length === 0) {
+        expect(body.text?.format).toEqual({ type: "json_schema", name: parentOutput.name, schema: parentOutput.schema, strict: true })
+        const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(OpenAiSchema.CreateResponse))(body)
+        expect(encoded).toContain("Configured child output names")
+        expect(encoded).toContain("finding")
+        const output = (() => {
+          if (unknown) return "not-configured"
+          return "finding"
+        })()
+        const name = (() => {
+          if (code) return CodeTool.name
+          return DelegateTool.name
+        })()
+        const argumentsJson = yield* Effect.gen(function* () {
+          if (code) return yield* Schema.encodeEffect(Schema.fromJsonString(CodeTool.parametersSchema))({ code: `const child = await agents.run({text: 'Find the primary source.', output: '${output}'}); return child.result;` })
+          return yield* Schema.encodeEffect(Schema.fromJsonString(DelegateTool.parametersSchema))({ task: "Find the primary source.", output })
+        })
+        return yield* HttpServerResponse.schemaJson(OpenAiSchema.Response)({
+          id: "child-output-start", object: "response", model: "gpt-4.1-mini", created_at: 1700000000, usage,
+          output: [{ type: "function_call", id: "child-output-call", call_id: "child-output-call", name, arguments: argumentsJson, status: "completed" }],
+        }).pipe(Effect.orDie)
+      }
+      if (!unknown && previous.length === 1) {
+        expect(body.text?.format).toEqual({ type: "json_schema", name: childOutput.name, schema: childOutput.schema, strict: true })
+        const text = (() => {
+          if (invalid) return '{"answer":42}'
+          return '{"answer":"Native child evidence"}'
+        })()
+        return yield* HttpServerResponse.schemaJson(OpenAiSchema.Response)({
+          id: "child-output-result", object: "response", model: "gpt-4.1-mini", created_at: 1700000001, usage,
+          output: [{ type: "message", id: "child-output-message", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [] }] }],
+        }).pipe(Effect.orDie)
+      }
+      if (unknown) expect(previous.length).toBe(1)
+      else expect(previous.length).toBe(2)
+      expect(body.text?.format).toEqual({ type: "json_schema", name: parentOutput.name, schema: parentOutput.schema, strict: true })
+      if (typeof body.input === "string" || body.input === undefined) return yield* Effect.die("Expected child result in native provider input")
+      const result = body.input.find(item => item.type === "function_call_output" && item.call_id === "child-output-call")
+      if (result?.type !== "function_call_output" || typeof result.output !== "string") return yield* Effect.die("Expected native delegated result")
+      if (code) {
+        const decoded = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ToolCodeResult))(result.output).pipe(Effect.orDie)
+        if (invalid || unknown) expect(decoded.outcome._tag).toBe("Failed")
+        else expect(decoded.outcome).toMatchObject({ _tag: "Returned", value: { answer: "Native child evidence" } })
+      } else if (unknown) {
+        const failure = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ExecutionRejected))(result.output).pipe(Effect.orDie)
+        expect(failure.reason).toBe("UnknownChildOutput")
+      } else {
+        const decoded = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ReservedState))(result.output).pipe(Effect.orDie)
+        expect(decoded.reservation.output).toEqual(childOutput)
+        if (invalid) expect(decoded.status).toBe("failed")
+        else expect(decoded.status).toBe("completed")
+      }
+      return yield* HttpServerResponse.schemaJson(OpenAiSchema.Response)({
+        id: "parent-output-result", object: "response", model: "gpt-4.1-mini", created_at: 1700000002, usage,
+        output: [{ type: "message", id: "parent-output-message", role: "assistant", status: "completed", content: [{ type: "output_text", text: '{"summary":"Child outcome observed"}', annotations: [] }] }],
+      }).pipe(Effect.orDie)
+    }
     if (scenario === "meeseeks-multiturn") return yield* HttpServerResponse.schemaJson(OpenAiSchema.Response)({
       id: `turn-${previous.length}`, object: "response", model: "gpt-4.1-mini", created_at: 1700000000, usage,
       output: [{ type: "message", id: `message-${previous.length}`, role: "assistant", status: "completed", content: [{ type: "output_text", text: "A concise answer.", annotations: [] }] }],
@@ -237,9 +304,11 @@ test.each(["meeseeks-multiturn", "output-valid", "output-invalid", "output-malfo
         if (delegate?.type !== "function") return yield* Effect.die("Expected delegate tool")
         const parameters = yield* Schema.decodeUnknownEffect(Schema.Json)(delegate.parameters).pipe(Effect.orDie)
         expect(Schema.encodeSync(Schema.fromJsonString(Schema.Json))(parameters)).toContain('"task"')
+        const argumentsJson = yield* Schema.encodeEffect(Schema.fromJsonString(toCodecOpenAI(DelegateTool.parametersSchema).codec))({ task: "Complete the delegated child task." })
+        expect(argumentsJson).toContain('"output":null')
         return yield* HttpServerResponse.schemaJson(OpenAiSchema.Response)({
           id: "response-delegate", object: "response", model: "gpt-4.1-mini", created_at: 1700000000, usage,
-          output: [{ type: "function_call", id: "function-delegate", call_id: "delegate-call", name: "delegate", arguments: '{"task":"Complete the delegated child task."}', status: "completed" }],
+          output: [{ type: "function_call", id: "function-delegate", call_id: "delegate-call", name: "delegate", arguments: argumentsJson, status: "completed" }],
         }).pipe(Effect.orDie)
       }
       if (previous.length === 1) {
@@ -339,6 +408,7 @@ test.each(["meeseeks-multiturn", "output-valid", "output-invalid", "output-malfo
     TARDIGRADE_WORKSPACE_POLICY: Schema.encodeSync(Schema.fromJsonString(WorkspacePolicy))(workspacePolicy),
     TARDIGRADE_SPILL_POLICY: Schema.encodeSync(Schema.fromJsonString(SpillPolicy))(spillPolicy),
     TARDIGRADE_ARTIFACT_DB: join(directory, "artifacts.sqlite"),
+    TARDIGRADE_CHILD_OUTPUTS: yield* Schema.encodeEffect(Schema.fromJsonString(ChildOutputCatalog))({ finding: childOutput.schema }),
   }
   const config = Layer.succeed(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown(settings))
   const state = yield* Layer.build(ActorModel.layer(ActorPoliciesLive).pipe(Layer.provide(Domain.InMemory), Layer.provide(config)))
@@ -358,7 +428,7 @@ test.each(["meeseeks-multiturn", "output-valid", "output-invalid", "output-malfo
   const runnerEndpoint = yield* RpcServer.toHttpEffect(RunRpcs.merge(CodeRpcs).merge(DelegationRpcs)).pipe(Effect.provide(Layer.succeedContext(runnerContext)), Effect.provide(RpcSerialization.layerNdjson))
   yield* Layer.build(HttpServer.serve()(runnerEndpoint).pipe(Layer.provide(Layer.succeedContext(runnerServerContext))))
   if (scenario !== "meeseeks-multiturn" && scenario !== "fetch-direct" && scenario !== "workspace-direct") yield* threads.send("default-code", OpenThread.make({ actor: "default", instance: "instance", name: "default", limits: DEFAULT_RUN_LIMITS })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
-  const request = { runId: "run", digest: "default-code", prompt: Prompt.make({ "meeseeks-multiturn": "Answer two turns.", "output-valid": "Return the declared research object.", "output-invalid": "Return invalid shape to verify terminal validation.", "output-malformed": "Return malformed JSON to verify terminal validation.", "code-agents": "Use agents.run inside Code to research a primary source.", code: "Read the current time using Code Mode.", delegation: "Delegate a child task and report its completed result.", "fetch-direct": "Read the granted URL with fetch_get.", "fetch-code": "Read the granted URL using Code Mode.", "workspace-direct": "Write text, read a bounded slice, and list the durable workspace.", "workspace-code": "Use Code Mode to write, read and list the durable workspace.", spill: "Return a large Code result then read and grep its complete persisted value.", "spill-rejected": "Report a known archive allowance refusal without retrying the completed Code." }[scenario]) }
+  const request = { runId: "run", digest: "default-code", prompt: Prompt.make({ "child-output": "Delegate with a structured finding.", "child-output-invalid": "Observe an invalid child finding.", "child-output-unknown": "Reject an unknown child output.", "code-child-output": "Use agents.run with a structured finding.", "code-child-output-invalid": "Observe invalid structured output inside Code.", "code-child-output-unknown": "Reject an unknown child output inside Code.", "meeseeks-multiturn": "Answer two turns.", "output-valid": "Return the declared research object.", "output-invalid": "Return invalid shape to verify terminal validation.", "output-malformed": "Return malformed JSON to verify terminal validation.", "code-agents": "Use agents.run inside Code to research a primary source.", code: "Read the current time using Code Mode.", delegation: "Delegate a child task and report its completed result.", "fetch-direct": "Read the granted URL with fetch_get.", "fetch-code": "Read the granted URL using Code Mode.", "workspace-direct": "Write text, read a bounded slice, and list the durable workspace.", "workspace-code": "Use Code Mode to write, read and list the durable workspace.", spill: "Return a large Code result then read and grep its complete persisted value.", "spill-rejected": "Report a known archive allowance refusal without retrying the completed Code." }[scenario]) }
   if (scenario === "meeseeks-multiturn") {
     const client = yield* ActorApi.clientInProcess.pipe(Effect.provide(SessionLive), Effect.provide(Layer.succeedContext(state)), Effect.provide(config))
     const message = { threadId: "default-code", runId: "turn-1", actor: "default", instance: "instance", name: "default", text: "First question.", limits: { ...DEFAULT_MEESEEKS_LIMITS, maxMessages: 4 } }
@@ -410,6 +480,8 @@ test.each(["meeseeks-multiturn", "output-valid", "output-invalid", "output-malfo
     expect(Result.isFailure(conflict)).toBe(true)
     expect(Result.isFailure(unauthorized)).toBe(true)
     expect((yield* Ref.get(requests)).length).toBe(beforeConflicts)
+  } else if (scenario.includes("child-output")) {
+    yield* threads.send("default-code", RequestRun.make({ ...request, output: parentOutput })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
   } else if (scenario.startsWith("output-")) {
     const output = yield* Schema.decodeUnknownEffect(OutputDeclaration)({ name: "research", schema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"], additionalProperties: false } }).pipe(Effect.orDie)
     yield* threads.send("default-code", RequestRun.make({ ...request, output })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
@@ -421,6 +493,53 @@ test.each(["meeseeks-multiturn", "output-valid", "output-invalid", "output-malfo
     const id = yield* ExecuteRun.executionId({ threadId: "default-code", runId: "run", owner: "alice", key: executionKey({ threadId: "default-code", runId: "run", owner: "alice" }) })
     yield* Effect.logError(yield* ExecuteRun.poll(id).pipe(Effect.provide(runnerContext)))
   })))
+  if (scenario.includes("child-output")) {
+    if (completed._tag !== "Open" || completed.active === null) return yield* Effect.die("Expected native parent output")
+    expect(completed.active.status).toBe("completed")
+    expect(completed.active.result).toEqual({ summary: "Child outcome observed" })
+    expect(completed.active.output).toEqual(parentOutput)
+    expect(completed.active.tokens).toBe(60)
+    expect(completed.active.toolCalls).toBe(1)
+    const requestId = yield* Effect.gen(function* () {
+      if (scenario.startsWith("code-")) return yield* codeAgentRequestId(runKey("default-code", "run:2"), 0)
+      return "run:2"
+    })
+    const childId = delegationKey("default-code", "run", requestId)
+    const child = yield* delegations.state(childId)
+    if (scenario.endsWith("unknown")) {
+      expect(child._tag).toBe("Unreserved")
+      expect((yield* Ref.get(requests)).length).toBe(2)
+      return
+    }
+    expect((yield* Ref.get(requests)).length).toBe(3)
+    if (child._tag !== "Reserved") return yield* Effect.die("Expected native child output reservation")
+    expect(child.reservation.output).toEqual(childOutput)
+    const settled = child.inbox.find(entry => entry.content._tag === "Result")
+    if (settled?.content._tag !== "Result" || settled.content.outcome.receipt === null) return yield* Effect.die("Expected native child output receipt")
+    const receipt = settled.content.outcome.receipt
+    expect(receipt.output).toEqual(childOutput)
+    expect(receipt.tokens).toBe(30)
+    yield* ExecuteRun.execute({ threadId: "default-code", runId: "run", owner: "alice", key: executionKey({ threadId: "default-code", runId: "run", owner: "alice" }) }).pipe(Effect.provideContext(runnerContext))
+    expect((yield* Ref.get(requests)).length).toBe(3)
+    if (scenario.endsWith("invalid")) {
+      expect(receipt.status).toBe("failed")
+      expect(receipt.reason).toBe("output_validation_failed")
+      expect(receipt.result).toBeNull()
+    } else {
+      expect(receipt.status).toBe("completed")
+      expect(receipt.result).toEqual({ answer: "Native child evidence" })
+    }
+    if (scenario.startsWith("code-")) {
+      const stored = yield* codes.state(runKey("default-code", "run:2"))
+      if (stored._tag !== "Open") return yield* Effect.die("Expected durable Code call")
+      const call = stored.calls[0]
+      if (call === undefined || call.request.execution === undefined) return yield* Effect.die("Expected frozen child output")
+      expect(call.request.execution.output).toEqual(childOutput)
+      const conflict = yield* codes.send(runKey("default-code", "run:2"), PrepareCodeCall.make({ ...call.request, execution: { ...call.request.execution, output: { ...childOutput, name: "changed" } } })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.result)
+      expect(Result.isFailure(conflict)).toBe(true)
+    }
+    return
+  }
   if (scenario.startsWith("output-")) {
     if (completed._tag !== "Open" || completed.active === null) return yield* Effect.die("Expected native structured run")
     expect(completed.active.output?.name).toBe("research")

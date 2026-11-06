@@ -36,4 +36,4 @@ export { SpillPolicy, DEFAULT_SPILL_POLICY, SpillPointer } from "./Spill/Spill.s
 export { ContextPolicy, ContextSummary, DEFAULT_CONTEXT_POLICY } from "./Execution/Context.schemas"
 export { AgentsRun } from "./Delegation/AgentsRun"
 
-export { OutputDeclaration, OutputSchema } from "./Output/Output.schemas"
+export { OutputDeclaration, OutputSchema, ChildOutputCatalog } from "./Output/Output.schemas"

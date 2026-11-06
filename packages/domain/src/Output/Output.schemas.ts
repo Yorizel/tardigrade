@@ -50,3 +50,9 @@ export const OutputDeclaration = Closed(Schema.Struct({ name: OutputName, schema
   if (declaration.schema.type !== "object") return "the declared output is an object schema"
   return undefined
 }))
+
+
+export const ChildOutputCatalog = Schema.Record(OutputName, OutputSchema).check(Schema.makeFilter(catalog => {
+  if (Arr.some(Record.toEntries(catalog), ([name, schema]) => !Schema.is(OutputDeclaration)({ name, schema }))) return "child outputs must declare closed object schemas supported by the native output contract"
+  return undefined
+}))

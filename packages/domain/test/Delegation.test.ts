@@ -1,7 +1,8 @@
 import * as Domain from "@alchemy.run/domain"
-import { Effect, Layer, Result } from "effect"
+import { Effect, Layer, Result, Schema } from "effect"
 import { Prompt } from "effect/ai"
 import { expect, test } from "bun:test"
+import { ChildOutputCatalog, OutputDeclaration } from "../src/Output/Output.schemas"
 import { Delegation } from "../src/Delegation/Delegation.aggregate"
 import { AcknowledgeDelegationInbox, ConfirmDelegationFencedNotStarted, MarkDelegationStarted, RecordChildMessage, RecordChildOutcome, ReplyToChild, RequestDelegationCancellation, ReserveDelegation, ResolveDelegation } from "../src/Delegation/Delegation.commands"
 import { DEFAULT_DELEGATION_LIMITS, delegationKey, FencedChildAbsent, childBindingOf } from "../src/Delegation/Delegation.schemas"
@@ -179,3 +180,39 @@ test("native Api validates the owner for reads and cancellation", () => run(Effe
   if (state._tag !== "Reserved") return yield* Effect.die("Expected reservation")
   expect(state.status).toBe("reserved")
 }))))
+
+
+test("child output declaration freezes reservation identity and settlement evidence", () => run(Effect.gen(function* () {
+  const delegations = yield* Delegation
+  const output = OutputDeclaration.make({ name: "finding", schema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"], additionalProperties: false } })
+  const request = { ...reservation, output }
+  const first = yield* delegations.send(key, ReserveDelegation.make(request))
+  const repeat = yield* delegations.send(key, ReserveDelegation.make(request))
+  expect(repeat.reply).toEqual(first.reply)
+  const conflict = yield* delegations.send(key, ReserveDelegation.make({ ...request, output: { ...output, name: "changed" } })).pipe(Effect.result)
+  expect(Result.isFailure(conflict)).toBe(true)
+  if (Result.isFailure(conflict)) expect(conflict.failure).toMatchObject({ reason: "RequestIdentityConflict" })
+  const changedSchema = OutputDeclaration.make({ name: "finding", schema: { type: "object", properties: { answer: { type: "integer" } }, required: ["answer"], additionalProperties: false } })
+  const schemaConflict = yield* delegations.send(key, ReserveDelegation.make({ ...request, output: changedSchema })).pipe(Effect.result)
+  expect(Result.isFailure(schemaConflict)).toBe(true)
+  if (Result.isFailure(schemaConflict)) expect(schemaConflict.failure).toMatchObject({ reason: "RequestIdentityConflict" })
+  yield* delegations.send(key, MarkDelegationStarted.make({}))
+  const wrongOutput = yield* delegations.send(key, RecordChildOutcome.make({ childThreadId: key, receipt: completed })).pipe(Effect.result)
+  expect(Result.isFailure(wrongOutput)).toBe(true)
+  if (Result.isFailure(wrongOutput)) expect(wrongOutput.failure).toMatchObject({ reason: "ChildOutputIdentityConflict" })
+  const receipt = { ...completed, output, text: '{"answer":"Native JSON"}', result: { answer: "Native JSON" } }
+  yield* delegations.send(key, RecordChildOutcome.make({ childThreadId: key, receipt }))
+  yield* delegations.send(key, RecordChildOutcome.make({ childThreadId: key, receipt }))
+  const state = yield* delegations.state(key)
+  if (state._tag !== "Reserved") return yield* Effect.die("Expected native delegation")
+  expect(state.status).toBe("completed")
+  expect(state.reservation.output).toEqual(output)
+  expect(state.inbox).toHaveLength(1)
+  expect(state.inbox[0]?.content).toMatchObject({ _tag: "Result", outcome: { receipt: { output, result: { answer: "Native JSON" } } } })
+})))
+
+test("child output catalogs reject unsupported contracts before execution", () => {
+  expect(Result.isFailure(Schema.decodeResult(ChildOutputCatalog)({ bad: { type: "string" } }))).toBe(true)
+  expect(Result.isFailure(Schema.decodeResult(ChildOutputCatalog)({ bad: { type: "object", properties: { value: { type: "string", format: "unknown" } }, required: ["value"], additionalProperties: false } }))).toBe(true)
+  expect(Result.isSuccess(Schema.decodeResult(ChildOutputCatalog)({ finding: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"], additionalProperties: false } }))).toBe(true)
+})

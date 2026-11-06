@@ -1,4 +1,4 @@
-import { Array as EffectArray, Cause, Context, Effect, Layer, Option, Schema, Stream } from "effect"
+import { Array as EffectArray, Cause, Context, Effect, Layer, Option, Schema, Stream, Struct } from "effect"
 import { Activity, Workflow } from "effect/workflow"
 import { ActorInternalApi } from "../ActorInternal.api"
 import { ChildBinding, Receipt } from "../Thread/Thread.schemas"
@@ -97,7 +97,7 @@ export const ExecuteDelegationLive = Layer.unwrap(Effect.gen(function* () {
       }, { headers, commandId: commandId("open") }).pipe(Effect.orDie, Effect.asVoid) })
       yield* allowed
       yield* Activity.make({ name: "request-child", execute: api.RequestChildRun(initial.delegation.childThreadId, {
-        binding, digest: delegationId, prompt: initial.delegation.reservation.prompt,
+        binding, digest: delegationId, prompt: initial.delegation.reservation.prompt, ...Struct.pick(initial.delegation.reservation, ["output"]),
       }, { headers, commandId: commandId("request") }).pipe(Effect.orDie, Effect.asVoid) })
       yield* api.Thread.watch(initial.delegation.childThreadId, { headers }).pipe(
         Stream.filter(({ state }) => state !== null && state._tag === "Open" && state.active?.runId === binding.childRunId && terminal(state.active.status)),

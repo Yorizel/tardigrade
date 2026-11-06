@@ -15,7 +15,8 @@ import { CodeExecution } from "../src/Code/Code.aggregate"
 import { Delegation } from "../src/Delegation/Delegation.aggregate"
 import { ExecuteDelegation, ExecuteDelegationLive } from "../src/Delegation/ExecuteDelegation.saga"
 import { ConfirmDelegationFencedNotStarted, MarkDelegationStarted, RequestDelegationCancellation, ReserveDelegation } from "../src/Delegation/Delegation.commands"
-import { DEFAULT_DELEGATION_LIMITS, FencedChildAbsent, childBindingOf, delegationExecutionKey, delegationKey } from "../src/Delegation/Delegation.schemas"
+import { OutputDeclaration } from "../src/Output/Output.schemas"
+import { DEFAULT_DELEGATION_LIMITS, Reservation, FencedChildAbsent, childBindingOf, delegationExecutionKey, delegationKey } from "../src/Delegation/Delegation.schemas"
 import { Thread } from "../src/Thread/Thread.aggregate"
 import { BeginStep, CompleteRun, ConfirmDispatch, FenceChildThread, OpenChildThread, OpenThread, RequestChildRun, RequestRun, ReserveChildThread } from "../src/Thread/Thread.commands"
 import { DEFAULT_RUN_LIMITS } from "../src/Thread/Thread.schemas"
@@ -33,7 +34,7 @@ const childFixture = Workflow.make("DelegationProcessChild", {
   payload: { threadId: Schema.NonEmptyString, runId: Schema.NonEmptyString },
   idempotencyKey: input => `${input.threadId.length}:${input.threadId}${input.runId}`,
 })
-const fixture = Effect.fn("DelegationProcess.fixture")(function* (pauseAt: "none" | "open" | "request" = "none") {
+const fixture = Effect.fn("DelegationProcess.fixture")(function* (pauseAt: "none" | "open" | "request" = "none", request: typeof Reservation.Type = reservation) {
   const state = yield* Layer.build(StateModel.layer(Layer.empty).pipe(Layer.provide(Domain.InMemory)))
   const threads = Context.get(state, Thread)
   const delegations = Context.get(state, Delegation)
@@ -60,7 +61,7 @@ const fixture = Effect.fn("DelegationProcess.fixture")(function* (pauseAt: "none
   yield* Effect.gen(function* () {
     yield* threads.send("parent", OpenThread.make({ actor: "parent-agent", instance: "parent", name: "parent", limits: parentLimits }))
     yield* threads.send("parent", RequestRun.make({ runId: "parent-run", digest: "parent", prompt: Prompt.make("Delegate a task") }))
-    yield* delegations.send(id, ReserveDelegation.make(reservation))
+    yield* delegations.send(id, ReserveDelegation.make(request))
   }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
   return { threads, delegations, world, enteringOpen, releaseOpen }
 })
@@ -247,3 +248,31 @@ test("absence confirmation refuses a forged binding even after precharge", () =>
   const cancelled = yield* setup.delegations.state(id)
   expect(cancelled._tag === "Reserved" && cancelled.status).toBe("cancelled")
 }))))
+
+
+test("native delegation process admits a child with its frozen output and rejects changed output retries", () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+  const output = OutputDeclaration.make({ name: "finding", schema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"], additionalProperties: false } })
+  const setup = yield* fixture("none", { ...reservation, output })
+  const world = yield* Layer.build(setup.world)
+  yield* Effect.gen(function* () {
+    yield* ExecuteDelegation.execute(payload, { discard: true })
+    const child = yield* watched(setup)
+    expect(child.active?.output).toEqual(output)
+    const delegation = yield* setup.delegations.state(id)
+    if (delegation._tag !== "Reserved") return yield* Effect.die("Expected reserved delegation")
+    const binding = childBindingOf(delegation)
+    const conflict = yield* setup.threads.send(id, RequestChildRun.make({ binding, digest: id, prompt: reservation.prompt, output: { ...output, name: "changed" } })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.result)
+    expect(Result.isFailure(conflict)).toBe(true)
+    if (Result.isFailure(conflict)) expect(conflict.failure).toMatchObject({ reason: "RunIdConflict" })
+    const changedSchema = OutputDeclaration.make({ name: "finding", schema: { type: "object", properties: { answer: { type: "integer" } }, required: ["answer"], additionalProperties: false } })
+    const schemaConflict = yield* setup.threads.send(id, RequestChildRun.make({ binding, digest: id, prompt: reservation.prompt, output: changedSchema })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.result)
+    expect(Result.isFailure(schemaConflict)).toBe(true)
+    if (Result.isFailure(schemaConflict)) expect(schemaConflict.failure).toMatchObject({ reason: "RunIdConflict" })
+    const api = yield* ActorInternalApi.Client
+    yield* api.CompleteRun(id, { runId: "request", text: '{"answer":"Native child JSON"}' }, { headers }).pipe(Effect.orDie)
+    yield* ExecuteDelegation.execute(payload)
+    const result = yield* setup.delegations.state(id)
+    expect(result._tag === "Reserved" && result.status).toBe("completed")
+    if (result._tag === "Reserved") expect(result.inbox[0]?.content).toMatchObject({ _tag: "Result", outcome: { receipt: { output, result: { answer: "Native child JSON" } } } })
+  }).pipe(Effect.provideContext(world))
+}))), 10_000)

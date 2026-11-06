@@ -1,3 +1,4 @@
+import { OutputDeclaration } from "../Output/Output.schemas"
 import { Ownership } from "../Actor.context"
 import { Function, Schema } from "effect"
 import { Prompt } from "effect/ai"
@@ -18,6 +19,7 @@ export const Reservation = Schema.Struct({
   toolCalls: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   limits: DelegationLimits,
   prompt: Prompt.Prompt,
+  output: Schema.optionalKey(OutputDeclaration),
 })
 export const DelegationStatus = Schema.Literals(["reserved", "running", "cancel_requested", "completed", "failed", "cancelled", "unknown"])
 export const Outcome = Schema.Struct({

@@ -104,3 +104,18 @@ Set `TARDIGRADE_URL`, `TARDIGRADE_TOKEN`, `TARDIGRADE_THREAD_ID`, `TARDIGRADE_RU
 ## Counter quickstart
 
 `tdg init counter --template quickstart` creates an authenticated native Domain Counter. Increment and Decrement reply with the resulting count. A committed-event policy starts a native Effect notification workflow for positive even counts. The Cloudflare platform owns durable state and workflow checkpoints; `dev:memory` is explicitly ephemeral. The generated CLI comes directly from CounterApi. It does not use the legacy method HTTP protocol or local atom journal. See the [introduction](/docs/welcome) for commands and cutover limits.
+
+
+## Child output contracts
+
+Set `TARDIGRADE_CHILD_OUTPUTS` in the runner to a JSON object mapping names to native supported output schemas. Each schema must have a closed object root, list every property in `required`, and use supported keywords and formats. The runner validates this catalog before serving inference. For example:
+
+```dotenv
+TARDIGRADE_CHILD_OUTPUTS={"finding":{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false}}
+```
+
+`delegate({task, output: "finding"})` and `agents.run({text, output: "finding"})` select the named contract. The adapter advertises configured names, and the accepted capability and delegation reservation freeze the selected declaration. The child's native run persists that declaration and its decoded result; cancellation, retry identity and uncertainty retain their existing native owners. The child's schema is independent of the parent's output declaration.
+
+A completed Code child returns `text` and `result`; `result` contains decoded JSON when output was requested and is null for plain text. Direct delegation exposes that value in its native result receipt. Invalid child JSON fails the child once with its model usage retained; it causes no correction call and does not become a successful child result. An unknown name creates no child and returns a known tool refusal while retaining the parent's paid model usage. Changing the output on an admitted reservation or run ID is rejected.
+
+Background child execution, asynchronous result controls and provider/model selection remain separate migration work. The current parent workflow awaits the child, and its terminal state still cancels unfinished child work.

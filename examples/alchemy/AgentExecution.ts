@@ -1,6 +1,6 @@
 import { OpenAiConfig, OpenAiSchema, OpenAiLanguageModel } from "@effect/ai-openai"
-import { AgentExecution, AgentsRun, CodeMethods, CodeTool, CodeLimits, DEFAULT_CODE_LIMITS, DelegateTool, DelegationLimits, DEFAULT_DELEGATION_LIMITS, ExecutionRejected, RunScope, SpillStorage, SpillPolicy, DEFAULT_SPILL_POLICY } from "tardie/domain"
-import { Config, Context, DateTime, Effect, Layer, Result, Schema, Stream } from "effect"
+import { AgentExecution, AgentsRun, ChildOutputCatalog, OutputDeclaration, CodeMethods, CodeTool, CodeLimits, DEFAULT_CODE_LIMITS, DelegateTool, DelegationLimits, DEFAULT_DELEGATION_LIMITS, ExecutionRejected, RunScope, SpillStorage, SpillPolicy, DEFAULT_SPILL_POLICY } from "tardie/domain"
+import { Array as Arr, Config, Context, DateTime, Effect, Layer, Option, Record, Result, Schema, Stream } from "effect"
 import { FetchGet, FetchRequest, FetchTools, FetchToolsLive, WriteText, ReadText, ListTexts, WorkspaceTools, invokeWorkspaceTool, ReadSpill, GrepSpills, SpillTools } from "tardie/platform/cluster"
 import { LanguageModel, Prompt, Tool, Toolkit } from "effect/ai"
 import { HttpClient, HttpClientRequest } from "effect/http"
@@ -14,6 +14,12 @@ const timeTools = Toolkit.make(CurrentTime)
 const tools = Toolkit.merge(timeTools, FetchTools)
 const availableTools = Toolkit.merge(tools, WorkspaceTools, SpillTools)
 const modelTools = Toolkit.merge(availableTools, Toolkit.make(CodeTool, DelegateTool))
+const selectChildOutput = Effect.fn("AgentExecution.selectChildOutput")(function* (catalog: typeof ChildOutputCatalog.Type, name: string | undefined) {
+  if (name === undefined) return Option.none<typeof OutputDeclaration.Type>()
+  const schema = Record.get(catalog, name)
+  if (Option.isNone(schema)) return yield* ExecutionRejected.make({ reason: "UnknownChildOutput" })
+  return Option.some(OutputDeclaration.make({ name, schema: schema.value }))
+})
 const toolHandlers = Layer.merge(timeTools.toLayer({ current_time: () => DateTime.now.pipe(Effect.map(DateTime.formatIso)) }), FetchToolsLive)
 const decodeTime = Effect.fn("Tools.currentTime.params")(function* (input: unknown = {}) {
   return yield* Schema.decodeUnknownEffect(CurrentTime.parametersSchema, { onExcessProperty: "error" })(input).pipe(Effect.orDie)
@@ -140,6 +146,7 @@ const invokeTool = Effect.fn("Tools.invoke")(function* (
 export const CodeMethodsLive = CodeMethods.toLayer(Effect.gen(function* () {
   const actor = yield* Config.NonEmptyString("TARDIGRADE_ACTOR")
   const delegationLimits = yield* Config.schema(Schema.fromJsonString(DelegationLimits), "TARDIGRADE_DELEGATION_LIMITS").pipe(Config.withDefault(DEFAULT_DELEGATION_LIMITS))
+  const childOutputs = yield* Config.schema(Schema.fromJsonString(ChildOutputCatalog), "TARDIGRADE_CHILD_OUTPUTS").pipe(Config.withDefault({}))
   const handlers = yield* tools
   const workspace = yield* Effect.context<Effect.Services<ReturnType<typeof invokeWorkspaceTool>>>()
   const storage = yield* SpillStorage
@@ -155,7 +162,10 @@ export const CodeMethodsLive = CodeMethods.toLayer(Effect.gen(function* () {
         const params = yield* Schema.decodeUnknownEffect(AgentsRun.parametersSchema, { onExcessProperty: "error" })(input.call.input).pipe(Effect.orDie)
         const toolCalls = params.budget ?? delegationLimits.maxToolCalls
         if (toolCalls > delegationLimits.maxToolCalls) return yield* new ExecutionRejected({ reason: "DelegationToolBudgetExceeded" })
-        return { ...input.call, input: params, mutation: true, requiresApproval: false, execution: { _tag: "Delegate" as const, targetActor: actor, limits: delegationLimits, toolCalls } }
+        const output = yield* selectChildOutput(childOutputs, params.output)
+        const capability = { _tag: "Delegate" as const, targetActor: actor, limits: delegationLimits, toolCalls }
+        const execution = Option.match(output, { onNone: () => capability, onSome: output => ({ ...capability, output }) })
+        return { ...input.call, input: params, mutation: true, requiresApproval: false, execution }
       }
       const policy = yield* prepareTool(name, input.call.input, input.operationId, input.prompt)
       return { ...input.call, mutation: policy.mutation, requiresApproval: policy.requiresApproval }
@@ -177,6 +187,7 @@ export const AgentExecutionLive = AgentExecution.toLayer(Effect.gen(function* ()
   const system = yield* Config.NonEmptyString("TARDIGRADE_INSTRUCTIONS")
   const limits = yield* Config.schema(Schema.fromJsonString(CodeLimits), "TARDIGRADE_CODE_LIMITS").pipe(Config.withDefault(DEFAULT_CODE_LIMITS))
   const delegationLimits = yield* Config.schema(Schema.fromJsonString(DelegationLimits), "TARDIGRADE_DELEGATION_LIMITS").pipe(Config.withDefault(DEFAULT_DELEGATION_LIMITS))
+  const childOutputs = yield* Config.schema(Schema.fromJsonString(ChildOutputCatalog), "TARDIGRADE_CHILD_OUTPUTS").pipe(Config.withDefault({}))
   const spill = yield* Config.schema(Schema.fromJsonString(SpillPolicy), "TARDIGRADE_SPILL_POLICY").pipe(Config.withDefault(DEFAULT_SPILL_POLICY))
   const methods = yield* CodeMethods
   const catalog = yield* methods.catalog({ actor }).pipe(Effect.orDie)
@@ -184,6 +195,8 @@ export const AgentExecutionLive = AgentExecution.toLayer(Effect.gen(function* ()
   const workspace = yield* Effect.context<Effect.Services<ReturnType<typeof invokeWorkspaceTool>>>()
   const storage = yield* SpillStorage
   const model = yield* OpenAiLanguageModel.make({ model: modelId })
+  const outputNames = Arr.join(Record.keys(childOutputs), ", ")
+  const instructions = `${system}\nConfigured child output names for delegate({task, output}) and agents.run({text, output}): [${outputNames}]. Use the child's decoded result field when an output is requested. An absent output name requests plain text.`
   return {
     compact: Effect.fn("AgentExecution.compact")(function* (input) {
       if (input.actor !== actor) return yield* new ExecutionRejected({ reason: "UnknownActor" })
@@ -200,7 +213,7 @@ export const AgentExecutionLive = AgentExecution.toLayer(Effect.gen(function* ()
       if (input.actor !== actor) return yield* new ExecutionRejected({ reason: "UnknownActor" })
       if (input.remainingTokens <= 0) return yield* new ExecutionRejected({ reason: "TokenBudgetExceeded" })
       const generate = LanguageModel.generateText({
-        prompt: Prompt.concat(Prompt.make([{ role: "system", content: system }]), input.prompt),
+        prompt: Prompt.concat(Prompt.make([{ role: "system", content: instructions }]), input.prompt),
         toolkit: modelTools,
         disableToolCallResolution: true,
       }).pipe(
@@ -228,7 +241,14 @@ export const AgentExecutionLive = AgentExecution.toLayer(Effect.gen(function* ()
         if (call.providerExecuted) return yield* new ExecutionRejected({ reason: "UnexposedTool" })
         if (call.name === DelegateTool.name) {
           const params = yield* Schema.decodeUnknownEffect(DelegateTool.parametersSchema, { onExcessProperty: "error" })(call.params).pipe(Effect.orDie)
-          return { call: Prompt.toolCallPart({ id: call.id, name: call.name, params, providerExecuted: false }), mutation: true, requiresApproval: false, execution: { _tag: "Delegate" as const, targetActor: actor, limits: delegationLimits, toolCalls: delegationLimits.maxToolCalls } }
+          const output = yield* selectChildOutput(childOutputs, params.output).pipe(Effect.result)
+          if (Result.isFailure(output)) return {
+            call: Prompt.toolCallPart({ id: call.id, name: call.name, params, providerExecuted: false }), mutation: false, requiresApproval: false,
+            execution: { _tag: "Rejected" as const, reason: output.failure.reason },
+          }
+          const capability = { _tag: "Delegate" as const, targetActor: actor, limits: delegationLimits, toolCalls: delegationLimits.maxToolCalls }
+          const execution = Option.match(output.success, { onNone: () => capability, onSome: output => ({ ...capability, output }) })
+          return { call: Prompt.toolCallPart({ id: call.id, name: call.name, params, providerExecuted: false }), mutation: true, requiresApproval: false, execution }
         }
         if (call.name === CodeTool.name) {
           const params = yield* Schema.decodeUnknownEffect(CodeTool.parametersSchema, { onExcessProperty: "error" })(call.params).pipe(Effect.orDie)

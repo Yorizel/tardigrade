@@ -1,6 +1,6 @@
 import { compactRun } from "./CompactRun"
 import { delegationLineage } from "../Delegation/Delegation.lineage"
-import { Array as Arr, Match, Cause, Clock, Effect, Layer, Result, Schema } from "effect"
+import { Array as Arr, Match, Cause, Clock, Effect, Layer, Result, Schema, Struct } from "effect"
 import { Digest } from "effect/crypto"
 import { CodeTool } from "../Code/CodeTool"
 import { CodeInput } from "../Code/Code.schemas"
@@ -74,6 +74,14 @@ export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
         yield* Activity.make({ name: `prepare-${stepId}`, error: RunRejected, execute: commands.BeginStep(threadId, { runId, stepId, kind: "tool", mutation: tool.mutation, requiresApproval: tool.requiresApproval }, { headers, commandId: runKey(threadId, `prepare:${stepId}`) }).pipe(Effect.orDie, Effect.asVoid) })
         if (tool.requiresApproval) yield* DurableDeferred.await(approval(stepId))
         const prompt = yield* Match.value(tool.execution).pipe(
+          Match.tag("Rejected", refusal => Activity.make({
+            name: `refuse-${stepId}`, success: Prompt.Prompt,
+            execute: Effect.gen(function* () {
+              yield* commands.ConfirmDispatch(threadId, { runId, stepId }, { headers, commandId: runKey(threadId, `dispatch:${stepId}`) })
+              const result = yield* Schema.encodeEffect(ExecutionRejected)(ExecutionRejected.make({ reason: refusal.reason }))
+              return Prompt.fromMessages([Prompt.toolMessage({ content: [Prompt.toolResultPart({ id: tool.call.id, name: tool.call.name, result, isFailure: true, providerExecuted: false })] })])
+            }).pipe(Effect.orDie),
+          })),
           Match.tag("Code", capability => Effect.gen(function* () {
             if (tool.call.name !== CodeTool.name || tool.call.providerExecuted) return yield* ExecutionRejected.make({ reason: "UnexposedCodeTool" })
             const current = yield* commands.Thread.get(threadId, { headers }).pipe(Effect.orDie)
@@ -146,7 +154,7 @@ export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
               execute: Effect.gen(function* () {
                 const params = yield* Schema.decodeUnknownEffect(DelegateTool.parametersSchema, { onExcessProperty: "error" })(tool.call.params).pipe(Effect.orDie)
                 const lineage = yield* delegationLineage({ owner, threadId, runId }, capability.limits).pipe(Effect.provideService(ActorInternalApi.Client, commands))
-                return { requestId: stepId, parentThreadId: threadId, parentRunId: runId, targetActor: capability.targetActor, lineage, toolCalls: capability.toolCalls, limits: capability.limits, prompt: Prompt.make(params.task) }
+                return { requestId: stepId, parentThreadId: threadId, parentRunId: runId, targetActor: capability.targetActor, lineage, toolCalls: capability.toolCalls, limits: capability.limits, prompt: Prompt.make(params.task), ...Struct.pick(capability, ["output"]) }
               }),
             })
             const delegated = yield* RunDelegation.execute({ key: delegationExecutionKey(owner, delegationId), delegationId, owner, reservation })
