@@ -1,3 +1,6 @@
+import { SpillStorageLive } from "../../platform/src/cluster/spill-storage"
+import { KeyValueStore } from "effect/persistence"
+import { SpillCatalog } from "../src/Spill/Spill.aggregate"
 import { Workspace } from "../src/Workspace/Workspace.aggregate"
 import { expect, test } from "bun:test"
 import * as Domain from "@alchemy.run/domain"
@@ -18,7 +21,7 @@ import { AgentExecution } from "../src/Execution/AgentExecution.external"
 import { ExecuteRun, executionKey } from "../src/Execution/Run.workflow"
 import { ExecuteRunLive } from "../src/Execution/ExecuteRun.saga"
 
-const TestModel = Domain.Model("RemoteExecutionTest", { aggregates: [Thread, CodeExecution, Delegation, Workspace] })
+const TestModel = Domain.Model("RemoteExecutionTest", { aggregates: [Thread, CodeExecution, Delegation, Workspace, SpillCatalog] })
 const TestSession = Layer.succeed(Session, (effect, { headers }) => {
   const owner = Headers.get(headers, "x-tardigrade-owner")
   if (Option.isNone(owner)) return Effect.fail(Unauthorized.make())
@@ -53,7 +56,7 @@ test.each([
       return Prompt.fromMessages([Prompt.toolMessage({ content: [Prompt.toolResultPart({ id: input.call.id, name: input.call.name, result: 42, isFailure: false, providerExecuted: false })] })])
     }),
   }))
-  const world = ExecuteRunLive.pipe(Layer.provideMerge(clientLayer), Layer.provide(adapter), Layer.provideMerge(WorkflowEngine.layerMemory), Layer.provide(Digest.layerWebCrypto))
+  const world = ExecuteRunLive.pipe(Layer.provide(SpillStorageLive.pipe(Layer.provide(KeyValueStore.layerMemory))), Layer.provideMerge(clientLayer), Layer.provide(adapter), Layer.provideMerge(WorkflowEngine.layerMemory), Layer.provide(Digest.layerWebCrypto))
   yield* Effect.gen(function* () {
     const threads = yield* Thread
     yield* threads.send(threadId, OpenThread.make({ actor: "agent", instance: "i", name: "main", limits: DEFAULT_RUN_LIMITS }))
@@ -80,7 +83,7 @@ test("a mismatched workflow owner cannot dispatch or fail another owner's run", 
     infer: () => Ref.update(calls, count => count + 1).pipe(Effect.andThen(Effect.die("Unauthorized dispatch"))),
     invoke: () => Ref.update(calls, count => count + 1).pipe(Effect.andThen(Effect.die("Unauthorized dispatch"))),
   }))
-  const world = ExecuteRunLive.pipe(Layer.provideMerge(clientLayer), Layer.provide(adapter), Layer.provideMerge(WorkflowEngine.layerMemory), Layer.provide(Digest.layerWebCrypto))
+  const world = ExecuteRunLive.pipe(Layer.provide(SpillStorageLive.pipe(Layer.provide(KeyValueStore.layerMemory))), Layer.provideMerge(clientLayer), Layer.provide(adapter), Layer.provideMerge(WorkflowEngine.layerMemory), Layer.provide(Digest.layerWebCrypto))
   yield* Effect.gen(function* () {
     const threads = yield* Thread
     yield* threads.send("private", OpenThread.make({ actor: "agent", instance: "i", name: "main", limits: DEFAULT_RUN_LIMITS }))

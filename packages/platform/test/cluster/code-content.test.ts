@@ -1,3 +1,6 @@
+import { SpillStorageLive } from "../../src/cluster/spill-storage"
+import { KeyValueStore } from "effect/persistence"
+import { SpillCatalog } from "@clavia/tardigrade-domain/Spill/Spill.aggregate"
 import { expect, test } from "bun:test"
 import * as Domain from "@alchemy.run/domain"
 import { Effect, Layer, Option, Ref, Schema } from "effect"
@@ -25,7 +28,7 @@ import { Delegation } from "@clavia/tardigrade-domain/Delegation/Delegation.aggr
 import { Workspace } from "@clavia/tardigrade-domain/Workspace/Workspace.aggregate"
 import { CodeRuntimeLive } from "../../src/cluster/code-runtime"
 
-const ContentModel = Domain.Model("CodeContentTest", { aggregates: [Thread, CodeExecution, Delegation, Workspace] })
+const ContentModel = Domain.Model("CodeContentTest", { aggregates: [Thread, CodeExecution, Delegation, Workspace, SpillCatalog] })
 const catalog = { tools: ["capture"] }
 const modelOutput = [Prompt.textPart({ text: "Screenshot of the current page" }), Prompt.filePart({ mediaType: "image/png", fileName: "page.png", data: new Uint8Array([137, 80, 78, 71]) })]
 const value = { image: "capture" }
@@ -165,6 +168,7 @@ test("the parent workflow receives native Code file bytes and logs through the o
     invoke: Effect.fn("CodeContent.unexpectedInvoke")(() => Effect.die("Code must execute through its native child workflows")),
   }))
   const parentWorld = Layer.mergeAll(ExecuteRunLive, RunCodeLive, ExecuteCodeLive).pipe(
+    Layer.provide(SpillStorageLive.pipe(Layer.provide(KeyValueStore.layerMemory))),
     Layer.provideMerge(client), Layer.provide(agent), Layer.provide(methods), Layer.provide(CodeRuntimeLive),
     Layer.provideMerge(WorkflowEngine.layerMemory), Layer.provide(Digest.layerWebCrypto),
   )

@@ -32,6 +32,8 @@ test("template staging excludes local state and secrets, including stale output"
     await mkdir(join(root, "examples", "alchemy"), { recursive: true })
     for (const file of ALCHEMY_TEMPLATE_FILES) await writeFile(join(root, "examples", "alchemy", file), "native template")
     await writeFile(join(root, "examples", "alchemy", ".env"), "SECRET=private")
+    await writeFile(join(root, "examples", "alchemy", "artifacts.sqlite"), "private complete results")
+    await writeFile(join(root, "examples", "alchemy", "artifacts.sqlite-wal"), "private pending results")
     await mkdir(join(stage, "examples", "old-template"), { recursive: true })
     await writeFile(join(stage, "examples", "old-template", ".dev.vars"), "SECRET=stale")
     await stageInitTemplates(root, stage)

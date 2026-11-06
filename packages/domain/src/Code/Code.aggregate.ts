@@ -41,6 +41,7 @@ export class CodeExecution extends Domain.Aggregate("CodeExecution", {
         return []
       }
       if (request.code.length > request.limits.maxCodeChars) return yield* new CodeRejected({ reason: "CodeBudgetExceeded" })
+      if (request.spill !== undefined && (!request.catalog.workspace?.includes("read") || !request.catalog.workspace.includes("grep"))) return yield* new CodeRejected({ reason: "SpillReadersNotSelected" })
       const startedAt = DateTime.toEpochMillis(now)
       return [CodeStarted.make({ owner: caller.subject, request, startedAt, deadlineAt: startedAt + request.limits.maxDurationMs })]
     }),

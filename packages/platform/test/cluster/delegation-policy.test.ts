@@ -1,3 +1,6 @@
+import { SpillStorageLive } from "../../src/cluster/spill-storage"
+import { KeyValueStore } from "effect/persistence"
+import { SpillCatalog } from "@clavia/tardigrade-domain/Spill/Spill.aggregate"
 import { Workspace } from "@clavia/tardigrade-domain/Workspace/Workspace.aggregate"
 import { expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
@@ -38,7 +41,7 @@ import { RunRpcHandlers, RunRpcs } from "../../src/cluster/run-control"
 import { DelegationRpcHandlers, DelegationRpcs } from "../../src/cluster/delegation-control"
 
 class FailAfterStart extends Domain.Policy("DelegationHttpFailAfterStart", { from: Delegation, on: [DelegationStarted] }) {}
-const StateModel = Domain.Model("DelegationHttpState", { aggregates: [Thread, CodeExecution, Delegation, Workspace], policies: [RunExecution, DelegationExecutionPolicy, FailAfterStart] })
+const StateModel = Domain.Model("DelegationHttpState", { aggregates: [Thread, CodeExecution, Delegation, Workspace, SpillCatalog], policies: [RunExecution, DelegationExecutionPolicy, FailAfterStart] })
 const RunnerRpcs = RunRpcs.merge(DelegationRpcs)
 const domainToken = "delegation-domain-fixture-token"
 const runnerToken = "delegation-runner-fixture-token"
@@ -109,6 +112,7 @@ const fixture = Effect.fn("DelegationHttp.fixture")(function* (pauseReservation 
   }))
   const database = SqliteClient.layer({ filename: join(directory, "runner.sqlite") })
   const runner = Layer.mergeAll(ExecuteRunLive, ExecuteDelegationLive, RunRpcHandlers, DelegationRpcHandlers).pipe(
+    Layer.provide(SpillStorageLive.pipe(Layer.provide(KeyValueStore.layerMemory))),
     Layer.provide(DomainClientLive), Layer.provide(adapter),
     Layer.provideMerge(ClusterWorkflowEngine.layer.pipe(Layer.provideMerge(SingleRunner.layer({ shardingConfig: { entityMessagePollInterval: Duration.millis(20) } })))),
     Layer.provideMerge(database), Layer.provide(Digest.layerWebCrypto), Layer.provide(config),

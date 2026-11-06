@@ -1,3 +1,4 @@
+import { SpillCatalog } from "@clavia/tardigrade-domain/Spill/Spill.aggregate"
 import { expect, test } from "bun:test"
 import * as Domain from "@alchemy.run/domain"
 import { ActorInternalApi } from "@clavia/tardigrade-domain/ActorInternal.api"
@@ -16,7 +17,7 @@ import { Digest } from "effect/crypto"
 import { Headers } from "effect/http"
 import { ListTexts, ReadText, WriteText, invokeWorkspaceTool } from "../../src/cluster/workspace-tools"
 
-const WorkspaceModel = Domain.Model("WorkspaceToolsTest", { aggregates: [Thread, Workspace, CodeExecution, Delegation] })
+const WorkspaceModel = Domain.Model("WorkspaceToolsTest", { aggregates: [Thread, Workspace, CodeExecution, Delegation, SpillCatalog] })
 const session = Layer.succeed(Session, (effect, { headers }) => {
   const owner = Headers.get(headers, "x-tardigrade-owner")
   if (Option.isNone(owner)) return Effect.fail(Unauthorized.make())

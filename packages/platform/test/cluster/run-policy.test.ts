@@ -1,3 +1,5 @@
+import { SpillStorageLive } from "../../src/cluster/spill-storage"
+import { KeyValueStore } from "effect/persistence"
 import { expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -63,6 +65,7 @@ test("Domain policies start, approve and cancel Cluster workflows through actual
     }),
   }))
   const runner = Layer.mergeAll(ExecuteRunLive, RunRpcHandlers).pipe(
+    Layer.provide(SpillStorageLive.pipe(Layer.provide(KeyValueStore.layerMemory))),
     Layer.provide(DomainClientLive), Layer.provide(adapter),
     Layer.provideMerge(ClusterWorkflowEngine.layer.pipe(Layer.provideMerge(SingleRunner.layer({ shardingConfig: { entityMessagePollInterval: Duration.millis(20) } })))),
     Layer.provide(SqliteClient.layer({ filename: join(directory, "runner.sqlite") })),

@@ -49,6 +49,7 @@ for (const mode of ["approval", "unknown"] as const) {
           FIXTURE_MODE: mode,
           FIXTURE_READY_FILE: readyFile,
           TARDIGRADE_RUNNER_DB: databasePath,
+          TARDIGRADE_ARTIFACT_DB: join(directory, "artifacts.sqlite"),
           TARDIGRADE_RUNNER_PORT: String(port),
           TARDIGRADE_DOMAIN_URL: domainUrl,
           RUNNER_TO_DOMAIN_TOKEN: domainToken,

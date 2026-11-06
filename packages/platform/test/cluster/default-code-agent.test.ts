@@ -40,14 +40,27 @@ import { ReservedState, DEFAULT_DELEGATION_LIMITS, delegationKey } from "@clavia
 import { Workspace } from "@clavia/tardigrade-domain/Workspace/Workspace.aggregate"
 import { DEFAULT_WORKSPACE_POLICY, ReadTextResult, ListTextsResult, WriteTextResult, WorkspacePolicy, workspaceKey } from "@clavia/tardigrade-domain/Workspace/Workspace.schemas"
 import { WriteText, ReadText, ListTexts } from "../../src/cluster/workspace-tools"
+import { SpillCatalog } from "@clavia/tardigrade-domain/Spill/Spill.aggregate"
+import { DEFAULT_SPILL_POLICY, GrepSpillsResult, ReadSpillResult, SpillPointer, SpillPolicy } from "@clavia/tardigrade-domain/Spill/Spill.schemas"
+import { SpillRejected } from "@clavia/tardigrade-domain/Spill/Spill.rejection"
+import { ArtifactKeyValueStoreLive, SpillStorageLive } from "../../src/cluster/spill-storage"
+import { GrepSpills, ReadSpill } from "../../src/cluster/spill-tools"
 
 const ToolCodeResult = Schema.Struct({ outcome: CodeOutcome, logs: Schema.Array(Schema.String) })
 
-test.each(["code", "delegation", "fetch-direct", "fetch-code", "workspace-direct", "workspace-code"] as const)("default Alchemy agent executes %s through the real OpenAI HTTP provider and native policies", scenario => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+test.each(["code", "delegation", "fetch-direct", "fetch-code", "workspace-direct", "workspace-code", "spill", "spill-rejected"] as const)("default Alchemy agent executes %s through the real OpenAI HTTP provider and native policies", scenario => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
   const directory = yield* Effect.acquireRelease(Effect.promise(() => mkdtemp(join(tmpdir(), "tardigrade-default-code-agent-"))), path => Effect.promise(() => rm(path, { recursive: true, force: true })))
   const requests = yield* Ref.make<ReadonlyArray<typeof OpenAiSchema.CreateResponse.Type>>([])
   const observedResult = yield* Ref.make<string | null>(null)
   const workspacePolicy = { ...DEFAULT_WORKSPACE_POLICY, maxChars: 4, maxEntries: 1 }
+  const spillPolicy = (() => {
+    const policy = { ...DEFAULT_SPILL_POLICY, previewChars: 16, sliceChars: 12, contextChars: 5 }
+    if (scenario === "spill-rejected") return { ...policy, maxValueBytes: 64 }
+    return policy
+  })()
+  const spilledValue = "head " + "x".repeat(9000) + " needle tail"
+  const spilledJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))(spilledValue)
+  const spilledRef = yield* Ref.make("")
   const providerEndpoint = Effect.gen(function* () {
     const httpRequest = yield* HttpServerRequest.HttpServerRequest
     if (httpRequest.url === "/fetch-fixture") return HttpServerResponse.text("Native fetch result.", { headers: { "x-native-fetch": "present" } })
@@ -55,6 +68,80 @@ test.each(["code", "delegation", "fetch-direct", "fetch-code", "workspace-direct
     const body = yield* Schema.decodeUnknownEffect(OpenAiSchema.CreateResponse)(yield* httpRequest.json).pipe(Effect.orDie)
     const previous = yield* Ref.getAndUpdate(requests, values => [...values, body])
     const usage = { input_tokens: 20, output_tokens: 10, total_tokens: 30 }
+    if (scenario === "spill-rejected") {
+      if (previous.length === 0) return yield* HttpServerResponse.schemaJson(OpenAiSchema.Response)({
+        id: "spill-budget-create", object: "response", model: "gpt-4.1-mini", created_at: 1700000000, usage,
+        output: [{ type: "function_call", id: "spill-budget-code", call_id: "spill-budget-call", name: CodeTool.name, arguments: Schema.encodeSync(Schema.fromJsonString(CodeTool.parametersSchema))({ code: "return 'head ' + 'x'.repeat(9000) + ' needle tail';" }), status: "completed" }],
+      }).pipe(Effect.orDie)
+      expect(previous.length).toBe(1)
+      if (body.input === undefined || typeof body.input === "string") return yield* Effect.die("Expected a known spill budget refusal")
+      const failed = body.input.find(item => item.type === "function_call_output" && item.call_id === "spill-budget-call")
+      if (failed?.type !== "function_call_output" || typeof failed.output !== "string") return yield* Effect.die("Expected an explicit archive failure")
+      const refusal = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Struct({ error: SpillRejected, executionId: Schema.NonEmptyString, policy: SpillPolicy, logs: Schema.Array(Schema.String) })))(failed.output).pipe(Effect.orDie)
+      expect(refusal.error.reason).toBe("ValueBudgetExceeded")
+      expect(refusal.policy).toEqual(spillPolicy)
+      expect(refusal.executionId).toBe(runKey("default-code", "run:2"))
+      return yield* HttpServerResponse.schemaJson(OpenAiSchema.Response)({
+        id: "spill-budget-done", object: "response", model: "gpt-4.1-mini", created_at: 1700000001, usage,
+        output: [{ type: "message", id: "spill-budget-message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "The configured archive allowance refused this known result.", annotations: [] }] }],
+      }).pipe(Effect.orDie)
+    }
+    if (scenario === "spill") {
+      if (previous.length === 0) return yield* HttpServerResponse.schemaJson(OpenAiSchema.Response)({
+        id: "spill-create", object: "response", model: "gpt-4.1-mini", created_at: 1700000000, usage,
+        output: [{ type: "function_call", id: "spill-code", call_id: "spill-code-call", name: CodeTool.name, arguments: Schema.encodeSync(Schema.fromJsonString(CodeTool.parametersSchema))({ code: "return 'head ' + 'x'.repeat(9000) + ' needle tail';" }), status: "completed" }],
+      }).pipe(Effect.orDie)
+      if (body.input === undefined || typeof body.input === "string") return yield* Effect.die("Expected native spill results")
+      if (previous.length === 1) {
+        const result = body.input.find(item => item.type === "function_call_output" && item.call_id === "spill-code-call")
+        if (result?.type !== "function_call_output" || typeof result.output !== "string") return yield* Effect.die("Expected spill pointer")
+        const decoded = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ToolCodeResult))(result.output).pipe(Effect.orDie)
+        if (decoded.outcome._tag !== "Returned") return yield* Effect.die("Expected a completed Code result")
+        const pointer = yield* Schema.decodeUnknownEffect(SpillPointer)(decoded.outcome.value).pipe(Effect.orDie)
+        expect(pointer.preview).toBe(spilledJson.slice(0, spillPolicy.previewChars))
+        expect(pointer.size).toBe(spilledJson.length)
+        expect(pointer.note).toContain("workspace.read")
+        expect(pointer.note).toContain("workspace.grep")
+        yield* Ref.set(spilledRef, pointer.tmp)
+        return yield* HttpServerResponse.schemaJson(OpenAiSchema.Response)({
+          id: "spill-read-code", object: "response", model: "gpt-4.1-mini", created_at: 1700000001, usage,
+          output: [{ type: "function_call", id: "spill-workspace", call_id: "spill-read-call", name: CodeTool.name, arguments: Schema.encodeSync(Schema.fromJsonString(CodeTool.parametersSchema))({ code: `const read = await workspace.read({ ref: ${Schema.encodeSync(Schema.fromJsonString(Schema.String))(pointer.tmp)}, offset: ${spilledJson.indexOf("needle")}, length: 100 }); const grep = await workspace.grep({ ref: ${Schema.encodeSync(Schema.fromJsonString(Schema.String))(pointer.tmp)}, pattern: 'needle' }); return { read, grep };` }), status: "completed" }],
+        }).pipe(Effect.orDie)
+      }
+      if (previous.length === 2) {
+        const result = body.input.find(item => item.type === "function_call_output" && item.call_id === "spill-read-call")
+        if (result?.type !== "function_call_output" || typeof result.output !== "string") return yield* Effect.die("Expected native Code read/grep results")
+        const decoded = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ToolCodeResult))(result.output).pipe(Effect.orDie)
+        if (decoded.outcome._tag !== "Returned") return yield* Effect.die("Expected native workspace results")
+        const value = yield* Schema.decodeUnknownEffect(Schema.Struct({ read: ReadSpillResult, grep: GrepSpillsResult }))(decoded.outcome.value).pipe(Effect.orDie)
+        expect(value.read).toEqual({ slice: spilledJson.slice(spilledJson.indexOf("needle"), spilledJson.indexOf("needle") + spillPolicy.sliceChars), size: spilledJson.length })
+        expect(value.grep.matches).toEqual([{ ref: yield* Ref.get(spilledRef), offset: spilledJson.indexOf("needle"), context: spilledJson.slice(spilledJson.indexOf("needle") - spillPolicy.contextChars, spilledJson.indexOf("needle") + "needle".length + spillPolicy.contextChars) }])
+        expect(value.grep.truncated).toBe(false)
+      }
+      if (previous.length === 3) {
+        expect(body.tools?.filter(tool => tool.type === "function" && [ReadSpill.name, GrepSpills.name].some(name => name === tool.name)).length).toBe(2)
+        const ref = yield* Ref.get(spilledRef)
+        return yield* HttpServerResponse.schemaJson(OpenAiSchema.Response)({
+          id: "spill-direct", object: "response", model: "gpt-4.1-mini", created_at: 1700000003, usage,
+          output: [
+            { type: "function_call", id: "spill-direct-read", call_id: "spill-direct-read-call", name: ReadSpill.name, arguments: Schema.encodeSync(Schema.fromJsonString(ReadSpill.parametersSchema))({ ref }), status: "completed" },
+            { type: "function_call", id: "spill-direct-grep", call_id: "spill-direct-grep-call", name: GrepSpills.name, arguments: Schema.encodeSync(Schema.fromJsonString(GrepSpills.parametersSchema))({ ref, pattern: "needle" }), status: "completed" },
+          ],
+        }).pipe(Effect.orDie)
+      }
+      if (previous.length === 4) {
+        const read = body.input.find(item => item.type === "function_call_output" && item.call_id === "spill-direct-read-call")
+        const grep = body.input.find(item => item.type === "function_call_output" && item.call_id === "spill-direct-grep-call")
+        if (read?.type !== "function_call_output" || typeof read.output !== "string" || grep?.type !== "function_call_output" || typeof grep.output !== "string") return yield* Effect.die("Expected direct native spill tools")
+        expect(yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ReadSpillResult))(read.output).pipe(Effect.orDie)).toEqual({ slice: spilledJson.slice(0, spillPolicy.sliceChars), size: spilledJson.length })
+        const matches = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(GrepSpillsResult))(grep.output).pipe(Effect.orDie)
+        expect(matches.matches[0]?.offset).toBe(spilledJson.indexOf("needle"))
+      }
+      return yield* HttpServerResponse.schemaJson(OpenAiSchema.Response)({
+        id: `spill-finished-${previous.length}`, object: "response", model: "gpt-4.1-mini", created_at: 1700000004, usage,
+        output: [{ type: "message", id: "spill-message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Native spill completed.", annotations: [] }] }],
+      }).pipe(Effect.orDie)
+    }
     if (scenario === "workspace-direct") {
       if (previous.length === 0) {
         expect(body.tools?.filter(tool => tool.type === "function" && [WriteText.name, ReadText.name, ListTexts.name].some(name => name === tool.name)).length).toBe(3)
@@ -202,6 +289,8 @@ test.each(["code", "delegation", "fetch-direct", "fetch-code", "workspace-direct
     RUNNER_TO_DOMAIN_TOKEN: "default-code-domain-fixture", WORKER_TO_RUNNER_TOKEN: "default-code-runner-fixture",
     TARDIGRADE_ACTOR: "default", TARDIGRADE_MODEL: "gpt-4.1-mini", TARDIGRADE_INSTRUCTIONS: "Use execute for the granted native tools.", OPENAI_API_KEY: "provider-fixture-token",
     TARDIGRADE_WORKSPACE_POLICY: Schema.encodeSync(Schema.fromJsonString(WorkspacePolicy))(workspacePolicy),
+    TARDIGRADE_SPILL_POLICY: Schema.encodeSync(Schema.fromJsonString(SpillPolicy))(spillPolicy),
+    TARDIGRADE_ARTIFACT_DB: join(directory, "artifacts.sqlite"),
   }
   const config = Layer.succeed(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown(settings))
   const state = yield* Layer.build(ActorModel.layer(ActorPoliciesLive).pipe(Layer.provide(Domain.InMemory), Layer.provide(config)))
@@ -213,7 +302,7 @@ test.each(["code", "delegation", "fetch-direct", "fetch-code", "workspace-direct
   yield* Layer.build(HttpServer.serve()(domainEndpoint).pipe(Layer.provide(Layer.succeedContext(domainContext))))
   const provider = OpenAiClient.layerConfig({ apiKey: Config.Redacted("OPENAI_API_KEY"), apiUrl: Config.succeed(`http://127.0.0.1:${providerServer.address.port}/v1`) }).pipe(Layer.provide(FetchHttpClient.layer))
   const runner = Layer.mergeAll(ExecuteRunLive, RunCodeLive, ExecuteCodeLive, ExecuteDelegationLive, RunDelegationLive, RunRpcHandlers, CodeRpcHandlers, DelegationRpcHandlers).pipe(
-    Layer.provide(AgentExecutionLive.pipe(Layer.provide(provider))), Layer.provide(CodeMethodsLive), Layer.provide(DomainClientLive), Layer.provide(CodeRuntimeLive),
+    Layer.provide(AgentExecutionLive.pipe(Layer.provide(provider))), Layer.provide(CodeMethodsLive), Layer.provide(SpillStorageLive), Layer.provide(DomainClientLive), Layer.provide(ArtifactKeyValueStoreLive), Layer.provide(CodeRuntimeLive),
     Layer.provideMerge(ClusterWorkflowEngine.layer.pipe(Layer.provideMerge(SingleRunner.layer({ shardingConfig: { entityMessagePollInterval: Duration.millis(20) } })))),
     Layer.provide(SqliteClient.layer({ filename: join(directory, "runner.sqlite") })), Layer.provide(Digest.layerWebCrypto), Layer.provide(FetchHttpClient.layer), Layer.provide(config),
   )
@@ -221,13 +310,42 @@ test.each(["code", "delegation", "fetch-direct", "fetch-code", "workspace-direct
   const runnerEndpoint = yield* RpcServer.toHttpEffect(RunRpcs.merge(CodeRpcs).merge(DelegationRpcs)).pipe(Effect.provide(Layer.succeedContext(runnerContext)), Effect.provide(RpcSerialization.layerNdjson))
   yield* Layer.build(HttpServer.serve()(runnerEndpoint).pipe(Layer.provide(Layer.succeedContext(runnerServerContext))))
   yield* threads.send("default-code", OpenThread.make({ actor: "default", instance: "instance", name: "default", limits: DEFAULT_RUN_LIMITS })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
-  yield* threads.send("default-code", RequestRun.make({ runId: "run", digest: "default-code", prompt: Prompt.make({ code: "Read the current time using Code Mode.", delegation: "Delegate a child task and report its completed result.", "fetch-direct": "Read the granted URL with fetch_get.", "fetch-code": "Read the granted URL using Code Mode.", "workspace-direct": "Write text, read a bounded slice, and list the durable workspace.", "workspace-code": "Use Code Mode to write, read and list the durable workspace." }[scenario]) })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
+  yield* threads.send("default-code", RequestRun.make({ runId: "run", digest: "default-code", prompt: Prompt.make({ code: "Read the current time using Code Mode.", delegation: "Delegate a child task and report its completed result.", "fetch-direct": "Read the granted URL with fetch_get.", "fetch-code": "Read the granted URL using Code Mode.", "workspace-direct": "Write text, read a bounded slice, and list the durable workspace.", "workspace-code": "Use Code Mode to write, read and list the durable workspace.", spill: "Return a large Code result then read and grep its complete persisted value.", "spill-rejected": "Report a known archive allowance refusal without retrying the completed Code." }[scenario]) })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
   const completed = yield* Effect.repeat(threads.state("default-code"), { until: value => value._tag === "Open" && value.active !== null && ["completed", "failed", "cancelled", "unknown"].includes(value.active.status), schedule: Schedule.spaced("10 millis") }).pipe(Effect.timeout("10 seconds"), Effect.onError(() => Effect.gen(function* () {
     yield* Effect.logError("DefaultCodeAgent failure", yield* threads.state("default-code"), yield* Ref.get(requests))
     const id = yield* ExecuteRun.executionId({ threadId: "default-code", runId: "run", owner: "alice", key: executionKey({ threadId: "default-code", runId: "run", owner: "alice" }) })
     yield* Effect.logError(yield* ExecuteRun.poll(id).pipe(Effect.provide(runnerContext)))
   })))
   if (completed._tag === "Open" && completed.active !== null && completed.active.status !== "completed") return yield* Effect.die(completed.active.reason ?? completed.active.status)
+  if (scenario === "spill-rejected") {
+    expect(completed._tag === "Open" && completed.active?.status).toBe("completed")
+    const code = yield* codes.state(runKey("default-code", "run:2"))
+    if (code._tag !== "Open") return yield* Effect.die("Expected the authoritative Code result")
+    expect(code.status).toBe("completed")
+    expect(code.outcome).toEqual({ _tag: "Returned", value: spilledValue })
+    const catalog = yield* Context.get(state, SpillCatalog).state(workspaceKey("alice", "default-code"))
+    expect(catalog._tag === "Open" && catalog.values).toEqual([])
+    expect((yield* Ref.get(requests)).length).toBe(2)
+    return
+  }
+  if (scenario === "spill") {
+    expect(completed._tag === "Open" && completed.active?.text).toBe("Native spill completed.")
+    const catalog = yield* Context.get(state, SpillCatalog).state(workspaceKey("alice", "default-code"))
+    if (catalog._tag !== "Open") return yield* Effect.die("Expected a native spill catalog")
+    expect(catalog.values.length).toBe(1)
+    expect(catalog.values[0]).toMatchObject({ ref: yield* Ref.get(spilledRef), chars: spilledJson.length, status: "stored" })
+    expect(catalog.policy).toEqual(spillPolicy)
+    const original = yield* codes.state(runKey("default-code", "run:2"))
+    if (original._tag !== "Open") return yield* Effect.die("Expected completed source Code")
+    expect(original.outcome).toEqual({ _tag: "Returned", value: spilledValue })
+    if (completed._tag !== "Open") return yield* Effect.die("Expected completed parent")
+    expect(Schema.encodeSync(Schema.fromJsonString(Prompt.Prompt))(completed.history)).not.toContain(spilledValue)
+    yield* threads.send("default-code", RequestRun.make({ runId: "spill-reuse", digest: "spill-reuse", prompt: Prompt.make("Read and grep the persisted reference with direct tools.") })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
+    const reused = yield* Effect.repeat(threads.state("default-code"), { until: value => value._tag === "Open" && value.active?.runId === "spill-reuse" && ["completed", "failed", "cancelled", "unknown"].includes(value.active.status), schedule: Schedule.spaced("10 millis") }).pipe(Effect.timeout("10 seconds"))
+    expect(reused._tag === "Open" && reused.active?.status).toBe("completed")
+    expect((yield* Ref.get(requests)).length).toBe(5)
+    return
+  }
   if (scenario === "workspace-direct") {
     expect(completed._tag === "Open" && completed.active?.text).toBe("Native workspace completed.")
     settings.TARDIGRADE_WORKSPACE_POLICY = "invalid replacement policy"
@@ -275,7 +393,7 @@ test.each(["code", "delegation", "fetch-direct", "fetch-code", "workspace-direct
   expect(code._tag).toBe("Open")
   if (code._tag !== "Open") return yield* Effect.die("Expected durable Code execution")
   expect(code.status).toBe("completed")
-  expect(code.request.catalog).toEqual({ tools: ["current_time", "fetch_get", "fetch_request", "write_text", "read_text", "list_texts"] })
+  expect(code.request.catalog).toEqual({ tools: ["current_time", "fetch_get", "fetch_request", "write_text", "read_text", "list_texts", "read_spill", "grep_spills"], workspace: ["read", "grep"] })
   if (scenario === "workspace-code") {
     expect(code.calls.length).toBe(3)
     expect(code.calls.map(call => ({ method: call.request.method, mutation: call.request.mutation }))).toEqual([{ method: WriteText.name, mutation: true }, { method: ReadText.name, mutation: false }, { method: ListTexts.name, mutation: false }])

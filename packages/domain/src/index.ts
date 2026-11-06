@@ -27,3 +27,7 @@ export { ExecuteDelegation, ExecuteDelegationLive } from "./Delegation/ExecuteDe
 
 export { Workspace } from "./Workspace/Workspace.aggregate"
 export { WorkspacePolicy, DEFAULT_WORKSPACE_POLICY, WorkspaceScope, WorkspaceId, workspaceKey } from "./Workspace/Workspace.schemas"
+
+export { SpillCatalog } from "./Spill/Spill.aggregate"
+export { SpillStorage } from "./Spill/SpillStorage.external"
+export { SpillPolicy, DEFAULT_SPILL_POLICY, SpillPointer } from "./Spill/Spill.schemas"

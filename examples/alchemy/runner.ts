@@ -2,7 +2,7 @@ import { OpenAiClient } from "@effect/ai-openai"
 import { BunHttpServer, BunRuntime } from "@effect/platform-bun"
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient"
 import { ExecuteRunLive, ExecuteCodeLive, RunCodeLive, ExecuteDelegationLive, RunDelegationLive } from "tardie/domain"
-import { DomainClientLive, LocalClusterWorkflowLive, RunRpcHandlers, RunRpcs, CodeRpcHandlers, CodeRpcs, CodeRuntimeLive, DelegationRpcs, DelegationRpcHandlers } from "tardie/platform/cluster"
+import { DomainClientLive, LocalClusterWorkflowLive, RunRpcHandlers, RunRpcs, CodeRpcHandlers, CodeRpcs, CodeRuntimeLive, DelegationRpcs, DelegationRpcHandlers, SpillStorageLive, ArtifactKeyValueStoreLive } from "tardie/platform/cluster"
 import { Config, Effect, Layer } from "effect"
 import { Digest } from "effect/crypto"
 import { FetchHttpClient, HttpServer } from "effect/http"
@@ -15,7 +15,9 @@ const ExecutionLive = AgentExecutionLive.pipe(Layer.provide(
 const RunnerLive = Layer.mergeAll(ExecuteRunLive, RunCodeLive, ExecuteCodeLive, RunDelegationLive, ExecuteDelegationLive, RunRpcHandlers, CodeRpcHandlers, DelegationRpcHandlers).pipe(
   Layer.provide(ExecutionLive),
   Layer.provide(CodeMethodsLive),
+  Layer.provide(SpillStorageLive),
   Layer.provide(DomainClientLive),
+  Layer.provide(ArtifactKeyValueStoreLive),
   Layer.provide(CodeRuntimeLive),
   Layer.provide(LocalClusterWorkflowLive),
   Layer.provide(SqliteClient.layerConfig({ filename: Config.NonEmptyString("TARDIGRADE_RUNNER_DB") })),

@@ -224,7 +224,7 @@ const initAlchemyActor = async (name: string, options: InitActorOptions): Promis
         await writeFile(resolve(directory, file), content, "utf8")
       }
     }
-    await writeFile(resolve(directory, ".gitignore"), ".env\n.env.*\n!.env.example\n.alchemy/\nrunner.sqlite*\nnode_modules/\n", "utf8")
+    await writeFile(resolve(directory, ".gitignore"), ".env\n.env.*\n!.env.example\n.alchemy/\nrunner.sqlite*\nartifacts.sqlite*\nnode_modules/\n", "utf8")
     await writeFile(resolve(directory, DEFAULT_PACKAGE_MANIFEST), `${JSON.stringify({ private: true, type: "module", scripts: { dev: "alchemy dev", "dev:cloudflare": "alchemy dev", "dev:memory": "bun --env-file=.env server.ts", "dev:runner": "bun --env-file=.env runner.ts", "plan:cloudflare": "alchemy plan", "deploy:cloudflare": "alchemy deploy", "destroy:cloudflare": "alchemy destroy", cli: "bun --env-file=.env client.ts" }, dependencies: { ...dependencies, tardie: packageVersion } }, null, 2)}\n`, "utf8")
     return { name, directory, entry: resolve(directory, "AgentExecution.ts"), server: resolve(directory, "server.ts"), worker: resolve(directory, "worker.ts"), alchemy: resolve(directory, "alchemy.run.ts"), manifest: resolve(directory, ".env.example"), packageManifest: resolve(directory, DEFAULT_PACKAGE_MANIFEST), template: "alchemy" }
   } catch (error) {

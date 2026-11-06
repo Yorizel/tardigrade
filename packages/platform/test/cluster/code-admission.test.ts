@@ -1,3 +1,4 @@
+import { SpillCatalog } from "@clavia/tardigrade-domain/Spill/Spill.aggregate"
 import { Workspace } from "@clavia/tardigrade-domain/Workspace/Workspace.aggregate"
 import { expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
@@ -35,7 +36,7 @@ const ParentExecution = Workflow.make("Fixture/CodeAdmissionParent", {
 const ParentExecutionLive = ParentExecution.toLayer(Effect.fn("Fixture.codeParent")(function* (payload) {
   return yield* RunCode.execute(payload)
 }))
-const StateModel = Domain.Model("CodeAdmissionStateTest", { aggregates: [Thread, CodeExecution, Delegation, Workspace] })
+const StateModel = Domain.Model("CodeAdmissionStateTest", { aggregates: [Thread, CodeExecution, Delegation, Workspace, SpillCatalog] })
 
 test("native code admission preserves uncertainty on parent cancellation and rejects conflicting proposals", () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
   const directory = yield* Effect.acquireRelease(

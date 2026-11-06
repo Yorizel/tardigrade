@@ -1,3 +1,6 @@
+import { SpillStorageLive } from "../../src/cluster/spill-storage"
+import { KeyValueStore } from "effect/persistence"
+import { SpillCatalog } from "@clavia/tardigrade-domain/Spill/Spill.aggregate"
 import { expect, test } from "bun:test"
 import * as Domain from "@alchemy.run/domain"
 import { ActorInternalApi } from "@clavia/tardigrade-domain/ActorInternal.api"
@@ -155,11 +158,11 @@ test("actual CodeMethods preserves native fetch failures as readable failed outc
   if (outcome._tag !== "Failed") return yield* Effect.die("Expected failed fetch outcome")
   const failure = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.toEncoded(Tool.failureResultSchema(FetchRequest))))(outcome.reason)
   expect(failure).toMatchObject({ _tag: "FetchRejected", reason: "UnsupportedProtocol" })
-}).pipe(Effect.provide(CodeMethodsLive), Effect.provide(ActorInternalApi.layerClientInProcess.pipe(
+}).pipe(Effect.provide(CodeMethodsLive), Effect.provide(SpillStorageLive.pipe(Layer.provide(KeyValueStore.layerMemory))), Effect.provide(ActorInternalApi.layerClientInProcess.pipe(
   Layer.provide(Layer.succeed(Session, (effect, { headers }) => {
     const owner = Headers.get(headers, "x-tardigrade-owner")
     if (Option.isNone(owner)) return Effect.fail(Unauthorized.make())
     return effect.pipe(Effect.provideService(CurrentCaller, { subject: owner.value }))
   })),
-  Layer.provide(Layer.merge(Domain.Model("FetchCodeMethodsTest", { aggregates: [Thread, CodeExecution, Delegation, Workspace] }).layer(Layer.empty), ReceiptOwnerGuardLive).pipe(Layer.provide(Domain.InMemory))),
+  Layer.provide(Layer.merge(Domain.Model("FetchCodeMethodsTest", { aggregates: [Thread, CodeExecution, Delegation, Workspace, SpillCatalog] }).layer(Layer.empty), ReceiptOwnerGuardLive).pipe(Layer.provide(Domain.InMemory))),
 )), Effect.provide(Digest.layerWebCrypto), Effect.provide(configured()))))

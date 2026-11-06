@@ -7,6 +7,7 @@ import { RequestCode, PrepareCodeCall, ApproveCodeCall, DispatchCodeCall, Settle
 import { DEFAULT_CODE_LIMITS, CodeInput } from "../src/Code/Code.schemas"
 import { ReceiptOwnerGuardLive } from "../src/Actor.model"
 import { CurrentCaller, Session } from "../src/Actor.context"
+import { DEFAULT_SPILL_POLICY } from "../src/Spill/Spill.schemas"
 
 const CodeModel = Domain.Model("CodeTest", { aggregates: [CodeExecution] })
 const platform = Layer.merge(CodeModel.layer(Layer.empty), ReceiptOwnerGuardLive).pipe(Layer.provide(Domain.InMemory))
@@ -15,10 +16,26 @@ const call = { ordinal: 0, package: "tools", method: "read", input: { key: 1 }, 
 const returned = { _tag: "Returned", value: { answer: 42 } } as const
 const run = <A, E>(effect: Effect.Effect<A, E, Effect.Services<typeof CodeExecution> | CurrentCaller>) => Effect.runPromise(effect.pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(platform)))
 
-const rejected = <A, E extends { readonly reason: string }>(result: Result.Result<A, E>, reason: string) => {
+const rejected = <A, E>(result: Result.Result<A, E>, reason: string) => {
   expect(Result.isFailure(result)).toBe(true)
-  if (Result.isFailure(result)) expect(result.failure.reason).toBe(reason)
+  if (Result.isFailure(result)) expect(result.failure).toMatchObject({ reason })
 }
+
+test("spilling requires real selected reader capabilities and freezes the accepted policy", () => run(Effect.gen(function* () {
+  const executions = yield* CodeExecution
+  const input = { ...request, spill: DEFAULT_SPILL_POLICY }
+  rejected(yield* executions.send("missing", RequestCode.make(input)).pipe(Effect.result), "SpillReadersNotSelected")
+  rejected(yield* executions.send("partial", RequestCode.make({ ...input, catalog: { workspace: ["read"] } })).pipe(Effect.result), "SpillReadersNotSelected")
+  const accepted = { ...input, catalog: { workspace: ["read", "grep"] } }
+  yield* executions.send("selected", RequestCode.make(accepted))
+  yield* executions.send("selected", RequestCode.make(accepted))
+  const changed = { ...accepted, spill: { ...DEFAULT_SPILL_POLICY, spillBytes: DEFAULT_SPILL_POLICY.spillBytes + 1 } }
+  rejected(yield* executions.send("selected", RequestCode.make(changed)).pipe(Effect.result), "ExecutionIdentityConflict")
+  const state = yield* executions.state("selected")
+  if (state._tag !== "Open") return yield* Effect.die("Expected accepted code")
+  expect(state.request.spill).toEqual(DEFAULT_SPILL_POLICY)
+  expect(state.request.catalog.workspace).toEqual(["read", "grep"])
+})))
 
 test("code identity is immutable and protected by the owner", () => run(Effect.gen(function* () {
   const executions = yield* CodeExecution

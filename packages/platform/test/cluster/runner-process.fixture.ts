@@ -1,3 +1,4 @@
+import { SpillStorageLive, ArtifactKeyValueStoreLive } from "../../src/cluster/spill-storage"
 import { rename, writeFile } from "node:fs/promises"
 import { BunHttpServer, BunRuntime } from "@effect/platform-bun"
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient"
@@ -35,6 +36,7 @@ const FixtureExecutionLive = AgentExecution.toLayer(Effect.gen(function* () {
   }
 }).pipe(Effect.orDie))
 const RunnerLive = Layer.mergeAll(ExecuteRunLive, RunRpcHandlers).pipe(
+  Layer.provide(SpillStorageLive.pipe(Layer.provide(ArtifactKeyValueStoreLive))),
   Layer.provide(DomainClientLive), Layer.provide(FixtureExecutionLive),
   Layer.provideMerge(ClusterWorkflowEngine.layer.pipe(Layer.provideMerge(SingleRunner.layer({ shardingConfig: {
     entityMessagePollInterval: Duration.millis(20),

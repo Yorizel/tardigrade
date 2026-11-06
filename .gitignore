@@ -31,6 +31,8 @@ apps/web/public/BerkeleyMonoTrial-Regular.otf
 # SQLite files and spill directories the examples write when they run
 examples/.data/
 .tardigrade/
+runner.sqlite*
+artifacts.sqlite*
 
 # Reference checkouts and attachments handed to agents, never part of history
 .context/

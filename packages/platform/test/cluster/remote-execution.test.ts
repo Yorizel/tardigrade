@@ -1,3 +1,6 @@
+import { SpillStorageLive } from "../../src/cluster/spill-storage"
+import { KeyValueStore } from "effect/persistence"
+import { SpillCatalog } from "@clavia/tardigrade-domain/Spill/Spill.aggregate"
 import { Workspace } from "@clavia/tardigrade-domain/Workspace/Workspace.aggregate"
 import { expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
@@ -26,7 +29,7 @@ import { ExecuteRunLive } from "@clavia/tardigrade-domain/Execution/ExecuteRun.s
 import { ExecuteRun, approval, executionKey } from "@clavia/tardigrade-domain/Execution/Run.workflow"
 import { internalApi } from "../../src/alchemy/internal"
 
-const StateModel = Domain.Model("HttpExecutionStateTest", { aggregates: [Thread, CodeExecution, Delegation, Workspace] })
+const StateModel = Domain.Model("HttpExecutionStateTest", { aggregates: [Thread, CodeExecution, Delegation, Workspace, SpillCatalog] })
 const fixtureToken = "remote-execution-fixture-token"
 const usage = Response.Usage.make({ inputTokens: { total: 2 }, outputTokens: { total: 3 } })
 
@@ -67,6 +70,7 @@ test("Cluster executes against authenticated Domain HTTP with approval, cancella
   }))
   const database = SqliteClient.layer({ filename: join(directory, "cluster.sqlite") })
   const runner = ExecuteRunLive.pipe(
+    Layer.provide(SpillStorageLive.pipe(Layer.provide(KeyValueStore.layerMemory))),
     Layer.provide(remoteClient), Layer.provide(adapter),
     Layer.provideMerge(ClusterWorkflowEngine.layer.pipe(Layer.provideMerge(SingleRunner.layer({ shardingConfig: { entityMessagePollInterval: Duration.millis(20) } })))),
     Layer.provideMerge(database), Layer.provide(Digest.layerWebCrypto),

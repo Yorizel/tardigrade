@@ -1,6 +1,7 @@
 import { Ownership } from "../Actor.context"
 import { Schema } from "effect"
 import { Prompt } from "effect/ai"
+import { SpillPolicy } from "../Spill/Spill.schemas"
 
 export const CodeLimits = Schema.Struct({
   maxCalls: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
@@ -25,6 +26,7 @@ export const CodeInput = Schema.Struct({
   catalog: PackageCatalog,
   ambient: Schema.Struct({ at: Schema.Number, seed: Schema.NonEmptyString }),
   limits: CodeLimits,
+  spill: Schema.optionalKey(SpillPolicy),
 })
 export const HostCallInput = Schema.Struct({
   ordinal: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),

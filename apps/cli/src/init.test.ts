@@ -30,6 +30,8 @@ describe("initActor", () => {
     expect(worker).not.toContain("createActorWorker")
     expect(await readFile(initialized.entry, "utf8")).toContain("disableToolCallResolution: true")
     expect(await readFile(initialized.manifest, "utf8")).toContain("TARDIGRADE_ACTOR=native-agent")
+    expect(await readFile(initialized.manifest, "utf8")).toContain("TARDIGRADE_ARTIFACT_DB=./artifacts.sqlite")
+    expect(await readFile(join(initialized.directory, ".gitignore"), "utf8")).toContain("artifacts.sqlite*")
     const packageManifest = JSON.parse(await readFile(initialized.packageManifest, "utf8"))
     expect(packageManifest.scripts.dev).toBe("alchemy dev")
     expect(packageManifest.dependencies["@alchemy.run/domain"]).toBe("2.0.0-beta.85")

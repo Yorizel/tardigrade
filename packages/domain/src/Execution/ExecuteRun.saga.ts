@@ -1,4 +1,4 @@
-import { Cause, Clock, Effect, Layer, Schema } from "effect"
+import { Cause, Clock, Effect, Layer, Result, Schema } from "effect"
 import { Digest } from "effect/crypto"
 import { CodeTool } from "../Code/CodeTool"
 import { CodeInput } from "../Code/Code.schemas"
@@ -7,6 +7,10 @@ import { RunDelegation } from "../Delegation/RunDelegation.saga"
 import { Reservation, ReservedState, delegationKey, delegationExecutionKey } from "../Delegation/Delegation.schemas"
 import { RunCode } from "../Code/RunCode.saga"
 import { codeExecutionKey } from "../Code/ExecuteCode.saga"
+import { SpillStorage } from "../Spill/SpillStorage.external"
+import { SpillPointer } from "../Spill/Spill.schemas"
+import { SpillNotOwner, SpillRejected } from "../Spill/Spill.rejection"
+import { workspaceKey } from "../Workspace/Workspace.schemas"
 import { Prompt, Response } from "effect/ai"
 import { Activity, DurableDeferred } from "effect/workflow"
 import type { WorkflowEngine, WorkflowInstance } from "effect/workflow/WorkflowEngine"
@@ -20,6 +24,7 @@ export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
   const commands = yield* ActorInternalApi.Client
   const digester = yield* Digest.Digest
   const execution = yield* AgentExecution
+  const spills = yield* SpillStorage
   return ExecuteRun.toLayer(Effect.fn("ExecuteRun")(function* ({ key, threadId, runId, owner }) {
     if (key !== executionKey({ threadId, runId, owner })) return yield* Effect.die("Invalid run execution key")
     const headers = { "x-tardigrade-owner": owner }
@@ -78,7 +83,13 @@ export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
               execute: Effect.gen(function* () {
                 const params = yield* Schema.decodeUnknownEffect(CodeTool.parametersSchema, { onExcessProperty: "error" })(tool.call.params).pipe(Effect.orDie)
                 const digest = yield* digester.digestHex(Digest.sha256, new TextEncoder().encode(params.code))
-                return { threadId, runId, digest, code: params.code, catalog: capability.catalog, limits: capability.limits, ambient: { at: yield* Clock.currentTimeMillis, seed: executionId } }
+                const accepted = { threadId, runId, digest, code: params.code, catalog: capability.catalog, limits: capability.limits, ambient: { at: yield* Clock.currentTimeMillis, seed: executionId } }
+                if (capability.spill !== undefined) {
+                  const catalog = yield* commands.SpillCatalog.get(workspaceKey(owner, threadId), { headers }).pipe(Effect.orDie)
+                  if (catalog !== null && catalog._tag === "Open") return { ...accepted, spill: catalog.policy }
+                  return { ...accepted, spill: capability.spill }
+                }
+                return accepted
               }),
             })
             const result = yield* RunCode.execute({ key: codeExecutionKey(owner, executionId), executionId, owner, request })
@@ -95,6 +106,26 @@ export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
                 modelOutput: [...result.outcome.modelOutput, ...logParts],
                 isFailure: false, providerExecuted: false,
               })] })])
+            }
+            if (result.outcome._tag === "Returned" && result.outcome.value !== undefined && stored.request.spill !== undefined) {
+              const value = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))(result.outcome.value).pipe(Effect.orDie)
+              if (new TextEncoder().encode(value).byteLength > stored.request.spill.spillBytes) {
+                const identity = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.String))(codeExecutionKey(owner, executionId)).pipe(Effect.orDie)
+                const ref = yield* digester.digestHex(Digest.sha256, new TextEncoder().encode(identity))
+                const policy = stored.request.spill
+                const archived = yield* Activity.make({ name: `spill-${stepId}`, success: SpillPointer, error: Schema.Union([SpillRejected, SpillNotOwner]), execute: spills.put({ scope: { owner, threadId, runId }, ref, value, policy }) }).pipe(Effect.result)
+                if (Result.isFailure(archived)) {
+                  const error = yield* Schema.encodeEffect(Schema.Union([SpillRejected, SpillNotOwner]))(archived.failure).pipe(Effect.orDie)
+                  return Prompt.fromMessages([Prompt.toolMessage({ content: [Prompt.toolResultPart({
+                    id: tool.call.id, name: tool.call.name, result: { error, executionId, policy, logs: stored.logs },
+                    isFailure: true, providerExecuted: false,
+                  })] })])
+                }
+                return Prompt.fromMessages([Prompt.toolMessage({ content: [Prompt.toolResultPart({
+                  id: tool.call.id, name: tool.call.name, result: { outcome: { _tag: "Returned", value: archived.success }, logs: stored.logs },
+                  isFailure: false, providerExecuted: false,
+                })] })])
+              }
             }
             return Prompt.fromMessages([Prompt.toolMessage({ content: [Prompt.toolResultPart({
               id: tool.call.id, name: tool.call.name, result: { outcome: result.outcome, logs: stored.logs },

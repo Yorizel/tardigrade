@@ -1,3 +1,6 @@
+import { SpillStorageLive } from "../../src/cluster/spill-storage"
+import { KeyValueStore } from "effect/persistence"
+import { SpillCatalog } from "@clavia/tardigrade-domain/Spill/Spill.aggregate"
 import { expect, test } from "bun:test"
 import * as Domain from "@alchemy.run/domain"
 import { ConfigProvider, Context, Effect, Fiber, Layer, Option, Ref, Result, Schedule, Schema } from "effect"
@@ -30,7 +33,7 @@ import { CodeMethodsLive } from "../../../../examples/alchemy/AgentExecution"
 import { CodeRuntimeLive } from "../../src/cluster/code-runtime"
 import { DEFAULT_FETCH_POLICY, FetchPolicy, FetchRequest } from "../../src/cluster/fetch-tool"
 
-const UncertaintyModel = Domain.Model("NestedUncertaintyTest", { aggregates: [Thread, CodeExecution, Delegation, Workspace] })
+const UncertaintyModel = Domain.Model("NestedUncertaintyTest", { aggregates: [Thread, CodeExecution, Delegation, Workspace, SpillCatalog] })
 const session = Layer.succeed(Session, (effect, { headers }) => {
   const owner = Headers.get(headers, "x-tardigrade-owner")
   if (Option.isNone(owner)) return Effect.fail(Unauthorized.make())
@@ -87,7 +90,7 @@ test.each(["code", "direct", "delegated-code"] as const)("a committed HTTP mutat
     TARDIGRADE_FETCH_POLICY: Schema.encodeSync(Schema.fromJsonString(FetchPolicy))({ ...DEFAULT_FETCH_POLICY, timeoutMs: 1000 }),
   }))
   const world = Layer.mergeAll(ExecuteRunLive, RunCodeLive, ExecuteCodeLive, RunDelegationLive, ExecuteDelegationLive).pipe(
-    Layer.provide(adapter), Layer.provide(CodeMethodsLive), Layer.provideMerge(client), Layer.provide(CodeRuntimeLive),
+    Layer.provide(adapter), Layer.provide(CodeMethodsLive), Layer.provide(SpillStorageLive.pipe(Layer.provide(KeyValueStore.layerMemory))), Layer.provideMerge(client), Layer.provide(CodeRuntimeLive),
     Layer.provideMerge(WorkflowEngine.layerMemory), Layer.provide(Digest.layerWebCrypto), Layer.provide(FetchHttpClient.layer), Layer.provide(configuration),
   )
   yield* Effect.gen(function* () {
