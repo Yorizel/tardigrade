@@ -70,14 +70,16 @@ const verifyPackedManifest = async (tarball: string, expected: {
   readonly peerDependencies: Readonly<Record<string, string>>
   readonly peerDependenciesMeta: Readonly<Record<string, { readonly optional?: boolean }>>
   readonly patchedDependencies: Readonly<Record<string, string>>
+  readonly overrides: Readonly<Record<string, string>>
 }) => {
   const packed = JSON.parse(await output(["tar", "-xOf", tarball, "package/package.json"], root)) as {
     readonly dependencies?: Readonly<Record<string, string>>
     readonly peerDependencies?: Readonly<Record<string, string>>
     readonly peerDependenciesMeta?: Readonly<Record<string, { readonly optional?: boolean }>>
     readonly patchedDependencies?: Readonly<Record<string, string>>
+    readonly overrides?: Readonly<Record<string, string>>
   }
-  for (const [name, expectedDependencies] of [["dependencies", expected.dependencies], ["peerDependencies", expected.peerDependencies], ["peerDependenciesMeta", expected.peerDependenciesMeta], ["patchedDependencies", expected.patchedDependencies]] as const) {
+  for (const [name, expectedDependencies] of [["dependencies", expected.dependencies], ["peerDependencies", expected.peerDependencies], ["peerDependenciesMeta", expected.peerDependenciesMeta], ["patchedDependencies", expected.patchedDependencies], ["overrides", expected.overrides]] as const) {
     if (JSON.stringify(packed[name] ?? {}) !== JSON.stringify(expectedDependencies)) {
       throw new Error(`packed manifest ${name} differs from the publication manifest`)
     }
@@ -222,7 +224,8 @@ try {
     bin: { [BIN_NAME]: BIN_ENTRY, "tardie-chat": "./src/cli/main.ts" },
     exports: publicExports,
     ...dependencies,
-    patchedDependencies
+    patchedDependencies,
+    overrides: projectPatches.overrides
   }
   await writeFile(join(stage, "package.json"), `${JSON.stringify(publishManifest, null, 2)}\n`)
 
@@ -237,7 +240,7 @@ try {
 
   const filename = await output(["bun", "pm", "pack", "--destination", destination, "--quiet", "--ignore-scripts"], stage)
   const tarball = isAbsolute(filename) ? filename : join(destination, filename)
-  await verifyPackedManifest(tarball, { ...dependencies, patchedDependencies })
+  await verifyPackedManifest(tarball, { ...dependencies, patchedDependencies, overrides: projectPatches.overrides })
   const packedFiles = (await output(["tar", "-tzf", tarball], root)).split("\n")
   for (const source of Object.values(patchedDependencies)) {
     if (!packedFiles.includes(`package/${source}`)) throw new Error(`packed artifact is missing patch resource ${source}`)

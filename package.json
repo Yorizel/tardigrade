@@ -59,6 +59,10 @@
   },
   "private": true,
   "patchedDependencies": {
-    "effect@4.1.2": "patches/effect@4.1.2.patch"
+    "effect@4.1.2": "patches/effect@4.1.2.patch",
+    "@opencode/codemode@2.2.5": "patches/opencode-codemode@2.2.5.patch"
+  },
+  "overrides": {
+    "effect": "4.1.2"
   }
 }

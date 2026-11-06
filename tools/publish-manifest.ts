@@ -57,6 +57,7 @@ export const REQUIRED_PUBLISH_DEPENDENCIES = [
   "@alchemy.run/cloudflare",
   "@alchemy.run/domain",
   "@effect/ai-openai",
+  "@opencode/codemode",
   "just-bash",
   "@cloudflare/sandbox",
   "@cfworker/json-schema",

@@ -25,6 +25,7 @@
     "@effect/platform-bun": "4.1.2",
     "@effect/sql-sqlite-bun": "4.1.2",
     "@effect/sql-sqlite-do": "4.1.2",
+    "@opencode/codemode": "2.2.5",
     "effect": "4.1.2",
     "just-bash": "3.6.0",
     "quickjs-emscripten": "0.32.0"

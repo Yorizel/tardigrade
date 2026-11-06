@@ -92,7 +92,8 @@ const packageTemplate = (
   effectVersion: string,
   platformBunVersion: string,
   alchemyVersion: string,
-  cloudflareVersion: string
+  cloudflareVersion: string,
+  patches: Awaited<ReturnType<typeof projectPatchesFrom>>
 ): string => `${JSON.stringify({
   private: true,
   type: "module",
@@ -112,8 +113,10 @@ const packageTemplate = (
   },
   overrides: {
     "@effect/platform-node-shared": platformBunVersion,
-    effect: effectVersion
-  }
+    effect: effectVersion,
+    ...patches.overrides
+  },
+  patchedDependencies: patches.patchedDependencies
 }, undefined, 2)}\n`
 
 const initAlchemyActor = async (name: string, options: InitActorOptions): Promise<InitializedActor> => {
@@ -141,7 +144,7 @@ const initAlchemyActor = async (name: string, options: InitActorOptions): Promis
     }
     await copyProjectPatches(projectPatches, directory)
     await writeFile(resolve(directory, ".gitignore"), ".env\n.env.*\n!.env.example\n.alchemy/\nrunner.sqlite*\nartifacts.sqlite*\nnode_modules/\n", "utf8")
-    await writeFile(resolve(directory, DEFAULT_PACKAGE_MANIFEST), `${JSON.stringify({ private: true, type: "module", scripts: { dev: "alchemy dev", "dev:cloudflare": "alchemy dev", "dev:memory": "bun --env-file=.env server.ts", "dev:runner": "bun --env-file=.env runner.ts", "plan:cloudflare": "alchemy plan", "deploy:cloudflare": "alchemy deploy", "destroy:cloudflare": "alchemy destroy", cli: "bun --env-file=.env client.ts" }, dependencies: { ...dependencies, tardie: packageVersion }, patchedDependencies: projectPatches.patchedDependencies }, null, 2)}\n`, "utf8")
+    await writeFile(resolve(directory, DEFAULT_PACKAGE_MANIFEST), `${JSON.stringify({ private: true, type: "module", scripts: { dev: "alchemy dev", "dev:cloudflare": "alchemy dev", "dev:memory": "bun --env-file=.env server.ts", "dev:runner": "bun --env-file=.env runner.ts", "plan:cloudflare": "alchemy plan", "deploy:cloudflare": "alchemy deploy", "destroy:cloudflare": "alchemy destroy", cli: "bun --env-file=.env client.ts" }, dependencies: { ...dependencies, tardie: packageVersion }, patchedDependencies: projectPatches.patchedDependencies, overrides: projectPatches.overrides }, null, 2)}\n`, "utf8")
     return { name, directory, entry: resolve(directory, "AgentExecution.ts"), server: resolve(directory, "server.ts"), worker: resolve(directory, "worker.ts"), alchemy: resolve(directory, "alchemy.run.ts"), manifest: resolve(directory, ".env.example"), packageManifest: resolve(directory, DEFAULT_PACKAGE_MANIFEST), template: options.template ?? "alchemy" }
   } catch (error) {
     await rm(directory, { recursive: true, force: true })
@@ -176,7 +179,7 @@ const initCounter = async (name: string, options: InitActorOptions): Promise<Ini
     }
     await copyProjectPatches(patches, directory)
     await writeFile(resolve(directory, ".gitignore"), ".env\n.env.*\n!.env.example\n.alchemy/\nnode_modules/\n", "utf8")
-    await writeFile(resolve(directory, DEFAULT_PACKAGE_MANIFEST), `${JSON.stringify({ private: true, type: "module", scripts: { dev: "alchemy dev", "dev:cloudflare": "alchemy dev", "dev:memory": "bun --env-file=.env server.ts", "plan:cloudflare": "alchemy plan", "deploy:cloudflare": "alchemy deploy", "destroy:cloudflare": "alchemy destroy", cli: "bun --env-file=.env client.ts" }, dependencies: { ...dependencies, tardie: packageVersion }, patchedDependencies: patches.patchedDependencies }, null, 2)}\n`, "utf8")
+    await writeFile(resolve(directory, DEFAULT_PACKAGE_MANIFEST), `${JSON.stringify({ private: true, type: "module", scripts: { dev: "alchemy dev", "dev:cloudflare": "alchemy dev", "dev:memory": "bun --env-file=.env server.ts", "plan:cloudflare": "alchemy plan", "deploy:cloudflare": "alchemy deploy", "destroy:cloudflare": "alchemy destroy", cli: "bun --env-file=.env client.ts" }, dependencies: { ...dependencies, tardie: packageVersion }, patchedDependencies: patches.patchedDependencies, overrides: patches.overrides }, null, 2)}\n`, "utf8")
     return { name, directory, entry: resolve(directory, "actor.ts"), server: resolve(directory, "server.ts"), worker: resolve(directory, "worker.ts"), alchemy: resolve(directory, "alchemy.run.ts"), manifest: resolve(directory, ".env.example"), packageManifest: resolve(directory, DEFAULT_PACKAGE_MANIFEST), template: "quickstart" }
   } catch (error) {
     await rm(directory, { recursive: true, force: true })
@@ -217,10 +220,12 @@ export const initActor = async (name: string, options: InitActorOptions): Promis
     throw new Error("cannot determine the installed Alchemy versions")
   }
 
+  const patches = await projectPatchesFrom(import.meta.url)
   const created = await mkdir(directory, { recursive: true })
   if (created === undefined) throw new Error(`init target already exists at ${directory}. Choose a new directory.`)
 
   try {
+    await copyProjectPatches(patches, directory)
     await writeFile(entry, source, "utf8")
     await writeFile(server, await templateFile("server.ts"), "utf8")
     await writeFile(worker, await templateFile("worker.ts"), "utf8")
@@ -231,7 +236,7 @@ export const initActor = async (name: string, options: InitActorOptions): Promis
     await writeFile(resolve(directory, PROVIDER_REGISTRY_FILE), providerRegistrySource(options.modelLock?.providers ?? {}), "utf8")
     await writeFile(manifest, manifestSource, "utf8")
     await writeFile(alchemy, alchemyTemplate(name, options.now ?? new Date()), "utf8")
-    await writeFile(packageManifest, packageTemplate(packageVersion, effectVersion, platformBunVersion, alchemyVersion, cloudflareVersion), "utf8")
+    await writeFile(packageManifest, packageTemplate(packageVersion, effectVersion, platformBunVersion, alchemyVersion, cloudflareVersion, patches), "utf8")
     await writeFile(modelLock, `${JSON.stringify(options.modelLock ?? emptyModelLock(), null, 2)}\n`, "utf8")
 
   } catch (error) {

@@ -1,0 +1,212 @@
+diff --git a/dist/codemode.d.ts b/dist/codemode.d.ts
+--- a/dist/codemode.d.ts
++++ b/dist/codemode.d.ts
+@@ -72,6 +72,8 @@
+ export declare const Success: Schema.Struct<{
+     readonly ok: Schema.Literal<true>;
+     readonly value: Schema.Codec<Schema.Json, Schema.Json, never, never>;
++    readonly returnedToolCall: Schema.optionalKey<Schema.Int>;
++    readonly returnedUndefined: Schema.optionalKey<Schema.Boolean>;
+     readonly warnings: Schema.optionalKey<Schema.$Array<Schema.Struct<{
+         readonly kind: Schema.Literals<readonly ["ParseError", "UnsupportedSyntax", "UnknownTool", "InvalidToolInput", "InvalidToolOutput", "InvalidDataValue", "ToolCallLimitExceeded", "TimeoutExceeded", "ToolFailure", "ExecutionFailure", "Truncated"]>;
+         readonly message: Schema.String;
+@@ -112,6 +114,8 @@
+ export declare const Result: Schema.Union<readonly [Schema.Struct<{
+     readonly ok: Schema.Literal<true>;
+     readonly value: Schema.Codec<Schema.Json, Schema.Json, never, never>;
++    readonly returnedToolCall: Schema.optionalKey<Schema.Int>;
++    readonly returnedUndefined: Schema.optionalKey<Schema.Boolean>;
+     readonly warnings: Schema.optionalKey<Schema.$Array<Schema.Struct<{
+         readonly kind: Schema.Literals<readonly ["ParseError", "UnsupportedSyntax", "UnknownTool", "InvalidToolInput", "InvalidToolOutput", "InvalidDataValue", "ToolCallLimitExceeded", "TimeoutExceeded", "ToolFailure", "ExecutionFailure", "Truncated"]>;
+         readonly message: Schema.String;
+diff --git a/dist/codemode.js b/dist/codemode.js
+--- a/dist/codemode.js
++++ b/dist/codemode.js
+@@ -33,6 +33,8 @@
+ export const Success = Schema.Struct({
+     ok: Schema.Literal(true),
+     value: Schema.Json,
++    returnedToolCall: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
++    returnedUndefined: Schema.optionalKey(Schema.Boolean),
+     warnings: Schema.optionalKey(Schema.Array(Diagnostic)),
+     logs: Schema.optionalKey(Schema.Array(Schema.String)),
+     truncated: Schema.optionalKey(Schema.Boolean),
+diff --git a/dist/interpreter/execute.js b/dist/interpreter/execute.js
+--- a/dist/interpreter/execute.js
++++ b/dist/interpreter/execute.js
+@@ -34,13 +34,18 @@
+                 return { ok: false, error: normalizeError(outcome.error), ...logged(), toolCalls: tools.calls };
+             }
+             const result = outcome.value ?? null;
+-            returned = { value: result, runner };
++            const provenance = {
++                ...(ctx.returnedToolCall === undefined ? {} : { returnedToolCall: ctx.returnedToolCall }),
++                ...(ctx.returnedUndefined ? { returnedUndefined: true } : {}),
++            };
++            returned = { value: result, runner, provenance };
+             // Host work the program left running is interrupted, not awaited.
+             yield* runner.interrupt();
+             const warnings = runner.diagnostics();
+             return {
+                 ok: true,
+                 value: result,
++                ...provenance,
+                 ...(warnings.length > 0 ? { warnings } : {}),
+                 ...logged(),
+                 toolCalls: tools.calls,
+@@ -64,6 +69,7 @@
+                     return {
+                         ok: true,
+                         value: returned.value,
++                        ...returned.provenance,
+                         warnings: [
+                             {
+                                 kind: "TimeoutExceeded",
+@@ -186,6 +192,8 @@
+         ? {
+             ok: true,
+             value,
++            ...(value === result.value && result.returnedToolCall !== undefined ? { returnedToolCall: result.returnedToolCall } : {}),
++            ...(value === result.value && result.returnedUndefined ? { returnedUndefined: true } : {}),
+             ...warningsPart,
+             ...logsPart,
+             truncated: true,
+diff --git a/dist/interpreter/interpreter.js b/dist/interpreter/interpreter.js
+--- a/dist/interpreter/interpreter.js
++++ b/dist/interpreter/interpreter.js
+@@ -246,6 +246,9 @@
+ /** One program execution: the tool bridge, job queue, captured logs, and the global scope built once. */
+ export class Interpreter {
+     tools;
++    origins = new WeakMap();
++    returnedToolCall;
++    returnedUndefined = false;
+     runner;
+     builtins;
+     logs;
+@@ -267,7 +270,11 @@
+     }
+     /** The program's body, as the first job: its completion value, copied out for the host. */
+     *main(program) {
+-        return yield* toBoundary(this, yield* this.root.run(program));
++        const value = yield* this.root.run(program);
++        this.returnedUndefined = value === undefined;
++        if (value instanceof Obj)
++            this.returnedToolCall = this.origins.get(value);
++        return yield* toBoundary(this, value);
+     }
+     /** Calls into the program; a built-in passes its own call site so failures inside are located there. */
+     call(callable, thisValue, args, site) {
+@@ -288,7 +295,16 @@
+         const json = [];
+         for (const arg of args)
+             json.push(yield* toBoundary(this, arg));
+-        return fromJson(this, (yield this.runner.blocking(run(json))));
++        return this.fromTool(yield this.runner.blocking(run(json)));
++    }
++    fromTool(result) {
++        const value = fromJson(this, result);
++        if (result !== null && typeof result === "object" && value instanceof Obj) {
++            const index = this.tools.origins.get(result);
++            if (index !== undefined)
++                this.origins.set(value, index);
++        }
++        return value;
+     }
+     /** The built-in search: its result is usable directly, and can also be awaited or chained like a Promise. */
+     *search(args) {
+@@ -348,7 +364,7 @@
+             for (const arg of args)
+                 json.push(yield* toBoundary(ctx, arg));
+             runner.host(ctx.tools.execute(path, json), (settled) => settled.ok
+-                ? resolving.resolve(fromJson(ctx, settled.value))
++                ? resolving.resolve(ctx.fromTool(settled.value))
+                 : resolving.reject(settled.error), site);
+         };
+         return (yield new Call(body(), new AsyncBoundary((completion) => {
+diff --git a/dist/tool-runtime.js b/dist/tool-runtime.js
+--- a/dist/tool-runtime.js
++++ b/dist/tool-runtime.js
+@@ -237,12 +237,15 @@
+ /** Per-execution call state over tools prepared once for the runtime. */
+ export const make = (prepared, maxToolCalls, hooks = {}) => {
+     const calls = [];
++    const origins = new WeakMap();
+     const root = prepared.root;
+     const recordCall = (call) => {
+         if (maxToolCalls !== undefined && calls.length >= maxToolCalls) {
+             throw new ToolRuntimeError("ToolCallLimitExceeded", `Execution exceeded its tool-call limit of ${maxToolCalls}.`);
+         }
++        const index = calls.length;
+         calls.push(call);
++        return index;
+     };
+     const executeTool = (name, tool, args) => Effect.gen(function* () {
+         const normalized = args.length === 0 ? [{}] : args;
+@@ -252,7 +255,7 @@
+             try: () => decodeToolInput(tool, normalized[0]),
+             catch: (cause) => new ToolRuntimeError("InvalidToolInput", `Invalid input for tool '${name}': ${String(cause)}`, name === "search" ? [] : ["The signature may have changed. Use search to get the current signature."]),
+         });
+-        yield* Effect.sync(() => recordCall({ name }));
++        const index = yield* Effect.sync(() => recordCall({ name }));
+         return yield* hooked({ name, input }, hooks["tool.before"], hooks["tool.after"], Effect.gen(function* () {
+-            const raw = yield* Effect.suspend(() => tool.execute(input)).pipe(Effect.catchCause((cause) => {
++            const raw = yield* Effect.suspend(() => tool.execute(input, { index, hasArgument: args.length !== 0 })).pipe(Effect.catchCause((cause) => {
+                 if (Cause.hasInterruptsOnly(cause))
+@@ -265,7 +268,10 @@
+             return yield* Effect.try({
+                 try: () => {
+                     const text = JSON.stringify(decodeToolOutput(tool, raw));
+-                    return text === undefined ? undefined : JSON.parse(text);
++                    const value = text === undefined ? undefined : JSON.parse(text);
++                    if (value !== null && typeof value === "object")
++                        origins.set(value, index);
++                    return value;
+                 },
+                 catch: (cause) => new ToolRuntimeError("InvalidToolOutput", `Invalid output from tool '${name}': ${cause}`),
+             });
+@@ -273,6 +279,7 @@
+     });
+     return {
+         calls,
++        origins,
+         hooks,
+         keys: (path) => namespaceKeys(root, path),
+         search: (args) => Effect.suspend(() => executeTool("search", makeSearchTool(prepared.searchIndex), args)),
+diff --git a/dist/tool.d.ts b/dist/tool.d.ts
+--- a/dist/tool.d.ts
++++ b/dist/tool.d.ts
+@@ -39,13 +39,14 @@
+ };
+ /** Either a validating Effect Schema or a render-only JSON Schema document. */
+ export type SchemaType = Schema.Decoder<unknown> | JsonSchema;
++export type CallMetadata = { readonly index: number; readonly hasArgument: boolean };
+ /** Executable tool exposed through CodeMode's `tools` object. */
+ export type Tool<R = never> = {
+     readonly _tag: "CodeModeTool";
+     readonly description: string;
+     readonly input: SchemaType;
+     readonly output: SchemaType | undefined;
+-    readonly execute: (input: unknown) => Effect.Effect<unknown, unknown, R>;
++    readonly execute: (input: unknown, metadata?: CallMetadata) => Effect.Effect<unknown, unknown, R>;
+ };
+ type InputType<S> = S extends Schema.Decoder<unknown> ? S["Type"] : unknown;
+ type ResultType<S> = S extends undefined ? void : S extends Schema.Decoder<unknown> ? S["Encoded"] : unknown;
+@@ -53,6 +54,6 @@
+     readonly description: string;
+     readonly input: I;
+     readonly output?: O;
+-    readonly execute: (input: InputType<I>) => Effect.Effect<ResultType<O>, unknown, R>;
++    readonly execute: (input: InputType<I>, metadata?: CallMetadata) => Effect.Effect<ResultType<O>, unknown, R>;
+ };
+ export declare const isTool: <R = never>(value: Tool<R> | Namespace<R> | Tools<R> | undefined) => value is Tool<R>;
+diff --git a/dist/tool.js b/dist/tool.js
+--- a/dist/tool.js
++++ b/dist/tool.js
+@@ -12,5 +12,5 @@
+     description: options.description,
+     input: options.input,
+     output: options.output,
+-    execute: (input) => options.execute(input),
++    execute: (input, metadata) => options.execute(input, metadata),
+ });

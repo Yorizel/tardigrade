@@ -21,6 +21,7 @@ const REPO_CLI_MANIFEST = "../package.json"
 
 const PatchManifest = Schema.Struct({
   patchedDependencies: Schema.Record(Schema.NonEmptyString, Schema.NonEmptyString),
+  overrides: Schema.optionalKey(Schema.Record(Schema.NonEmptyString, Schema.NonEmptyString)),
 })
 
 export const projectPatchesFrom = async (from: string) => {
@@ -32,7 +33,7 @@ export const projectPatchesFrom = async (from: string) => {
     })
     if (source === undefined) continue
     const manifest = await Effect.runPromise(Schema.decodeEffect(Schema.fromJsonString(PatchManifest))(source))
-    return { packageRoot: dirname(manifestPath), patchedDependencies: manifest.patchedDependencies }
+    return { packageRoot: dirname(manifestPath), patchedDependencies: manifest.patchedDependencies, overrides: manifest.overrides ?? {} }
   }
   return Promise.reject(new Error("cannot locate a package manifest for project patches"))
 }

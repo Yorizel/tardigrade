@@ -40,8 +40,9 @@ describe("initActor", () => {
     const sourcePackage = Schema.decodeUnknownSync(Schema.Struct({ patchedDependencies: Schema.Record(Schema.String, Schema.String) }))(JSON.parse(await readFile(new URL("../../../package.json", import.meta.url), "utf8")))
     expect(packageManifest.patchedDependencies).toEqual(sourcePackage.patchedDependencies)
     for (const patchPath of Object.values(sourcePackage.patchedDependencies)) {
-      expect(await readFile(join(initialized.directory, patchPath), "utf8")).toContain("formatChecks")
+      expect(await readFile(join(initialized.directory, patchPath))).toEqual(await readFile(new URL(`../../../${patchPath}`, import.meta.url)))
     }
+    expect(await readFile(join(initialized.directory, sourcePackage.patchedDependencies["effect@4.1.2"]!), "utf8")).toContain("formatChecks")
     expect(await readFile(join(initialized.directory, "runner.ts"), "utf8")).toContain("LocalClusterWorkflowLive")
     await expect(readFile(join(initialized.directory, "wrangler.jsonc"), "utf8")).rejects.toThrow()
   })
