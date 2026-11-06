@@ -1,10 +1,12 @@
 import * as Domain from "@alchemy.run/domain"
-import { Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
+import { Internals } from "@alchemy.run/domain/Model"
+import { CurrentCaller, Ownership, ReceiptForbidden, ReceiptOwnerGuard } from "./Actor.context"
 import { CodeExecution } from "./Code/Code.aggregate"
 import { Delegation } from "./Delegation/Delegation.aggregate"
 import { Thread } from "./Thread/Thread.aggregate"
-import { ExecuteRun, ExecuteRunLive } from "./Execution/ExecuteRun.saga"
-import { RunExecution, RunExecutionLive } from "./Execution/RunExecution.policy"
+import { ExecuteRun } from "./Execution/Run.workflow"
+import { RunExecution } from "./Execution/RunExecution.policy"
 
 export class ActorModel extends Domain.Model("Tardigrade", {
   aggregates: [Thread, CodeExecution, Delegation],
@@ -12,4 +14,20 @@ export class ActorModel extends Domain.Model("Tardigrade", {
   policies: [RunExecution],
 }) {}
 
-export const ActorHandlers = Layer.mergeAll(ExecuteRunLive, RunExecutionLive)
+const ReceiptRequest = Schema.Struct({ target: Schema.Unknown, commandId: Schema.optional(Schema.String) })
+export const ReceiptOwnerGuardLive = Layer.succeed(ReceiptOwnerGuard, (effect, { rpc, payload }) => Effect.gen(function* () {
+  const request = yield* Schema.decodeUnknownEffect(ReceiptRequest)(payload).pipe(Effect.orDie)
+  if (request.commandId === undefined) return yield* effect
+  const internals = yield* Internals
+  const aggregate = ActorModel.aggregates.find(entry => entry.definition.commands.some(command => command.tag === rpc._tag))
+  const client = internals.commands.get(rpc._tag)
+  if (aggregate === undefined || client === undefined) return yield* Effect.die("Command authority is unavailable")
+  const state = yield* client.state(request.target)
+  if (!Schema.is(Ownership)(state)) {
+    if (Schema.toEquivalence(Schema.Unknown)(state, aggregate.definition.initial)) return yield* effect
+    return yield* new ReceiptForbidden()
+  }
+  const caller = yield* CurrentCaller
+  if (state.owner !== caller.subject) return yield* new ReceiptForbidden()
+  return yield* effect
+}))

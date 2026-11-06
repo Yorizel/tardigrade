@@ -5,7 +5,8 @@ import { expect, test } from "bun:test"
 import { Delegation } from "../src/Delegation/Delegation.aggregate"
 import { AcknowledgeDelegationInbox, ConfirmDelegationNotStarted, MarkDelegationStarted, RecordChildMessage, RecordChildOutcome, ReplyToChild, RequestDelegationCancellation, ReserveDelegation, ResolveDelegation } from "../src/Delegation/Delegation.commands"
 import { DEFAULT_DELEGATION_LIMITS, delegationKey } from "../src/Delegation/Delegation.schemas"
-import { CurrentCaller, Session } from "../src/Thread/Thread.context"
+import { ReceiptOwnerGuardLive } from "../src/Actor.model"
+import { CurrentCaller, Session } from "../src/Actor.context"
 
 const TestModel = Domain.Model("DelegationTest", { aggregates: [Delegation] })
 class DelegationApi extends Domain.Api("DelegationTestApi", {
@@ -13,7 +14,7 @@ class DelegationApi extends Domain.Api("DelegationTestApi", {
   commands: ["RequestDelegationCancellation", "ReplyToChild", "ResolveDelegation", "AcknowledgeDelegationInbox"],
   aggregates: ["Delegation"], views: [], streams: [],
 }) {}
-const platform = TestModel.layer(Layer.empty).pipe(Layer.provide(Domain.InMemory))
+const platform = Layer.merge(TestModel.layer(Layer.empty), ReceiptOwnerGuardLive).pipe(Layer.provide(Domain.InMemory))
 const key = delegationKey("parent", "parent-run", "request")
 const reservation = {
   requestId: "request", parentThreadId: "parent", parentRunId: "parent-run", targetActor: "assistant", lineage: ["parent"], toolCalls: 3,

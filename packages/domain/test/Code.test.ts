@@ -5,10 +5,11 @@ import { Effect, Layer, Result } from "effect"
 import { CodeExecution } from "../src/Code/Code.aggregate"
 import { RequestCode, PrepareCodeCall, ApproveCodeCall, DispatchCodeCall, SettleCodeCall, CompleteCode, CancelCode, MarkCodeCallUnknown, ResolveCodeCall, CodeStarted, CodeInterrupted, CodeRejected, ExpireCode } from "../src/Code/Code.commands"
 import { DEFAULT_CODE_LIMITS, CodeInput } from "../src/Code/Code.schemas"
-import { CurrentCaller, Session } from "../src/Thread/Thread.context"
+import { ReceiptOwnerGuardLive } from "../src/Actor.model"
+import { CurrentCaller, Session } from "../src/Actor.context"
 
 const CodeModel = Domain.Model("CodeTest", { aggregates: [CodeExecution] })
-const platform = CodeModel.layer(Layer.empty).pipe(Layer.provide(Domain.InMemory))
+const platform = Layer.merge(CodeModel.layer(Layer.empty), ReceiptOwnerGuardLive).pipe(Layer.provide(Domain.InMemory))
 const request = CodeInput.make({ threadId: "thread", runId: "run", digest: "digest", code: "return tools.read({ key: 1 })", ambient: { at: 123, seed: "execution" }, limits: DEFAULT_CODE_LIMITS })
 const call = { ordinal: 0, package: "tools", method: "read", input: { key: 1 }, mutation: false, requiresApproval: false } as const
 const returned = { _tag: "Returned", value: { answer: 42 } } as const

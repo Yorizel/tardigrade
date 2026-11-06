@@ -1,3 +1,4 @@
+import { Ownership } from "../Actor.context"
 import { Schema } from "effect"
 import { Prompt } from "effect/ai"
 import { Receipt } from "../Thread/Thread.schemas"
@@ -48,7 +49,7 @@ export const ReservedState = Schema.TaggedStruct("Reserved", {
   delegationId: Schema.NonEmptyString,
   childThreadId: Schema.NonEmptyString,
   childRunId: Schema.NonEmptyString,
-  owner: Schema.NonEmptyString,
+  ...Ownership.fields,
   reservation: Reservation,
   status: DelegationStatus,
   started: Schema.Boolean,

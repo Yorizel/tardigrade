@@ -3,7 +3,7 @@ import { Effect, Layer, Result } from "effect"
 import { expect, test } from "bun:test"
 import { Thread } from "../src/Thread/Thread.aggregate"
 import { OpenThread, RequestRun, BeginStep, ConfirmDispatch, ApproveRun, CompleteRun, CancelRun, RecordStep, FailRun, ResolveUnknown } from "../src/Thread/Thread.commands"
-import { CurrentCaller } from "../src/Thread/Thread.context"
+import { CurrentCaller } from "../src/Actor.context"
 import { DEFAULT_RUN_LIMITS, Prompt, Response } from "../src/Thread/Thread.schemas"
 
 const TestModel = Domain.Model("ThreadTest", { aggregates: [Thread] })

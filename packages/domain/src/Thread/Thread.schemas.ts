@@ -1,3 +1,4 @@
+import { Ownership } from "../Actor.context"
 import { Schema } from "effect"
 import { Prompt, Response } from "effect/ai"
 
@@ -39,16 +40,27 @@ export const Run = Schema.Struct({
   reason: Schema.NullOr(Schema.String),
 })
 export const Receipt = Schema.Struct({ runId: Schema.NonEmptyString, digest: Schema.NonEmptyString, input: Prompt.Prompt, status: RunStatus, text: Schema.String, reason: Schema.NullOr(Schema.String) })
+export const RunRequest = Schema.Struct({ runId: Schema.NonEmptyString, digest: Schema.NonEmptyString, prompt: Prompt.Prompt })
+export const ChildBinding = Schema.Struct({
+  delegationId: Schema.NonEmptyString,
+  parentThreadId: ThreadId,
+  parentRunId: Schema.NonEmptyString,
+  childRunId: Schema.NonEmptyString,
+  actor: Schema.NonEmptyString,
+})
+export const ChildAdmission = Schema.Struct({ binding: ChildBinding, closed: Schema.Boolean, reason: Schema.NullOr(Schema.NonEmptyString) })
+export const ChildReservedState = Schema.TaggedStruct("ChildReserved", { ...Ownership.fields, ...ChildAdmission.fields })
 export const OpenState = Schema.TaggedStruct("Open", {
   actor: Schema.NonEmptyString,
   instance: Schema.NonEmptyString,
   name: Schema.NonEmptyString,
-  owner: Schema.NonEmptyString,
+  ...Ownership.fields,
   limits: RunLimits,
   history: Prompt.Prompt,
   active: Schema.NullOr(Run),
   receipts: Schema.Array(Receipt),
   lastReceipt: Schema.NullOr(Receipt),
+  child: Schema.NullOr(ChildAdmission),
 })
-export const ThreadState = Schema.Union([Schema.TaggedStruct("Unopened", {}), OpenState])
+export const ThreadState = Schema.Union([Schema.TaggedStruct("Unopened", {}), ChildReservedState, OpenState])
 export { Prompt, Response }

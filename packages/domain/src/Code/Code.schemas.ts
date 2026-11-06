@@ -1,3 +1,4 @@
+import { Ownership } from "../Actor.context"
 import { Schema } from "effect"
 
 export const CodeLimits = Schema.Struct({
@@ -39,7 +40,7 @@ export const CodeCall = Schema.Struct({
   reason: Schema.NullOr(Schema.String),
 })
 export const OpenCode = Schema.TaggedStruct("Open", {
-  owner: Schema.NonEmptyString,
+  ...Ownership.fields,
   request: CodeInput,
   status: Schema.Literals(["running", "completed", "failed", "cancelled", "unknown"]),
   startedAt: Schema.Number,

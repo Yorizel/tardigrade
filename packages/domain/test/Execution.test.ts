@@ -1,14 +1,16 @@
 import { expect, test } from "bun:test"
 import * as Domain from "@alchemy.run/domain"
-import { Effect, Layer, Ref } from "effect"
+import { Effect, Exit, Layer, Ref } from "effect"
 import { Prompt, Response } from "effect/ai"
-import { ActorModel, ActorHandlers } from "../src/Actor.model"
+import { ActorModel } from "../src/Actor.model"
+import { ActorHandlers } from "../src/Actor.handlers"
 import { Thread } from "../src/Thread/Thread.aggregate"
-import { CurrentCaller } from "../src/Thread/Thread.context"
+import { CurrentCaller } from "../src/Actor.context"
 import { OpenThread, RequestRun } from "../src/Thread/Thread.commands"
 import { DEFAULT_RUN_LIMITS } from "../src/Thread/Thread.schemas"
 import { AgentExecution } from "../src/Execution/AgentExecution.external"
-import { ExecuteRun, runKey } from "../src/Execution/ExecuteRun.saga"
+import { ExecuteRun, runKey } from "../src/Execution/Run.workflow"
+import { ExecuteRunLive } from "../src/Execution/ExecuteRun.saga"
 
 const usage = new Response.Usage({ inputTokens: { total: 2 }, outputTokens: { total: 3 } })
 
@@ -39,7 +41,7 @@ test.each([
     const runs = yield* ExecuteRun
     yield* threads.send(threadId, new OpenThread({ actor: "agent", instance: "i", name: "main", limits: DEFAULT_RUN_LIMITS }))
     yield* threads.send(threadId, new RequestRun({ runId, digest: "d", prompt: Prompt.make("Read the number") }))
-    const saga = yield* runs.start(runKey(threadId, runId), { threadId, runId })
+    const saga = yield* runs.start(runKey(threadId, runId), { threadId, runId, owner: "alice" })
     yield* saga.result
     const state = yield* threads.state(threadId)
     if (state._tag !== "Open") return yield* Effect.die("Expected open thread")
@@ -53,3 +55,26 @@ test.each([
 })), 15_000)
 
 test("the native model definitions are valid", () => expect(Domain.verify(ActorModel)).toEqual([]))
+
+
+test("a mismatched workflow owner cannot dispatch or fail another owner's run", () => Effect.runPromise(Effect.gen(function* () {
+  const calls = yield* Ref.make(0)
+  const adapter = AgentExecution.toLayer(Effect.succeed({
+    infer: () => Ref.update(calls, count => count + 1).pipe(Effect.andThen(Effect.die("Unauthorized dispatch"))),
+    invoke: () => Ref.update(calls, count => count + 1).pipe(Effect.andThen(Effect.die("Unauthorized dispatch"))),
+  }))
+  const Model = Domain.Model("ExecutionOwnerTest", { aggregates: [Thread], sagas: [ExecuteRun] })
+  const world = Model.layer(ExecuteRunLive).pipe(Layer.provide(Layer.mergeAll(Domain.InMemory, adapter)))
+  yield* Effect.gen(function* () {
+    const threads = yield* Thread
+    const runs = yield* ExecuteRun
+    yield* threads.send("private", new OpenThread({ actor: "agent", instance: "i", name: "main", limits: DEFAULT_RUN_LIMITS }))
+    yield* threads.send("private", new RequestRun({ runId: "r", digest: "d", prompt: Prompt.make("Private prompt") }))
+    const before = yield* threads.state("private")
+    const unauthorized = yield* runs.start(runKey("private", "r"), { threadId: "private", runId: "r", owner: "bob" })
+    const result = yield* unauthorized.result.pipe(Effect.exit)
+    expect(Exit.isFailure(result)).toBe(true)
+    expect(yield* threads.state("private")).toEqual(before)
+    expect(yield* Ref.get(calls)).toBe(0)
+  }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(world))
+})))

@@ -1,6 +1,6 @@
 import * as Domain from "@alchemy.run/domain"
 import { DateTime, Effect, Schema } from "effect"
-import { CurrentCaller, Session } from "../Thread/Thread.context"
+import { CurrentCaller, Session } from "../Actor.context"
 import { CodeState, CodeInput, CodeOutcome, HostCallInput, OpenCode } from "./Code.schemas"
 import { RequestCode, PrepareCodeCall, ApproveCodeCall, DispatchCodeCall, SettleCodeCall, CompleteCode, CancelCode, FailCode, MarkCodeCallUnknown, ResolveCodeCall, ExpireCode, CodeRejected, CodeNotOwner, CodeStarted, CodeCallPrepared, CodeCallReplayed, CodeCallApproved, CodeCallDispatched, CodeCallSettled, CodeInterrupted, CodeCallReconciled, CodeFinished } from "./Code.commands"
 

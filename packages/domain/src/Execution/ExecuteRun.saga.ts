@@ -1,4 +1,3 @@
-import * as Domain from "@alchemy.run/domain"
 import { Cause, Effect, Schema } from "effect"
 import { Prompt, Response } from "effect/ai"
 import { Activity, DurableDeferred } from "effect/workflow"
@@ -7,18 +6,14 @@ import { Thread } from "../Thread/Thread.aggregate"
 import { ThreadState } from "../Thread/Thread.schemas"
 import { BeginStep, ConfirmDispatch, RecordStep, CompleteRun, FailRun, MarkUnknown, RunRejected } from "../Thread/Thread.commands"
 import { AgentExecution, ModelTurn, ExecutionRejected } from "./AgentExecution.external"
-
-export const runKey = (threadId: string, runId: string) => `${threadId.length}:${threadId}${runId}`
-export const approval = (stepId: string) => DurableDeferred.make(`approval:${stepId}`)
-export class ExecuteRun extends Domain.Saga("ExecuteRun", {
-  key: Schema.NonEmptyString,
-  input: { threadId: Schema.NonEmptyString, runId: Schema.NonEmptyString },
-}) {}
+import { ExecuteRun, runKey, approval } from "./Run.workflow"
 
 export const ExecuteRunLive = ExecuteRun.toLayer(Effect.gen(function* () {
   const threads = yield* Thread
   const execution = yield* AgentExecution
-  return Effect.fn("ExecuteRun")(function* ({ threadId, runId }) {
+  return Effect.fn("ExecuteRun")(function* ({ threadId, runId, owner }) {
+    const authority = yield* threads.state(threadId)
+    if (authority._tag !== "Open" || authority.owner !== owner) return yield* Effect.die("Unauthorized workflow scope")
     const fail = Effect.fn("ExecuteRun.fail")(function* (reason: string) {
       yield* threads.send(threadId, new FailRun({ runId, reason })).pipe(Effect.catchTag("RunRejected", () => Effect.void))
     })

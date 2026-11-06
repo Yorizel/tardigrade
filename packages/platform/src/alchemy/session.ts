@@ -1,9 +1,10 @@
-import { CurrentCaller, Session, Unauthorized } from "@clavia/tardigrade-domain/Thread/Thread.context"
-import { Config, Effect, Layer, Option, Redacted } from "effect"
+import { ReceiptOwnerGuardLive } from "@clavia/tardigrade-domain/Actor.model"
+import { CurrentCaller, Session, Unauthorized } from "@clavia/tardigrade-domain/Actor.context"
+import { Config, Effect, Layer, Option, Redacted, Schema } from "effect"
 import { Headers } from "effect/http"
 
-export const SessionLive = Layer.effect(Session, Effect.gen(function* () {
-  const token = yield* Config.Redacted("TARDIGRADE_TOKEN")
+const AuthenticatedSessionLive = Layer.effect(Session, Effect.gen(function* () {
+  const token = yield* Config.schema(Schema.Redacted(Schema.NonEmptyString), "TARDIGRADE_TOKEN")
   const subject = yield* Config.NonEmptyString("TARDIGRADE_SUBJECT")
   return (effect, { headers }) => {
     const authorization = Headers.get(headers, "authorization")
@@ -11,3 +12,5 @@ export const SessionLive = Layer.effect(Session, Effect.gen(function* () {
     return effect.pipe(Effect.provideService(CurrentCaller, { subject }))
   }
 }))
+
+export const SessionLive = Layer.merge(AuthenticatedSessionLive, ReceiptOwnerGuardLive)

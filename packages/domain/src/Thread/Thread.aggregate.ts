@@ -1,38 +1,24 @@
 import * as Domain from "@alchemy.run/domain"
 import { DateTime, Effect, Schema } from "effect"
-import { CurrentCaller, Session } from "./Thread.context"
-import { ThreadId, ThreadState, RunLimits, Prompt, StepSettlement } from "./Thread.schemas"
-import { OpenThread, RequestRun, BeginStep, ConfirmDispatch, RecordStep, ApproveRun, CompleteRun, FailRun, CancelRun, MarkUnknown, ThreadOpened, RunRequested, StepPrepared, StepDispatched, StepRecorded, RunApproved, RunCompleted, RunFailed, RunCancelled, RunBecameUnknown, RunRejected, NotOwner, RunAcknowledged, StepOutputRejected, ExpireRun, StepReconciled, ResolveUnknown } from "./Thread.commands"
+import { delegationKey } from "../Delegation/Delegation.schemas"
+import { CurrentCaller, Session } from "../Actor.context"
+import { ThreadId, ThreadState, RunLimits, Prompt, StepSettlement, OpenState, RunRequest, ChildBinding, ChildAdmission } from "./Thread.schemas"
+import { OpenThread, RequestRun, BeginStep, ConfirmDispatch, RecordStep, ApproveRun, CompleteRun, FailRun, CancelRun, MarkUnknown, ThreadOpened, RunRequested, StepPrepared, StepDispatched, StepRecorded, RunApproved, RunCompleted, RunFailed, RunCancelled, RunBecameUnknown, RunRejected, NotOwner, RunAcknowledged, StepOutputRejected, ExpireRun, StepReconciled, ResolveUnknown, ChildAdmissionReserved, ChildAdmissionClosed, ChildThreadOpened, ReserveChildThread, OpenChildThread, RequestChildRun, FenceChildThread } from "./Thread.commands"
 
 const owned = Effect.fn("Thread.owned")(function* (state: typeof ThreadState.Type) {
   const caller = yield* CurrentCaller
-  if (state._tag !== "Open" || state.owner !== caller.subject) return yield* new NotOwner()
+  if (state._tag === "Unopened" || state.owner !== caller.subject) return yield* new NotOwner()
   return state
 })
 
 const working = (state: typeof ThreadState.Type, runId: string) => {
   if (state._tag !== "Open" || state.active === null || state.active.runId !== runId) return new RunRejected({ reason: "UnknownRun" })
+  if (state.child !== null && state.child.closed) return new RunRejected({ reason: "ChildAdmissionClosed" })
   if (["completed", "failed", "cancelled", "unknown"].includes(state.active.status)) return new RunRejected({ reason: "RunTerminal" })
   return { thread: state, run: state.active }
 }
 
-export class Thread extends Domain.Aggregate("Thread", {
-  id: ThreadId,
-  state: ThreadState,
-  initial: { _tag: "Unopened" },
-  commands: [OpenThread, RequestRun, BeginStep, ConfirmDispatch, RecordStep, ApproveRun, CompleteRun, FailRun, CancelRun, MarkUnknown, ExpireRun, ResolveUnknown],
-  decide: {
-    OpenThread: Effect.fn("Thread.OpenThread")(function* (state, command) {
-      const caller = yield* CurrentCaller
-      if (state._tag === "Open") {
-        if (state.owner !== caller.subject) return yield* new NotOwner()
-        if (state.actor !== command.actor || state.instance !== command.instance || state.name !== command.name || !Schema.toEquivalence(RunLimits)(state.limits, command.limits)) return yield* new RunRejected({ reason: "IdentityConflict" })
-        return []
-      }
-      return [new ThreadOpened({ actor: command.actor, instance: command.instance, name: command.name, limits: command.limits, owner: caller.subject })]
-    }),
-    RequestRun: Effect.fn("Thread.RequestRun")(function* (state, command, { now }) {
-      const current = yield* owned(state)
+const admitRun = Effect.fn("Thread.admitRun")(function* (current: typeof OpenState.Type, command: typeof RunRequest.Type, now: DateTime.Utc) {
       const previous = current.receipts.find(receipt => receipt.runId === command.runId)
       if (previous !== undefined) {
         if (previous.digest !== command.digest || !Schema.toEquivalence(Prompt.Prompt)(previous.input, command.prompt)) return yield* new RunRejected({ reason: "RunIdConflict" })
@@ -48,6 +34,98 @@ export class Thread extends Domain.Aggregate("Thread", {
       if (prompt.content.length > current.limits.maxMessages) return yield* new RunRejected({ reason: "MessageBudgetExceeded" })
       const startedAt = DateTime.toEpochMillis(now)
       return [new RunRequested({ run: { runId: command.runId, digest: command.digest, input: command.prompt, prompt, status: "pending", startedAt, deadlineAt: startedAt + current.limits.maxDurationMs, turns: 0, toolCalls: 0, tokens: 0, stepSerial: 0, settlements: [], step: null, text: "", reason: null } })]
+})
+
+const admissionOf = (state: typeof ThreadState.Type) => {
+  if (state._tag === "ChildReserved") return state
+  if (state._tag === "Open") return state.child
+  return null
+}
+
+const initialize = (event: typeof ThreadOpened.Type | typeof ChildThreadOpened.Type, child: typeof ChildAdmission.Type | null) => ({ _tag: "Open" as const, actor: event.actor, instance: event.instance, name: event.name, owner: event.owner, limits: event.limits, history: Prompt.empty, active: null, receipts: [], lastReceipt: null, child })
+
+export class Thread extends Domain.Aggregate("Thread", {
+  id: ThreadId,
+  state: ThreadState,
+  initial: { _tag: "Unopened" },
+  commands: [OpenThread, RequestRun, BeginStep, ConfirmDispatch, RecordStep, ApproveRun, CompleteRun, FailRun, CancelRun, MarkUnknown, ExpireRun, ResolveUnknown, ReserveChildThread, OpenChildThread, RequestChildRun, FenceChildThread],
+  decide: {
+    OpenThread: Effect.fn("Thread.OpenThread")(function* (state, command) {
+      const caller = yield* CurrentCaller
+      if (state._tag === "ChildReserved") {
+        if (state.owner !== caller.subject) return yield* new NotOwner()
+        if (state.closed) return yield* new RunRejected({ reason: "ChildAdmissionClosed" })
+        return yield* new RunRejected({ reason: "ChildAdmissionRequired" })
+      }
+      if (state._tag === "Open") {
+        if (state.owner !== caller.subject) return yield* new NotOwner()
+        if (state.child !== null) {
+          if (state.child.closed) return yield* new RunRejected({ reason: "ChildAdmissionClosed" })
+          return yield* new RunRejected({ reason: "ChildAdmissionRequired" })
+        }
+        if (state.actor !== command.actor || state.instance !== command.instance || state.name !== command.name || !Schema.toEquivalence(RunLimits)(state.limits, command.limits)) return yield* new RunRejected({ reason: "IdentityConflict" })
+        return []
+      }
+      return [new ThreadOpened({ actor: command.actor, instance: command.instance, name: command.name, limits: command.limits, owner: caller.subject })]
+    }),
+    RequestRun: Effect.fn("Thread.RequestRun")(function* (state, command, { now }) {
+      const current = yield* owned(state)
+      if (current._tag === "ChildReserved") {
+        if (current.closed) return yield* new RunRejected({ reason: "ChildAdmissionClosed" })
+        return yield* new RunRejected({ reason: "ChildAdmissionRequired" })
+      }
+      if (current.child !== null) {
+        if (current.child.closed) return yield* new RunRejected({ reason: "ChildAdmissionClosed" })
+        return yield* new RunRejected({ reason: "ChildAdmissionRequired" })
+      }
+      return yield* admitRun(current, command, now)
+    }),
+    ReserveChildThread: Effect.fn("Thread.ReserveChildThread")(function* (state, command, { id }) {
+      const caller = yield* CurrentCaller
+      if (id !== command.binding.delegationId || id !== delegationKey(command.binding.parentThreadId, command.binding.parentRunId, command.binding.childRunId)) return yield* new RunRejected({ reason: "ChildBindingIdentityConflict" })
+      if (state._tag === "Unopened") return [new ChildAdmissionReserved({ owner: caller.subject, binding: command.binding })]
+      if (state.owner !== caller.subject) return yield* new NotOwner()
+      const admission = admissionOf(state)
+      if (admission === null) return yield* new RunRejected({ reason: "NotChildThread" })
+      if (!Schema.toEquivalence(ChildBinding)(admission.binding, command.binding)) return yield* new RunRejected({ reason: "ChildBindingConflict" })
+      if (admission.closed) return yield* new RunRejected({ reason: "ChildAdmissionClosed" })
+      return []
+    }),
+    OpenChildThread: Effect.fn("Thread.OpenChildThread")(function* (state, command) {
+      if (state._tag === "Unopened") return yield* new RunRejected({ reason: "ChildNotReserved" })
+      const current = yield* owned(state)
+      const admission = admissionOf(current)
+      if (admission === null) return yield* new RunRejected({ reason: "NotChildThread" })
+      if (!Schema.toEquivalence(ChildBinding)(admission.binding, command.binding)) return yield* new RunRejected({ reason: "ChildBindingConflict" })
+      if (admission.closed) return yield* new RunRejected({ reason: "ChildAdmissionClosed" })
+      if (current._tag === "Open") {
+        if (current.name !== command.name || !Schema.toEquivalence(RunLimits)(current.limits, command.limits)) return yield* new RunRejected({ reason: "IdentityConflict" })
+        return []
+      }
+      return [new ChildThreadOpened({ actor: admission.binding.actor, instance: admission.binding.delegationId, name: command.name, limits: command.limits, owner: current.owner, binding: admission.binding })]
+    }),
+    RequestChildRun: Effect.fn("Thread.RequestChildRun")(function* (state, command, { now }) {
+      const current = yield* owned(state)
+      const admission = admissionOf(current)
+      if (admission === null) return yield* new RunRejected({ reason: "NotChildThread" })
+      if (!Schema.toEquivalence(ChildBinding)(admission.binding, command.binding)) return yield* new RunRejected({ reason: "ChildBindingConflict" })
+      if (admission.closed) return yield* new RunRejected({ reason: "ChildAdmissionClosed" })
+      if (current._tag !== "Open") return yield* new RunRejected({ reason: "ChildNotOpen" })
+      return yield* admitRun(current, { runId: admission.binding.childRunId, digest: command.digest, prompt: command.prompt }, now)
+    }),
+    FenceChildThread: Effect.fn("Thread.FenceChildThread")(function* (state, command, { id }) {
+      const caller = yield* CurrentCaller
+      if (id !== command.binding.delegationId || id !== delegationKey(command.binding.parentThreadId, command.binding.parentRunId, command.binding.childRunId)) return yield* new RunRejected({ reason: "ChildBindingIdentityConflict" })
+      const closed = new ChildAdmissionClosed({ owner: caller.subject, binding: command.binding, reason: command.reason })
+      if (state._tag === "Unopened") return [closed]
+      if (state.owner !== caller.subject) return yield* new NotOwner()
+      const admission = admissionOf(state)
+      if (admission === null) return yield* new RunRejected({ reason: "NotChildThread" })
+      if (!Schema.toEquivalence(ChildBinding)(admission.binding, command.binding)) return yield* new RunRejected({ reason: "ChildBindingConflict" })
+      if (admission.closed) return []
+      if (state._tag !== "Open" || state.active === null || ["completed", "failed", "cancelled", "unknown"].includes(state.active.status)) return [closed]
+      if (state.active.step?.dispatched && state.active.step.mutation) return [closed, new RunBecameUnknown({ runId: state.active.runId, stepId: state.active.step.stepId, reason: command.reason })]
+      return [closed, new RunCancelled({ runId: state.active.runId, reason: command.reason })]
     }),
     BeginStep: (state, command, { now }) => {
       const current = working(state, command.runId)
@@ -121,6 +199,7 @@ export class Thread extends Domain.Aggregate("Thread", {
     },
     CancelRun: Effect.fn("Thread.CancelRun")(function* (state, command) {
       const current = yield* owned(state)
+      if (current._tag !== "Open") return yield* new RunRejected({ reason: "UnknownRun" })
       if (current.active?.runId === command.runId && current.active.status === "cancelled") return []
       const work = working(current, command.runId)
       if ("_tag" in work) return yield* work
@@ -136,7 +215,7 @@ export class Thread extends Domain.Aggregate("Thread", {
     },
     ResolveUnknown: Effect.fn("Thread.ResolveUnknown")(function* (state, command) {
       const current = yield* owned(state)
-      if (current.active === null || current.active.runId !== command.runId || current.active.step?.stepId !== command.stepId || current.active.status !== "unknown") return yield* new RunRejected({ reason: "NoUncertainStep" })
+      if (current._tag !== "Open" || current.active === null || current.active.runId !== command.runId || current.active.step?.stepId !== command.stepId || current.active.status !== "unknown") return yield* new RunRejected({ reason: "NoUncertainStep" })
       return [new StepReconciled({ runId: command.runId, stepId: command.stepId, resolution: command.resolution, evidence: command.evidence })]
     }),
     ExpireRun: (state, command, { now }) => {
@@ -146,7 +225,24 @@ export class Thread extends Domain.Aggregate("Thread", {
     },
   },
   evolve: {
-    ThreadOpened: (_, event) => ({ _tag: "Open" as const, actor: event.actor, instance: event.instance, name: event.name, owner: event.owner, limits: event.limits, history: Prompt.empty, active: null, receipts: [], lastReceipt: null }),
+    ThreadOpened: (state, event) => {
+      if (state._tag !== "Unopened") return state
+      return initialize(event, null)
+    },
+    ChildAdmissionReserved: (state, event) => {
+      if (state._tag !== "Unopened") return state
+      return { _tag: "ChildReserved" as const, owner: event.owner, binding: event.binding, closed: false, reason: null }
+    },
+    ChildAdmissionClosed: (state, event) => {
+      if (state._tag === "Unopened") return { _tag: "ChildReserved" as const, owner: event.owner, binding: event.binding, closed: true, reason: event.reason }
+      if (state._tag === "ChildReserved") return { ...state, closed: true, reason: event.reason }
+      if (state.child === null) return state
+      return { ...state, child: { ...state.child, closed: true, reason: event.reason } }
+    },
+    ChildThreadOpened: (state, event) => {
+      if (state._tag !== "ChildReserved" || state.closed) return state
+      return initialize(event, { binding: event.binding, closed: false, reason: null })
+    },
     RunRequested: (state, event) => {
       if (state._tag !== "Open") return state
       const lastReceipt = { runId: event.run.runId, digest: event.run.digest, input: event.run.input, status: event.run.status, text: event.run.text, reason: event.run.reason }
@@ -201,6 +297,10 @@ export class Thread extends Domain.Aggregate("Thread", {
   },
   reply: {
     RequestRun: (state) => {
+      if (state._tag !== "Open") return { receipt: null }
+      return { receipt: state.lastReceipt }
+    },
+    RequestChildRun: state => {
       if (state._tag !== "Open") return { receipt: null }
       return { receipt: state.lastReceipt }
     },
