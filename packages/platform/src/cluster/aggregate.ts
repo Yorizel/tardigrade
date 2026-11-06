@@ -1,7 +1,7 @@
 import type { AggregateKit } from "@alchemy.run/domain/Platform"
 import { EnvelopeJson } from "@alchemy.run/domain/Platform"
 import { TraceJson } from "@alchemy.run/domain/Telemetry"
-import { Clock, Effect, Layer, Schema, Semaphore, SubscriptionRef } from "effect"
+import { Clock, Effect, Layer, Option, Ref, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
 import { ClusterSchema, Entity, Sharding } from "effect/cluster"
 import { Rpc } from "effect/rpc"
 import { SqlClient } from "effect/sql"
@@ -15,7 +15,7 @@ const SendResult = Schema.Union([
   Schema.Struct({ _tag: Schema.Literal("Rejected"), rejection: Schema.Unknown }),
   Schema.Struct({ _tag: Schema.Literal("Accepted"), receipt: Receipt }),
 ])
-const SendMeta = Schema.Struct({
+export const SendMeta = Schema.Struct({
   commandId: Schema.String,
   context: Schema.Record(Schema.String, Schema.Unknown),
   correlationId: Schema.optionalKey(Schema.String),
@@ -23,14 +23,18 @@ const SendMeta = Schema.Struct({
   link: Schema.optionalKey(Schema.Boolean),
 })
 
-export const aggregateEntity = Effect.fn("DomainCluster.aggregate")(function* (model: string, kit: AggregateKit) {
+const CommandPayload = Schema.Struct({ command: Schema.Unknown, meta: SendMeta })
+
+export const aggregateEntity = Effect.fn("DomainCluster.aggregate")(function* (model: string, kit: AggregateKit, eventPageSize: number) {
   const sql = yield* SqlClient.SqlClient
   const sharding = yield* Sharding.Sharding
   const entity = Entity.make(`${model.length}:${model}aggregate:${kit.name}`, [
-    Rpc.make("Send", { payload: { command: Schema.Unknown, meta: SendMeta }, success: SendResult, error: ReceiptAccessDenied }).annotate(ClusterSchema.Persisted, true),
+    Rpc.make("Send", { payload: CommandPayload, success: SendResult, error: ReceiptAccessDenied }).annotate(ClusterSchema.Persisted, true),
+    Rpc.make("Fire", { payload: { commandId: Schema.String, revision: Schema.Int }, success: Schema.Boolean }).annotate(ClusterSchema.Persisted, true),
     Rpc.make("State", { success: Snapshot }),
     Rpc.make("Events", { success: Schema.Array(Entry) }),
     Rpc.make("Changes", { success: Snapshot, stream: true }),
+    Rpc.make("Tail", { payload: { after: Schema.Int }, success: Entry, stream: true }),
   ])
   const readState = Effect.fn("DomainCluster.readState")(function* (instance: string) {
     const rows = yield* sql`SELECT state, version FROM tardigrade_domain_state WHERE model = ${model} AND block = ${kit.name} AND instance = ${instance}`.pipe(Effect.orDie)
@@ -50,12 +54,8 @@ export const aggregateEntity = Effect.fn("DomainCluster.aggregate")(function* (m
     const instance = address.entityId
     const snapshot = yield* SubscriptionRef.make(yield* readState(instance))
     const writes = yield* Semaphore.make(1)
-    return {
-      State: () => readState(instance),
-      Events: () => readEvents(instance),
-      Changes: () => SubscriptionRef.changes(snapshot),
-      Send: ({ payload }) => Effect.gen(function* () {
-        const result = yield* sql.withTransaction(Effect.gen(function* () {
+    const commit = Effect.fn("DomainCluster.commit")(function* (payload: typeof CommandPayload.Type) {
+      return yield* sql.withTransaction(Effect.gen(function* () {
           const duplicates = yield* sql`SELECT receipt, context, command FROM tardigrade_domain_receipts WHERE model = ${model} AND block = ${kit.name} AND instance = ${instance} AND command_id = ${payload.meta.commandId}`
           const receipts = yield* Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ receipt: Schema.String, context: Schema.String, command: Schema.NullOr(Schema.String) })))(duplicates).pipe(Effect.orDie)
           const receipt = receipts[0]
@@ -90,6 +90,49 @@ export const aggregateEntity = Effect.fn("DomainCluster.aggregate")(function* (m
           yield* sql`INSERT INTO tardigrade_domain_receipts (model, block, instance, command_id, receipt, context, command) VALUES (${model}, ${kit.name}, ${instance}, ${payload.meta.commandId}, ${encoded}, ${context}, ${command})`
           return accepted
         })).pipe(Effect.catchTag("SqlError", Effect.die))
+    })
+    return {
+      Fire: ({ payload }) => Effect.gen(function* () {
+        const applied = yield* sql.withTransaction(Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis
+          const pending = yield* sql`SELECT command, meta FROM tardigrade_domain_scheduled WHERE model = ${model} AND block = ${kit.name} AND instance = ${instance} AND command_id = ${payload.commandId} AND revision = ${payload.revision} AND cancelled = 0 AND due_at <= ${now}`
+          const rows = yield* Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ command: Schema.String, meta: Schema.String })))(pending).pipe(Effect.orDie)
+          const row = rows[0]
+          if (row === undefined) return false
+          const executed = yield* sql`SELECT command_id FROM tardigrade_domain_receipts WHERE model = ${model} AND block = ${kit.name} AND instance = ${instance} AND command_id = ${payload.commandId}`
+          if (executed.length === 0) {
+            const command = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(row.command).pipe(Effect.orDie)
+            const meta = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(SendMeta))(row.meta).pipe(Effect.orDie)
+            const result = yield* commit({ command, meta })
+            if (result._tag === "Rejected") return yield* Effect.die(result.rejection)
+          }
+          yield* sql`DELETE FROM tardigrade_domain_scheduled WHERE model = ${model} AND block = ${kit.name} AND instance = ${instance} AND command_id = ${payload.commandId} AND revision = ${payload.revision}`
+          return true
+        })).pipe(Effect.orDie)
+        if (applied) yield* SubscriptionRef.set(snapshot, yield* readState(instance))
+        return applied
+      }).pipe(writes.withPermits(1)),
+      State: () => readState(instance),
+      Events: () => readEvents(instance),
+      Changes: () => SubscriptionRef.changes(snapshot),
+      Tail: ({ payload }) => Stream.unwrap(Effect.gen(function* () {
+        const cursor = yield* Ref.make(payload.after)
+        return SubscriptionRef.changes(snapshot).pipe(Stream.flatMap(committed => Stream.unwrap(Effect.gen(function* () {
+          const after = yield* Ref.get(cursor)
+          return Stream.paginate(after, position => Effect.gen(function* () {
+            const rows = yield* sql`SELECT entry FROM tardigrade_domain_events WHERE model = ${model} AND block = ${kit.name} AND instance = ${instance} AND seq > ${position} AND seq <= ${committed.version} ORDER BY seq LIMIT ${eventPageSize}`.pipe(Effect.orDie)
+            const encoded = yield* Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ entry: Schema.String })))(rows).pipe(Effect.orDie)
+            const entries = yield* Effect.forEach(encoded, row => Schema.decodeUnknownEffect(Schema.fromJsonString(Entry))(row.entry).pipe(Effect.orDie))
+            const last = entries.at(-1)
+            if (last === undefined) return [entries, Option.none<number>()] as const
+            yield* Ref.set(cursor, last.envelope.seq)
+            if (entries.length < eventPageSize) return [entries, Option.none<number>()] as const
+            return [entries, Option.some(last.envelope.seq)] as const
+          }))
+        }))))
+      })),
+      Send: ({ payload }) => Effect.gen(function* () {
+        const result = yield* commit(payload)
         yield* SubscriptionRef.set(snapshot, yield* readState(instance))
         return result
       }).pipe(writes.withPermits(1)),

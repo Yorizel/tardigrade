@@ -66,5 +66,11 @@ export const DomainSchemaLive = SqliteMigrator.layer({
       const sql = yield* SqlClient.SqlClient
       yield* sql`ALTER TABLE tardigrade_domain_receipts ADD COLUMN command TEXT`
     }),
+    "0003_scheduled_delivery": Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient
+      yield* sql`ALTER TABLE tardigrade_domain_scheduled ADD COLUMN revision INTEGER NOT NULL DEFAULT 1`
+      yield* sql`ALTER TABLE tardigrade_domain_scheduled ADD COLUMN enqueued INTEGER NOT NULL DEFAULT 0`
+      yield* sql`CREATE INDEX tardigrade_domain_scheduled_pending ON tardigrade_domain_scheduled (model, block, cancelled, enqueued)`
+    }),
   }),
 })

@@ -1,7 +1,7 @@
 import { EnvelopeJson } from "@alchemy.run/domain/Platform"
 import type { Delivery as DomainDelivery } from "@alchemy.run/domain/Platform"
-import { Effect, Layer, Schedule, Schema } from "effect"
-import { ClusterSchema, Entity, Sharding, Singleton } from "effect/cluster"
+import { Effect, Layer, Ref, Schedule, Schema } from "effect"
+import { Entity, Sharding, Singleton } from "effect/cluster"
 import { Rpc } from "effect/rpc"
 import { SqlClient } from "effect/sql"
 
@@ -33,7 +33,7 @@ export const outboxEntity = Effect.fn("DomainCluster.outbox")(function* (
   const sql = yield* SqlClient.SqlClient
   const sharding = yield* Sharding.Sharding
   const entity = Entity.make(`${model.length}:${model}outbox:${block}`, [
-    Rpc.make("Drain").annotate(ClusterSchema.Persisted, true),
+    Rpc.make("Drain"),
   ])
   yield* Layer.build(entity.toLayer(Effect.gen(function* () {
     const address = yield* Entity.CurrentAddress
@@ -48,14 +48,23 @@ export const outboxEntity = Effect.fn("DomainCluster.outbox")(function* (
         }), { discard: true })
       }),
     }
-  }), { concurrency: 1 }).pipe(Layer.provide(Layer.succeed(Sharding.Sharding, sharding))))
+  }), { concurrency: 1, disableFatalDefects: true }).pipe(Layer.provide(Layer.succeed(Sharding.Sharding, sharding))))
   const client = yield* entity.client
   return {
-    drain: (instance: string) => client(instance).Drain().pipe(Effect.orDie),
+    client,
     recover: (interval: number) => Singleton.make(`${model.length}:${model}outbox:${block}`, Effect.gen(function* () {
-      const rows = yield* sql`SELECT DISTINCT instance FROM tardigrade_domain_outbox WHERE model = ${model} AND block = ${block} ORDER BY instance LIMIT ${batchSize}`.pipe(Effect.orDie)
-      const instances = yield* Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ instance: Schema.String })))(rows).pipe(Effect.orDie)
-      yield* Effect.forEach(instances, row => client(row.instance).Drain(undefined, { discard: true }).pipe(Effect.orDie), { discard: true })
-    }).pipe(Effect.repeat(Schedule.spaced(interval)), Effect.asVoid)),
+      const cursor = yield* Ref.make<string | null>(null)
+      yield* Effect.gen(function* () {
+        const after = yield* Ref.get(cursor)
+        const rows = yield* sql`SELECT DISTINCT instance FROM tardigrade_domain_outbox
+          WHERE model = ${model} AND block = ${block} AND (${after} IS NULL OR instance > ${after})
+          ORDER BY instance LIMIT ${batchSize}`.pipe(Effect.orDie)
+        const instances = yield* Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ instance: Schema.String })))(rows).pipe(Effect.orDie)
+        yield* Effect.forEach(instances, row => client(row.instance).Drain(undefined, { discard: true }).pipe(Effect.catchTag("MailboxFull", error => Effect.logWarning("Outbox notification deferred", error)), Effect.orDie), { discard: true })
+        const last = instances.at(-1)
+        if (last === undefined) yield* Ref.set(cursor, null)
+        else yield* Ref.set(cursor, last.instance)
+      }).pipe(Effect.repeat(Schedule.spaced(interval)))
+    })),
   }
 })
