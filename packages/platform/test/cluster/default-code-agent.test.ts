@@ -1,3 +1,4 @@
+import { ModelAccessLive } from "../../../../examples/alchemy/Models"
 import { expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -59,7 +60,7 @@ const ToolCodeResult = Schema.Struct({ outcome: CodeOutcome, logs: Schema.Array(
 const childOutput = OutputDeclaration.make({ name: "finding", schema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"], additionalProperties: false } })
 const parentOutput = OutputDeclaration.make({ name: "summary", schema: { type: "object", properties: { summary: { type: "string" } }, required: ["summary"], additionalProperties: false } })
 
-test.each(["child-output", "child-output-invalid", "child-output-unknown", "code-child-output", "code-child-output-invalid", "code-child-output-unknown", "meeseeks-multiturn", "output-valid", "output-invalid", "output-malformed", "code", "code-agents", "delegation", "fetch-direct", "fetch-code", "workspace-direct", "workspace-code", "spill", "spill-rejected"] as const)("default Alchemy agent executes %s through the real OpenAI HTTP provider and native policies", scenario => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+test.each(["model-selected", "model-denied", "child-output", "child-output-invalid", "child-output-unknown", "code-child-output", "code-child-output-invalid", "code-child-output-unknown", "meeseeks-multiturn", "output-valid", "output-invalid", "output-malformed", "code", "code-agents", "delegation", "fetch-direct", "fetch-code", "workspace-direct", "workspace-code", "spill", "spill-rejected"] as const)("default Alchemy agent executes %s through the real OpenAI HTTP provider and native policies", scenario => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
   const spillTarget = yield* workspaceKey("alice", "default-code")
   const directory = yield* Effect.acquireRelease(Effect.promise(() => mkdtemp(join(tmpdir(), "tardigrade-default-code-agent-"))), path => Effect.promise(() => rm(path, { recursive: true, force: true })))
   const requests = yield* Ref.make<ReadonlyArray<typeof OpenAiSchema.CreateResponse.Type>>([])
@@ -84,6 +85,11 @@ test.each(["child-output", "child-output-invalid", "child-output-unknown", "code
       if (scenario !== "meeseeks-multiturn" || previous.length < 2) expect(encoded).toContain(DEFAULT_MEESEEKS_INSTRUCTIONS)
     }
     const usage = { input_tokens: 20, output_tokens: 10, total_tokens: 30 }
+    if (scenario === "model-selected") {
+      expect(body.model).toBe("allowed-model")
+      expect(body.max_output_tokens).toBe(77)
+      return yield* HttpServerResponse.schemaJson(OpenAiSchema.Response)({ id: "selected", object: "response", model: "allowed-model", created_at: 1700000001, usage, output: [{ type: "message", id: "selected-message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Selected model done.", annotations: [] }] }] }).pipe(Effect.orDie)
+    }
     if (scenario.includes("child-output")) {
       const unknown = scenario.endsWith("unknown")
       const invalid = scenario.endsWith("invalid")
@@ -102,8 +108,8 @@ test.each(["child-output", "child-output-invalid", "child-output-unknown", "code
           return DelegateTool.name
         })()
         const argumentsJson = yield* Effect.gen(function* () {
-          if (code) return yield* Schema.encodeEffect(Schema.fromJsonString(CodeTool.parametersSchema))({ code: `const child = await agents.run({text: 'Find the primary source.', output: '${output}'}); return child.result;` })
-          return yield* Schema.encodeEffect(Schema.fromJsonString(DelegateTool.parametersSchema))({ task: "Find the primary source.", output })
+          if (code) return yield* Schema.encodeEffect(Schema.fromJsonString(CodeTool.parametersSchema))({ code: `const child = await agents.run({text: 'Find the primary source.', output: '${output}', model: {provider: 'openai', model: 'allowed-model'}}); return child.result;` })
+          return yield* Schema.encodeEffect(Schema.fromJsonString(DelegateTool.parametersSchema))({ task: "Find the primary source.", output, model: { provider: "openai", model: "allowed-model" } })
         })
         return yield* HttpServerResponse.schemaJson(OpenAiSchema.Response)({
           id: "child-output-start", object: "response", model: "gpt-4.1-mini", created_at: 1700000000, usage,
@@ -111,6 +117,8 @@ test.each(["child-output", "child-output-invalid", "child-output-unknown", "code
         }).pipe(Effect.orDie)
       }
       if (!unknown && previous.length === 1) {
+        expect(body.model).toBe("allowed-model")
+        expect(body.max_output_tokens).toBe(77)
         expect(body.text?.format).toEqual({ type: "json_schema", name: childOutput.name, schema: childOutput.schema, strict: true })
         const text = (() => {
           if (invalid) return '{"answer":42}'
@@ -121,6 +129,7 @@ test.each(["child-output", "child-output-invalid", "child-output-unknown", "code
           output: [{ type: "message", id: "child-output-message", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [] }] }],
         }).pipe(Effect.orDie)
       }
+      expect(body.model).toBe("gpt-4.1-mini")
       if (unknown) expect(previous.length).toBe(1)
       else expect(previous.length).toBe(2)
       expect(body.text?.format).toEqual({ type: "json_schema", name: parentOutput.name, schema: parentOutput.schema, strict: true })
@@ -137,6 +146,7 @@ test.each(["child-output", "child-output-invalid", "child-output-unknown", "code
       } else {
         const decoded = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ReservedState))(result.output).pipe(Effect.orDie)
         expect(decoded.reservation.output).toEqual(childOutput)
+        expect(decoded.reservation.model).toEqual({ provider: "openai", model: "allowed-model", maxOutputTokens: 77 })
         if (invalid) expect(decoded.status).toBe("failed")
         else expect(decoded.status).toBe("completed")
       }
@@ -402,6 +412,7 @@ test.each(["child-output", "child-output-invalid", "child-output-unknown", "code
   if (providerServer.address._tag === "UnixPathAddress" || domainServer.address._tag === "UnixPathAddress" || runnerServer.address._tag === "UnixPathAddress") return yield* Effect.die("Expected TCP servers")
   const settings = {
     TARDIGRADE_DOMAIN_URL: `http://127.0.0.1:${domainServer.address.port}`, TARDIGRADE_RUNNER_URL: `http://127.0.0.1:${runnerServer.address.port}`,
+    TARDIGRADE_MODELS: '[{"provider":"openai","model":"allowed-model","maxOutputTokens":77}]',
     TARDIGRADE_TOKEN: "meeseeks-fixture-token", TARDIGRADE_SUBJECT: "alice",
     RUNNER_TO_DOMAIN_TOKEN: "default-code-domain-fixture", WORKER_TO_RUNNER_TOKEN: "default-code-runner-fixture",
     TARDIGRADE_ACTOR: "default", TARDIGRADE_MODEL: "gpt-4.1-mini", TARDIGRADE_INSTRUCTIONS: DEFAULT_MEESEEKS_INSTRUCTIONS, OPENAI_API_KEY: "provider-fixture-token",
@@ -420,7 +431,7 @@ test.each(["child-output", "child-output-invalid", "child-output-unknown", "code
   yield* Layer.build(HttpServer.serve()(domainEndpoint).pipe(Layer.provide(Layer.succeedContext(domainContext))))
   const provider = OpenAiClient.layerConfig({ apiKey: Config.Redacted("OPENAI_API_KEY"), apiUrl: Config.succeed(`http://127.0.0.1:${providerServer.address.port}/v1`) }).pipe(Layer.provide(FetchHttpClient.layer))
   const runner = Layer.mergeAll(ExecuteRunLive, RunCodeLive, ExecuteCodeLive, ExecuteDelegationLive, RunDelegationLive, RunRpcHandlers, CodeRpcHandlers, DelegationRpcHandlers).pipe(
-    Layer.provide(AgentExecutionLive.pipe(Layer.provide(provider))), Layer.provide(CodeMethodsLive), Layer.provide(SpillStorageLive), Layer.provide(DomainClientLive), Layer.provide(ArtifactKeyValueStoreLive), Layer.provide(CodeRuntimeLive),
+    Layer.provide(AgentExecutionLive.pipe(Layer.provide(provider))), Layer.provide(CodeMethodsLive), Layer.provide(ModelAccessLive), Layer.provide(SpillStorageLive), Layer.provide(DomainClientLive), Layer.provide(ArtifactKeyValueStoreLive), Layer.provide(CodeRuntimeLive),
     Layer.provideMerge(ClusterWorkflowEngine.layer.pipe(Layer.provideMerge(SingleRunner.layer({ shardingConfig: { entityMessagePollInterval: Duration.millis(20) } })))),
     Layer.provide(SqliteClient.layer({ filename: join(directory, "runner.sqlite") })), Layer.provide(Digest.layerWebCrypto), Layer.provide(FetchHttpClient.layer), Layer.provide(config),
   )
@@ -428,7 +439,28 @@ test.each(["child-output", "child-output-invalid", "child-output-unknown", "code
   const runnerEndpoint = yield* RpcServer.toHttpEffect(RunRpcs.merge(CodeRpcs).merge(DelegationRpcs)).pipe(Effect.provide(Layer.succeedContext(runnerContext)), Effect.provide(RpcSerialization.layerNdjson))
   yield* Layer.build(HttpServer.serve()(runnerEndpoint).pipe(Layer.provide(Layer.succeedContext(runnerServerContext))))
   if (scenario !== "meeseeks-multiturn" && scenario !== "fetch-direct" && scenario !== "workspace-direct") yield* threads.send("default-code", OpenThread.make({ actor: "default", instance: "instance", name: "default", limits: DEFAULT_RUN_LIMITS })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
-  const request = { runId: "run", digest: "default-code", prompt: Prompt.make({ "child-output": "Delegate with a structured finding.", "child-output-invalid": "Observe an invalid child finding.", "child-output-unknown": "Reject an unknown child output.", "code-child-output": "Use agents.run with a structured finding.", "code-child-output-invalid": "Observe invalid structured output inside Code.", "code-child-output-unknown": "Reject an unknown child output inside Code.", "meeseeks-multiturn": "Answer two turns.", "output-valid": "Return the declared research object.", "output-invalid": "Return invalid shape to verify terminal validation.", "output-malformed": "Return malformed JSON to verify terminal validation.", "code-agents": "Use agents.run inside Code to research a primary source.", code: "Read the current time using Code Mode.", delegation: "Delegate a child task and report its completed result.", "fetch-direct": "Read the granted URL with fetch_get.", "fetch-code": "Read the granted URL using Code Mode.", "workspace-direct": "Write text, read a bounded slice, and list the durable workspace.", "workspace-code": "Use Code Mode to write, read and list the durable workspace.", spill: "Return a large Code result then read and grep its complete persisted value.", "spill-rejected": "Report a known archive allowance refusal without retrying the completed Code." }[scenario]) }
+  const request = { runId: "run", digest: "default-code", prompt: Prompt.make({ "model-selected": "Use the selected model.", "model-denied": "Reject a forbidden model.", "child-output": "Delegate with a structured finding.", "child-output-invalid": "Observe an invalid child finding.", "child-output-unknown": "Reject an unknown child output.", "code-child-output": "Use agents.run with a structured finding.", "code-child-output-invalid": "Observe invalid structured output inside Code.", "code-child-output-unknown": "Reject an unknown child output inside Code.", "meeseeks-multiturn": "Answer two turns.", "output-valid": "Return the declared research object.", "output-invalid": "Return invalid shape to verify terminal validation.", "output-malformed": "Return malformed JSON to verify terminal validation.", "code-agents": "Use agents.run inside Code to research a primary source.", code: "Read the current time using Code Mode.", delegation: "Delegate a child task and report its completed result.", "fetch-direct": "Read the granted URL with fetch_get.", "fetch-code": "Read the granted URL using Code Mode.", "workspace-direct": "Write text, read a bounded slice, and list the durable workspace.", "workspace-code": "Use Code Mode to write, read and list the durable workspace.", spill: "Return a large Code result then read and grep its complete persisted value.", "spill-rejected": "Report a known archive allowance refusal without retrying the completed Code." }[scenario]) }
+  if (scenario === "model-selected" || scenario === "model-denied") {
+    const model = { provider: "openai", model: "forbidden" }
+    const selected = (() => {
+      if (scenario === "model-selected") return { ...model, model: "allowed-model" }
+      return model
+    })()
+    yield* threads.send("default-code", RequestRun.make({ ...request, model: selected })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
+    const terminal = yield* Effect.repeat(threads.state("default-code"), { until: value => value._tag === "Open" && value.active !== null && ["completed", "failed"].includes(value.active.status), schedule: Schedule.spaced("10 millis") }).pipe(Effect.timeout("5 seconds"))
+    if (terminal._tag !== "Open" || terminal.active === null) return yield* Effect.die("Expected model-selected run")
+    expect(terminal.active.requestedModel).toEqual(selected)
+    if (scenario === "model-denied") {
+      expect(terminal.active.status).toBe("failed")
+      expect(terminal.active.tokens).toBe(0)
+      expect((yield* Ref.get(requests)).length).toBe(0)
+      return
+    }
+    expect(terminal.active.status).toBe("completed")
+    expect(terminal.active.model).toEqual({ ...selected, maxOutputTokens: 77 })
+    expect((yield* Ref.get(requests)).length).toBe(1)
+    return
+  }
   if (scenario === "meeseeks-multiturn") {
     const client = yield* ActorApi.clientInProcess.pipe(Effect.provide(SessionLive), Effect.provide(Layer.succeedContext(state)), Effect.provide(config))
     const message = { threadId: "default-code", runId: "turn-1", actor: "default", instance: "instance", name: "default", text: "First question.", limits: { ...DEFAULT_MEESEEKS_LIMITS, maxMessages: 4 } }
@@ -449,11 +481,12 @@ test.each(["child-output", "child-output-invalid", "child-output-unknown", "code
     const changedInstructions = "Answer in Portuguese using the updated instructions."
     const changedConfig = Layer.succeed(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown({ ...settings, TARDIGRADE_INSTRUCTIONS: changedInstructions }))
     const changedAdapter = Layer.fresh(AgentExecutionLive).pipe(
-      Layer.provide(CodeMethodsLive), Layer.provide(SpillStorageLive), Layer.provide(DomainClientLive), Layer.provide(ArtifactKeyValueStoreLive), Layer.provide(provider), Layer.provide(Digest.layerWebCrypto), Layer.provide(FetchHttpClient.layer), Layer.provide(changedConfig),
+      Layer.provide(CodeMethodsLive), Layer.provide(ModelAccessLive), Layer.provide(SpillStorageLive), Layer.provide(DomainClientLive), Layer.provide(ArtifactKeyValueStoreLive), Layer.provide(provider), Layer.provide(Digest.layerWebCrypto), Layer.provide(FetchHttpClient.layer), Layer.provide(changedConfig),
     )
     yield* Effect.gen(function* () {
       const execution = yield* AgentExecution
-      yield* execution.infer({ actor: "default", operationId: "updated-instructions", prompt: snapshot.history, remainingTokens: 100 })
+      if (snapshot.active === null || snapshot.active.model === undefined) return yield* Effect.die("Expected accepted model grant")
+      yield* execution.infer({ actor: "default", operationId: "updated-instructions", prompt: snapshot.history, remainingTokens: 100, model: snapshot.active.model, scope: { threadId: "default-code", runId: "turn-2", owner: "alice" } })
     }).pipe(Effect.provide(changedAdapter))
     const updatedRequests = yield* Ref.get(requests)
     expect(updatedRequests.length).toBe(3)
@@ -643,7 +676,7 @@ test.each(["child-output", "child-output-invalid", "child-output-unknown", "code
   expect(code._tag).toBe("Open")
   if (code._tag !== "Open") return yield* Effect.die("Expected durable Code execution")
   expect(code.status).toBe("completed")
-  expect(code.request.catalog).toEqual({ tools: ["current_time", "fetch_get", "fetch_request", "write_text", "read_text", "list_texts", "read_spill", "grep_spills", "run_agent"], agents: ["run"], workspace: ["read", "grep"] })
+  expect(code.request.catalog).toEqual({ tools: ["current_time", "fetch_get", "fetch_request", "write_text", "read_text", "list_texts", "read_spill", "grep_spills", "list_models", "run_agent"], agents: ["run"], workspace: ["read", "grep"] })
   if (scenario === "workspace-code") {
     expect(code.calls.length).toBe(3)
     expect(code.calls.map(call => ({ method: call.request.method, mutation: call.request.mutation }))).toEqual([{ method: WriteText.name, mutation: true }, { method: ReadText.name, mutation: false }, { method: ListTexts.name, mutation: false }])

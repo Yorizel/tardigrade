@@ -1,3 +1,4 @@
+import { ModelAccessFixture } from "../../../domain/test/ModelAccess.fixture"
 import { SpillStorageLive } from "../../src/cluster/spill-storage"
 import { KeyValueStore } from "effect/persistence"
 import { SpillCatalog } from "@clavia/tardigrade-domain/Spill/Spill.aggregate"
@@ -130,7 +131,7 @@ test.each(["completed", "unknown", "cancelled"] as const)("guest agents.run uses
     const conflict = yield* codes.send(executionId, RequestCode.make({ ...request, code: 'return "different"' })).pipe(Effect.result)
     expect(Result.isFailure(conflict)).toBe(true)
   }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(world))
-}))))
+})).pipe(Effect.provide(ModelAccessFixture))))
 
 test.each([
   { name: "unsupported background", input: { text: "task", background: true }, depth: 4 },
@@ -226,7 +227,7 @@ test("an uncertain mutation inside guest agents.run blocks the actual root workf
     expect(Result.isFailure(blocked)).toBe(true)
     if (Result.isFailure(blocked)) expect(blocked.failure).toMatchObject({ reason: "RunBusy" })
   }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(world))
-}))))
+})).pipe(Effect.provide(ModelAccessFixture))))
 
 
 test("the production planner exposes agents.run with trusted actor metadata and refuses external execution", () => Effect.runPromise(Effect.gen(function* () {
@@ -242,7 +243,7 @@ test("the production planner exposes agents.run with trusted actor metadata and 
     expect(catalog.tools).toContain("run_agent")
     const input = { actor: "agent", scope: { threadId: "parent", runId: "run", owner: "alice" }, operationId: "planned", call: { ordinal: 0, package: "agents", method: "run", input: { text: "task", budget: 1 } }, prompt: Prompt.make("Root task") }
     const planned = yield* methods.plan(input)
-    expect(planned.execution).toEqual({ _tag: "Delegate", targetActor: "agent", limits: DEFAULT_DELEGATION_LIMITS, toolCalls: 1 })
+    expect(planned.execution).toEqual({ _tag: "Delegate", targetActor: "agent", limits: DEFAULT_DELEGATION_LIMITS, toolCalls: 1, model: { provider: "fixture", model: "fixture" } })
     expect(planned.mutation).toBe(true)
     const expanded = yield* methods.plan({ ...input, call: { ...input.call, input: { text: "task", budget: DEFAULT_DELEGATION_LIMITS.maxToolCalls + 1 } } }).pipe(Effect.result)
     expect(Result.isFailure(expanded)).toBe(true)
@@ -250,4 +251,4 @@ test("the production planner exposes agents.run with trusted actor metadata and 
     expect(Result.isFailure(external)).toBe(true)
     if (Result.isFailure(external)) expect(external.failure).toMatchObject({ reason: "DelegateRequiresNativeWorkflow" })
   }).pipe(Effect.provide(production))
-})))
+}).pipe(Effect.provide(ModelAccessFixture))))

@@ -38,7 +38,8 @@ export const compactRun = Effect.fn("Execution.compactRun")(function* (snapshot:
         return yield* ExecutionRejected.make({ reason: "CompactionOutcomeUnknown" })
       }
       yield* api.ConfirmDispatch(scope.threadId, { runId: scope.runId, stepId }, { headers, commandId: runKey(scope.threadId, `dispatch:${stepId}`) }).pipe(Effect.orDie)
-      return yield* execution.compact({ actor: state.actor, operationId: runKey(scope.threadId, stepId), scope, prompt: plan.source, policy, remainingTokens: state.limits.maxTokens - state.active.tokens }).pipe(Effect.orDie)
+      if (state.active.model === undefined) return yield* Effect.die("Model grant is unavailable")
+      return yield* execution.compact({ model: state.active.model, actor: state.actor, operationId: runKey(scope.threadId, stepId), scope, prompt: plan.source, policy, remainingTokens: state.limits.maxTokens - state.active.tokens }).pipe(Effect.catchTag("ModelUnavailable", error => api.FailRun(scope.threadId, { runId: scope.runId, reason: error.reason }, { headers, commandId: runKey(scope.threadId, `model-unavailable:${stepId}`) }).pipe(Effect.catchTag("RunRejected", () => Effect.void), Effect.andThen(Effect.fail(error)))), Effect.orDie)
     }),
   })
   yield* Activity.make({ name: `record-compaction-${stepId}`, error: RunRejected, execute: api.RecordCompaction(scope.threadId, { runId: scope.runId, stepId, ...summary }, { headers, commandId: runKey(scope.threadId, `record-compaction:${stepId}`) }).pipe(Effect.orDie, Effect.asVoid) })

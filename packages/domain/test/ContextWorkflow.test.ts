@@ -1,3 +1,4 @@
+import { ModelAccessFixture } from "./ModelAccess.fixture"
 import { SpillStorageLive } from "../../platform/src/cluster/spill-storage"
 import { KeyValueStore } from "effect/persistence"
 import { SpillCatalog } from "../src/Spill/Spill.aggregate"
@@ -15,7 +16,7 @@ import { CodeExecution } from "../src/Code/Code.aggregate"
 import { Delegation } from "../src/Delegation/Delegation.aggregate"
 import { Thread } from "../src/Thread/Thread.aggregate"
 import { CurrentCaller, Session, Unauthorized } from "../src/Actor.context"
-import { OpenThread, RequestRun, BeginStep, ConfirmDispatch, RecordStep, CancelRun } from "../src/Thread/Thread.commands"
+import { SelectRunModel, OpenThread, RequestRun, BeginStep, ConfirmDispatch, RecordStep, CancelRun } from "../src/Thread/Thread.commands"
 import { DEFAULT_RUN_LIMITS } from "../src/Thread/Thread.schemas"
 import { AgentExecution } from "../src/Execution/AgentExecution.external"
 import { ExecuteRun, executionKey } from "../src/Execution/Run.workflow"
@@ -70,6 +71,7 @@ test.each([false, true])("native summary Activity respects replay and in-flight 
     const thread = yield* Thread
     yield* thread.send("t", OpenThread.make({ actor: "a", instance: "i", name: "n", limits: { ...DEFAULT_RUN_LIMITS, context: policy } }))
     yield* thread.send("t", RequestRun.make({ runId: "r", digest: "d", prompt: original }))
+    yield* thread.send("t", SelectRunModel.make({ runId: "r", model: { provider: "fixture", model: "fixture" } }))
     yield* thread.send("t", BeginStep.make({ runId: "r", stepId: "r:1", kind: "model", mutation: false, requiresApproval: false }))
     yield* thread.send("t", ConfirmDispatch.make({ runId: "r", stepId: "r:1" }))
     yield* thread.send("t", RecordStep.make({ runId: "r", stepId: "r:1", prompt: Prompt.fromMessages([Prompt.assistantMessage({ content: [Prompt.textPart({ text: Str.repeat(250)("old source fact ") })] }), Prompt.assistantMessage({ content: [Prompt.textPart({ text: "recent" })] })]), usage }))
@@ -102,4 +104,4 @@ test.each([false, true])("native summary Activity respects replay and in-flight 
     const completedCalls = yield* Ref.get(calls)
     expect(completedCalls).toEqual({ summaries: 1, models: 1 })
   }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provideContext(services))
-}))), 15000)
+})).pipe(Effect.provide(ModelAccessFixture))), 15000)

@@ -1,3 +1,4 @@
+import { ModelAccessFixture } from "../../../domain/test/ModelAccess.fixture"
 import { SpillStorageLive } from "../../src/cluster/spill-storage"
 import { KeyValueStore } from "effect/persistence"
 import { SpillCatalog } from "@clavia/tardigrade-domain/Spill/Spill.aggregate"
@@ -160,4 +161,4 @@ test.each(["code", "direct", "delegated-code"] as const)("a committed HTTP mutat
     expect(committed).toEqual(["POST:mutation"])
     expect(yield* Ref.get(inferred)).toEqual(expectedActors)
   }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(world))
-}))), 10_000)
+})).pipe(Effect.provide(ModelAccessFixture))), 10_000)

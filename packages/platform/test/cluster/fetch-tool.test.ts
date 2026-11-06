@@ -1,3 +1,4 @@
+import { ModelAccessFixture } from "../../../domain/test/ModelAccess.fixture"
 import { SpillStorageLive } from "../../src/cluster/spill-storage"
 import { KeyValueStore } from "effect/persistence"
 import { SpillCatalog } from "@clavia/tardigrade-domain/Spill/Spill.aggregate"
@@ -165,4 +166,4 @@ test("actual CodeMethods preserves native fetch failures as readable failed outc
     return effect.pipe(Effect.provideService(CurrentCaller, { subject: owner.value }))
   })),
   Layer.provide(Layer.merge(Domain.Model("FetchCodeMethodsTest", { aggregates: [Thread, CodeExecution, Delegation, Workspace, SpillCatalog] }).layer(Layer.empty), ReceiptOwnerGuardLive).pipe(Layer.provide(Domain.InMemory))),
-)), Effect.provide(Digest.layerWebCrypto), Effect.provide(configured()))))
+)), Effect.provide(Digest.layerWebCrypto), Effect.provide(configured())).pipe(Effect.provide(ModelAccessFixture))))

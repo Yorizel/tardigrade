@@ -1,3 +1,4 @@
+import { ModelGrant } from "../Execution/Model.schemas"
 import { OutputDeclaration } from "../Output/Output.schemas"
 import * as Domain from "@alchemy.run/domain"
 import { Array as EffectArray, Effect, Option, Schema } from "effect"
@@ -79,6 +80,7 @@ export class Delegation extends Domain.Aggregate("Delegation", {
       if (command.childThreadId !== state.childThreadId) return DelegationRejected.make({ reason: "ChildThreadIdentityConflict" })
       if (!Schema.toEquivalence(Prompt.Prompt)(state.reservation.prompt, command.receipt.input)) return DelegationRejected.make({ reason: "ChildInputIdentityConflict" })
       if (!Schema.toEquivalence(Schema.NullOr(OutputDeclaration))(state.reservation.output ?? null, command.receipt.output)) return DelegationRejected.make({ reason: "ChildOutputIdentityConflict" })
+      if (state.reservation.model !== undefined && !Schema.toEquivalence(Schema.UndefinedOr(ModelGrant))(state.reservation.model, command.receipt.model)) return DelegationRejected.make({ reason: "ChildModelIdentityConflict" })
       if (command.receipt.runId !== state.childRunId) return DelegationRejected.make({ reason: "ChildRunIdentityConflict" })
       const previous = Option.getOrUndefined(EffectArray.findFirst(state.inbox, entry => entry.content._tag === "Result"))
       if (previous?.content._tag === "Result") {

@@ -1,3 +1,4 @@
+import { ModelGrant } from "../Execution/Model.schemas"
 import { Ownership } from "../Actor.context"
 import { Schema } from "effect"
 import { Prompt } from "effect/ai"
@@ -20,6 +21,7 @@ export const CodeLimits = Schema.Struct({
 export const DEFAULT_CODE_LIMITS = { maxCalls: 64, maxCodeChars: 100_000, maxCallInputChars: 64_000, maxResultChars: 64_000, maxLogChars: 8192, maxLogs: 256, maxDurationMs: 300_000, maxMemoryBytes: 16 * 1024 * 1024, maxStackBytes: 512 * 1024, maxSegmentMs: 1000, maxJobs: 10_000 } as const
 export const PackageCatalog = Schema.Record(Schema.String, Schema.Array(Schema.NonEmptyString))
 export const CodeInput = Schema.Struct({
+  model: Schema.optionalKey(ModelGrant),
   threadId: Schema.NonEmptyString,
   runId: Schema.NonEmptyString,
   digest: Schema.NonEmptyString,

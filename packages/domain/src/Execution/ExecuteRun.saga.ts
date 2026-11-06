@@ -1,3 +1,5 @@
+import { ModelGrant } from "./Model.schemas"
+import { ModelAccess, ModelUnavailable } from "./ModelAccess.external"
 import { compactRun } from "./CompactRun"
 import { delegationLineage } from "../Delegation/Delegation.lineage"
 import { Array as Arr, Match, Cause, Clock, Effect, Layer, Result, Schema, Struct } from "effect"
@@ -26,6 +28,7 @@ export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
   const commands = yield* ActorInternalApi.Client
   const digester = yield* Digest.Digest
   const execution = yield* AgentExecution
+  const models = yield* ModelAccess
   const spills = yield* SpillStorage
   return ExecuteRun.toLayer(Effect.fn("ExecuteRun")(function* ({ key, threadId, runId, owner }) {
     if (key !== executionKey({ threadId, runId, owner })) return yield* Effect.die("Invalid run execution key")
@@ -65,7 +68,8 @@ export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
             return yield* ExecutionRejected.make({ reason: "ModelOutcomeUnknown" })
           }
           yield* commands.ConfirmDispatch(threadId, { runId, stepId: modelStep }, { headers, commandId: runKey(threadId, `dispatch:${modelStep}`) }).pipe(Effect.orDie)
-          return yield* execution.infer({ actor: state.actor, operationId: runKey(threadId, modelStep), prompt: accepted.prompt, output: state.active.output, remainingTokens: state.limits.maxTokens - state.active.tokens }).pipe(Effect.orDie)
+          if (state.active.model === undefined) return yield* RunRejected.make({ reason: "ModelNotSelected" })
+          return yield* execution.infer({ actor: state.actor, scope: { threadId, runId, owner }, model: state.active.model, operationId: runKey(threadId, modelStep), prompt: accepted.prompt, output: state.active.output, remainingTokens: state.limits.maxTokens - state.active.tokens }).pipe(Effect.catchTag("ModelUnavailable", error => fail(error.reason).pipe(Effect.andThen(Effect.fail(error)))), Effect.orDie)
         }),
       })
       yield* Activity.make({ name: `record-${modelStep}`, error: RunRejected, execute: commands.RecordStep(threadId, { runId, stepId: modelStep, prompt: model.prompt, usage: model.usage }, { headers, commandId: runKey(threadId, `record:${modelStep}`) }).pipe(Effect.orDie, Effect.asVoid) })
@@ -93,7 +97,7 @@ export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
               execute: Effect.gen(function* () {
                 const params = yield* Schema.decodeUnknownEffect(CodeTool.parametersSchema, { onExcessProperty: "error" })(tool.call.params).pipe(Effect.orDie)
                 const digest = yield* digester.digestHex(Digest.sha256, new TextEncoder().encode(params.code))
-                const accepted = { threadId, runId, digest, code: params.code, catalog: capability.catalog, limits: capability.limits, ambient: { at: yield* Clock.currentTimeMillis, seed: executionId } }
+                const accepted = { threadId, runId, digest, code: params.code, catalog: capability.catalog, limits: capability.limits, ambient: { at: yield* Clock.currentTimeMillis, seed: executionId }, ...Struct.pick(capability, ["model"]) }
                 if (capability.spill !== undefined) {
                   const spillTarget = yield* workspaceKey(owner, threadId)
                   const catalog = yield* commands.SpillCatalog.get(spillTarget, { headers }).pipe(Effect.orDie)
@@ -154,7 +158,7 @@ export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
               execute: Effect.gen(function* () {
                 const params = yield* Schema.decodeUnknownEffect(DelegateTool.parametersSchema, { onExcessProperty: "error" })(tool.call.params).pipe(Effect.orDie)
                 const lineage = yield* delegationLineage({ owner, threadId, runId }, capability.limits).pipe(Effect.provideService(ActorInternalApi.Client, commands))
-                return { requestId: stepId, parentThreadId: threadId, parentRunId: runId, targetActor: capability.targetActor, lineage, toolCalls: capability.toolCalls, limits: capability.limits, prompt: Prompt.make(params.task), ...Struct.pick(capability, ["output"]) }
+                return { requestId: stepId, parentThreadId: threadId, parentRunId: runId, targetActor: capability.targetActor, lineage, toolCalls: capability.toolCalls, limits: capability.limits, prompt: Prompt.make(params.task), ...Struct.pick(capability, ["output", "model"]) }
               }),
             })
             const delegated = yield* RunDelegation.execute({ key: delegationExecutionKey(owner, delegationId), delegationId, owner, reservation })
@@ -196,6 +200,18 @@ export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
       }
       yield* loop(turn + 1)
     })
-    yield* loop(0).pipe(Effect.catchCause(cause => fail(Cause.pretty(cause))))
+    yield* Effect.gen(function* () {
+      const model = yield* Activity.make({
+        name: "select-model", success: ModelGrant, error: ModelUnavailable,
+        execute: Effect.gen(function* () {
+          const state = yield* commands.Thread.get(threadId, { headers }).pipe(Effect.orDie)
+          if (state._tag !== "Open" || state.owner !== owner || state.active?.runId !== runId) return yield* Effect.die("Unauthorized model selection")
+          if (state.active.model !== undefined) return state.active.model
+          return yield* models.select({ actor: state.actor, owner, requested: state.active.requestedModel ?? null })
+        }),
+      })
+      yield* Activity.make({ name: "accept-model", execute: commands.SelectRunModel(threadId, { runId, model }, { headers, commandId: runKey(threadId, `model:${runId}`) }).pipe(Effect.orDie, Effect.asVoid) })
+      yield* loop(0)
+    }).pipe(Effect.catchCause(cause => fail(Cause.pretty(cause))))
   }))
 }))

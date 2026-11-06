@@ -1,5 +1,6 @@
 import { ContextPolicy, CompactionSettlement } from "../Execution/Context.schemas"
 import { Ownership } from "../Actor.context"
+import { ModelChoice, ModelGrant } from "../Execution/Model.schemas"
 import { Schema } from "effect"
 import { Prompt, Response } from "effect/ai"
 import { OutputDeclaration } from "../Output/Output.schemas"
@@ -27,6 +28,8 @@ export const Step = Schema.Struct({
 export const StepSettlement = Schema.Struct({ stepId: Schema.NonEmptyString, prompt: Prompt.Prompt, usage: Response.Usage })
 export const Run = Schema.Struct({
   runId: Schema.NonEmptyString,
+  requestedModel: Schema.optionalKey(ModelChoice),
+  model: Schema.optionalKey(ModelGrant),
   digest: Schema.NonEmptyString,
   output: Schema.NullOr(OutputDeclaration),
   input: Prompt.Prompt,
@@ -45,8 +48,8 @@ export const Run = Schema.Struct({
   result: Schema.NullOr(Schema.Json),
   reason: Schema.NullOr(Schema.String),
 })
-export const Receipt = Schema.Struct({ runId: Schema.NonEmptyString, digest: Schema.NonEmptyString, input: Prompt.Prompt, output: Schema.NullOr(OutputDeclaration), status: RunStatus, tokens: Schema.Int, compactions: Schema.Array(CompactionSettlement), step: Schema.NullOr(Step), text: Schema.String, result: Schema.NullOr(Schema.Json), reason: Schema.NullOr(Schema.String) })
-export const RunRequest = Schema.Struct({ runId: Schema.NonEmptyString, digest: Schema.NonEmptyString, prompt: Prompt.Prompt, output: Schema.optionalKey(OutputDeclaration) })
+export const Receipt = Schema.Struct({ requestedModel: Schema.optionalKey(ModelChoice), model: Schema.optionalKey(ModelGrant), runId: Schema.NonEmptyString, digest: Schema.NonEmptyString, input: Prompt.Prompt, output: Schema.NullOr(OutputDeclaration), status: RunStatus, tokens: Schema.Int, compactions: Schema.Array(CompactionSettlement), step: Schema.NullOr(Step), text: Schema.String, result: Schema.NullOr(Schema.Json), reason: Schema.NullOr(Schema.String) })
+export const RunRequest = Schema.Struct({ model: Schema.optionalKey(ModelChoice), runId: Schema.NonEmptyString, digest: Schema.NonEmptyString, prompt: Prompt.Prompt, output: Schema.optionalKey(OutputDeclaration) })
 export const ChildBinding = Schema.Struct({
   delegationId: Schema.NonEmptyString,
   parentThreadId: ThreadId,

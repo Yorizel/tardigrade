@@ -1,3 +1,4 @@
+import { ModelAccessFixture } from "../../../domain/test/ModelAccess.fixture"
 import { SpillStorageLive } from "../../src/cluster/spill-storage"
 import { KeyValueStore } from "effect/persistence"
 import { SpillCatalog } from "@clavia/tardigrade-domain/Spill/Spill.aggregate"
@@ -183,7 +184,7 @@ test("native HTTP policies execute a delegated child and retain its real result"
   const complete = yield* Effect.repeat(setup.control.PollDelegation(scope, setup.options), { until: value => Option.isSome(value) && value.value._tag === "Complete", schedule: Schedule.spaced("10 millis") }).pipe(Effect.timeout("5 seconds"))
   expect(Option.isSome(complete) && complete.value._tag === "Complete").toBe(true)
   yield* credentialsAbsent(Context.get(setup.runnerContext, SqlClient.SqlClient))
-}))), 20_000)
+})).pipe(Effect.provide(ModelAccessFixture))), 20_000)
 
 test("cancellation before delegation policy dispatch fences the child before confirming absence", () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
   const setup = yield* fixture(true)
@@ -196,7 +197,7 @@ test("cancellation before delegation policy dispatch fences the child before con
   expect(result.value.state.started).toBe(false)
   expect(Schema.is(FencedChildAbsent)(yield* setup.api.Thread.get(id, { headers }))).toBe(true)
   expect(yield* Ref.get(setup.calls)).toEqual({ parentModels: 1, childModels: 0, tools: 0 })
-}))), 20_000)
+})).pipe(Effect.provide(ModelAccessFixture))), 20_000)
 
 test("cancellation after child precharge records the fenced run and prevents a late mutation", () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
   const setup = yield* fixture()
@@ -215,7 +216,7 @@ test("cancellation after child precharge records the fenced run and prevents a l
   expect(Result.isFailure(late)).toBe(true)
   if (Result.isFailure(late) && late.failure._tag === "RunRejected") expect(late.failure.reason).toBe("ChildAdmissionClosed")
   expect(yield* Ref.get(setup.calls)).toEqual({ parentModels: 1, childModels: 1, tools: 0 })
-}))), 20_000)
+})).pipe(Effect.provide(ModelAccessFixture))), 20_000)
 
 
 test("a real Domain HTTP failure suspends delegation and cancellation resumes it to fence the precharged child", () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
@@ -242,7 +243,7 @@ test("a real Domain HTTP failure suspends delegation and cancellation resumes it
   const complete = yield* Effect.repeat(setup.control.PollDelegation(scope, setup.options), { until: value => Option.isSome(value) && value.value._tag === "Complete", schedule: Schedule.spaced("10 millis") }).pipe(Effect.timeout("5 seconds"))
   expect(Option.isSome(complete) && complete.value._tag === "Complete" && Exit.isSuccess(complete.value.exit)).toBe(true)
   yield* credentialsAbsent(Context.get(setup.runnerContext, SqlClient.SqlClient))
-}))), 20_000)
+})).pipe(Effect.provide(ModelAccessFixture))), 20_000)
 
 
 test("native workflow compensation fences a child when its delegation process is interrupted", () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
@@ -267,4 +268,4 @@ test("native workflow compensation fences a child when its delegation process is
   const persisted = yield* setup.delegations.state(id)
   expect(persisted._tag === "Reserved" && persisted.status).toBe("cancelled")
   expect(yield* Ref.get(setup.calls)).toEqual({ parentModels: 1, childModels: 1, tools: 0 })
-}))), 20_000)
+})).pipe(Effect.provide(ModelAccessFixture))), 20_000)

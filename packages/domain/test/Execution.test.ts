@@ -1,3 +1,4 @@
+import { ModelAccessFixture } from "./ModelAccess.fixture"
 import { SpillStorageLive } from "../../platform/src/cluster/spill-storage"
 import { KeyValueStore } from "effect/persistence"
 import { SpillCatalog } from "../src/Spill/Spill.aggregate"
@@ -75,7 +76,7 @@ test.each([
     const counts = yield* Ref.get(calls)
     expect(counts).toEqual({ models: 2, tools: 1 })
   }).pipe(Effect.provideContext(services), Effect.provideService(CurrentCaller, { subject: "alice" }))
-}))), 15_000)
+})).pipe(Effect.provide(ModelAccessFixture))), 15_000)
 
 test("the native model definitions are valid", () => expect(Domain.verify(TestModel)).toEqual([]))
 
@@ -101,4 +102,4 @@ test("a mismatched workflow owner cannot dispatch or fail another owner's run", 
     const count = yield* Ref.get(calls)
     expect(count).toBe(0)
   }).pipe(Effect.provideContext(services), Effect.provideService(CurrentCaller, { subject: "alice" }))
-}))))
+})).pipe(Effect.provide(ModelAccessFixture))))

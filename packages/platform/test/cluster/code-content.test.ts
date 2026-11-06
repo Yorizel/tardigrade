@@ -1,3 +1,4 @@
+import { ModelAccessFixture } from "../../../domain/test/ModelAccess.fixture"
 import { SpillStorageLive } from "../../src/cluster/spill-storage"
 import { KeyValueStore } from "effect/persistence"
 import { SpillCatalog } from "@clavia/tardigrade-domain/Spill/Spill.aggregate"
@@ -195,4 +196,4 @@ test("the parent workflow receives native Code file bytes and logs through the o
     expect(code.outcome).toEqual({ _tag: "Returned", value, modelOutput })
     expect(code.logs).toEqual(["capture"])
   }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(parentWorld))
-})))
+}).pipe(Effect.provide(ModelAccessFixture))))

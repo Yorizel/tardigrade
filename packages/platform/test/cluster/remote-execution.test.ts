@@ -1,3 +1,4 @@
+import { ModelAccessFixture } from "../../../domain/test/ModelAccess.fixture"
 import { SpillStorageLive } from "../../src/cluster/spill-storage"
 import { KeyValueStore } from "effect/persistence"
 import { SpillCatalog } from "@clavia/tardigrade-domain/Spill/Spill.aggregate"
@@ -137,4 +138,4 @@ test("Cluster executes against authenticated Domain HTTP with approval, cancella
     expect(messages.some(row => row.payload?.includes(fixtureToken) || row.headers?.includes(fixtureToken))).toBe(false)
     expect(replies.some(row => row.payload?.includes(fixtureToken))).toBe(false)
   }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(runner))
-}))), 20_000)
+})).pipe(Effect.provide(ModelAccessFixture))), 20_000)

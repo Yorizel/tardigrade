@@ -118,4 +118,13 @@ TARDIGRADE_CHILD_OUTPUTS={"finding":{"type":"object","properties":{"answer":{"ty
 
 A completed Code child returns `text` and `result`; `result` contains decoded JSON when output was requested and is null for plain text. Direct delegation exposes that value in its native result receipt. Invalid child JSON fails the child once with its model usage retained; it causes no correction call and does not become a successful child result. An unknown name creates no child and returns a known tool refusal while retaining the parent's paid model usage. Changing the output on an admitted reservation or run ID is rejected.
 
-Background child execution, asynchronous result controls and provider/model selection remain separate migration work. The current parent workflow awaits the child, and its terminal state still cancels unfinished child work.
+Background child execution, asynchronous result controls and additional provider adapters remain separate migration work. The current parent workflow awaits the child, and its terminal state still cancels unfinished child work.
+
+
+## Model selection
+
+A native run accepts an optional `model: {provider, model}` choice. The workflow resolves the configured policy and persists its grant before inference. A repeated run ID must retain its original request, and an accepted grant cannot be replaced. The native chat CLI accepts the same choice as JSON through `--model`. `list_models({})` exposes the choices permitted for the authenticated owner; it lists configuration rather than live provider capabilities or pricing.
+
+The reference runner supports OpenAI through Effect's native provider. `TARDIGRADE_MODEL` sets its required default. `TARDIGRADE_MODELS` adds allowed grants, for example `[{"provider":"openai","model":"gpt-4.1-mini","maxOutputTokens":1024}]`; omit the default model from this additional list. Duplicate choices, unsupported providers and invalid caps fail startup. Optional `TARDIGRADE_MODEL_OUTPUT_TOKENS` caps the default. Each cap is an application output-token policy, independent of the provider's advertised limits, and the request budget can tighten it further.
+
+`delegate({task, model: {provider, model}})` and `agents.run({text, model: {provider, model}})` may choose an allowed child model. Otherwise they inherit the parent's grant. The trusted planner freezes the grant in the reservation and the child run; guests cannot assign identity or bypass the configured catalog. Reusing the same model preserves the tighter inherited output cap. Choosing a different allowed model uses that model's configured policy. Every provider call rechecks current permission, so a removed model is refused before a paid request. Existing historical runs without model metadata require an explicit migration; the runner refuses to invent a provider identity after a step has started.

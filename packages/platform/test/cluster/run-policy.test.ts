@@ -1,3 +1,4 @@
+import { ModelAccessFixture } from "../../../domain/test/ModelAccess.fixture"
 import { SpillStorageLive } from "../../src/cluster/spill-storage"
 import { KeyValueStore } from "effect/persistence"
 import { expect, test } from "bun:test"
@@ -113,4 +114,4 @@ test("Domain policies start, approve and cancel Cluster workflows through actual
     const cancelled = yield* threads.state(cancelledScope.threadId)
     expect(cancelled._tag === "Open" && cancelled.active?.status === "cancelled").toBe(true)
   }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(runnerContext))
-}))), 20_000)
+})).pipe(Effect.provide(ModelAccessFixture))), 20_000)

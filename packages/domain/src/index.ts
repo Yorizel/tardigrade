@@ -37,3 +37,7 @@ export { ContextPolicy, ContextSummary, DEFAULT_CONTEXT_POLICY } from "./Executi
 export { AgentsRun } from "./Delegation/AgentsRun"
 
 export { OutputDeclaration, OutputSchema, ChildOutputCatalog } from "./Output/Output.schemas"
+
+export { ModelChoice, ModelGrant, ModelCatalog } from "./Execution/Model.schemas"
+export { ModelAccess, ModelUnavailable } from "./Execution/ModelAccess.external"
+export { ListModels } from "./Execution/ListModels"

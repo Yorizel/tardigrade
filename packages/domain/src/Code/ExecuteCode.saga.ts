@@ -62,7 +62,7 @@ export const ExecuteCodeLive = Layer.unwrap(Effect.gen(function* () {
             const scope = { threadId: current.code.request.threadId, runId: current.code.request.runId, owner }
             const lineage = yield* delegationLineage(scope, capability.limits).pipe(Effect.provideService(ActorInternalApi.Client, api))
             const requestId = yield* codeAgentRequestId(executionId, entry.request.ordinal)
-            return { requestId, parentThreadId: scope.threadId, parentRunId: scope.runId, targetActor: capability.targetActor, lineage, toolCalls, limits: capability.limits, prompt: Prompt.make(params.text), ...Struct.pick(capability, ["output"]) }
+            return { requestId, parentThreadId: scope.threadId, parentRunId: scope.runId, targetActor: capability.targetActor, lineage, toolCalls, limits: capability.limits, prompt: Prompt.make(params.text), ...Struct.pick(capability, ["output", "model"]) }
           }),
         })
         const delegationId = delegationKey(reservation.parentThreadId, reservation.parentRunId, reservation.requestId)
@@ -128,7 +128,7 @@ export const ExecuteCodeLive = Layer.unwrap(Effect.gen(function* () {
       yield* Effect.forEach(attempt.requested, call => Effect.gen(function* () {
         const planned = yield* Activity.make({
           name: `plan-${call.ordinal}`, success: HostCallInput,
-          execute: methods.plan({ actor: parent.actor, scope: { threadId: code.request.threadId, runId: code.request.runId, owner }, operationId: commandId(`call:${call.ordinal}`), call, prompt: run.prompt }).pipe(Effect.orDie),
+          execute: methods.plan({ actor: parent.actor, ...Struct.pick(code.request, ["model"]), scope: { threadId: code.request.threadId, runId: code.request.runId, owner }, operationId: commandId(`call:${call.ordinal}`), call, prompt: run.prompt }).pipe(Effect.orDie),
         })
         if (!Schema.toEquivalence(GuestCall)(planned, call)) return yield* Effect.die("Trusted method plan changed guest call identity")
         yield* api.PrepareCodeCall(executionId, planned, { headers, commandId: commandId(`prepare:${call.ordinal}`) }).pipe(Effect.orDie)

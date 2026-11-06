@@ -7,6 +7,7 @@ import { Config, Effect, Layer } from "effect"
 import { Digest } from "effect/crypto"
 import { FetchHttpClient, HttpServer } from "effect/http"
 import { RpcSerialization, RpcServer } from "effect/rpc"
+import { ModelAccessLive } from "./Models"
 import { AgentExecutionLive, CodeMethodsLive } from "./AgentExecution"
 
 const ExecutionLive = AgentExecutionLive.pipe(Layer.provide(
@@ -15,6 +16,7 @@ const ExecutionLive = AgentExecutionLive.pipe(Layer.provide(
 const RunnerLive = Layer.mergeAll(ExecuteRunLive, RunCodeLive, ExecuteCodeLive, RunDelegationLive, ExecuteDelegationLive, RunRpcHandlers, CodeRpcHandlers, DelegationRpcHandlers).pipe(
   Layer.provide(ExecutionLive),
   Layer.provide(CodeMethodsLive),
+  Layer.provide(ModelAccessLive),
   Layer.provide(SpillStorageLive),
   Layer.provide(DomainClientLive),
   Layer.provide(ArtifactKeyValueStoreLive),

@@ -1,3 +1,4 @@
+import { ModelGrant } from "../Execution/Model.schemas"
 import { ContextPlan } from "../Execution/Context.schemas"
 import * as Domain from "@alchemy.run/domain"
 import { Schema } from "effect"
@@ -7,6 +8,8 @@ import { ThreadId, RunLimits, Run, Step, Prompt, Response, Receipt, ChildBinding
 export class RunRejected extends Schema.TaggedError<RunRejected, { readonly brand: unique symbol }>()("RunRejected", { reason: Schema.String }, { httpApiStatus: 409 }) {}
 export class NotOwner extends Schema.TaggedError<NotOwner, { readonly brand: unique symbol }>()("NotOwner", {}, { httpApiStatus: 403 }) {}
 export class ThreadOpened extends Domain.Event("ThreadOpened", { actor: Schema.NonEmptyString, instance: Schema.NonEmptyString, name: Schema.NonEmptyString, owner: Schema.NonEmptyString, limits: RunLimits }) {}
+export class RunModelSelected extends Domain.Event("RunModelSelected", { runId: Schema.NonEmptyString, model: ModelGrant }) {}
+export class SelectRunModel extends Domain.Command("SelectRunModel", { target: ThreadId, middleware: [ReceiptOwnerGuard, Session], input: { runId: Schema.NonEmptyString, model: ModelGrant }, events: [RunModelSelected], rejects: [NotOwner, RunRejected] }) {}
 export class RunRequested extends Domain.Event("RunRequested", { run: Run }) {}
 export class RunAcknowledged extends Domain.Event("RunAcknowledged", { receipt: Receipt }) {}
 export class StepOutputRejected extends Domain.Event("StepOutputRejected", { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString, prompt: Prompt.Prompt, usage: Response.Usage }) {}
@@ -41,7 +44,7 @@ export class ChildAdmissionClosed extends Domain.Event("ChildAdmissionClosed", {
 export class ChildThreadOpened extends Domain.Event("ChildThreadOpened", { actor: Schema.NonEmptyString, instance: Schema.NonEmptyString, name: Schema.NonEmptyString, owner: Schema.NonEmptyString, limits: RunLimits, binding: ChildBinding }) {}
 export class ReserveChildThread extends Domain.Command("ReserveChildThread", { target: ThreadId, middleware: [ReceiptOwnerGuard, Session], input: { binding: ChildBinding }, events: [ChildAdmissionReserved], rejects: [NotOwner, RunRejected] }) {}
 export class OpenChildThread extends Domain.Command("OpenChildThread", { target: ThreadId, middleware: [ReceiptOwnerGuard, Session], input: { binding: ChildBinding, name: Schema.NonEmptyString, limits: RunLimits }, events: [ChildThreadOpened], rejects: [NotOwner, RunRejected] }) {}
-export class RequestChildRun extends Domain.Command("RequestChildRun", { target: ThreadId, middleware: [ReceiptOwnerGuard, Session], input: { binding: ChildBinding, digest: Schema.NonEmptyString, prompt: Prompt.Prompt, output: RunRequest.fields.output }, events: [RunRequested, RunAcknowledged], reply: { receipt: Schema.NullOr(Receipt) }, rejects: [NotOwner, RunRejected] }) {}
+export class RequestChildRun extends Domain.Command("RequestChildRun", { target: ThreadId, middleware: [ReceiptOwnerGuard, Session], input: { binding: ChildBinding, digest: Schema.NonEmptyString, prompt: Prompt.Prompt, output: RunRequest.fields.output, model: Schema.optionalKey(ModelGrant) }, events: [RunRequested, RunAcknowledged], reply: { receipt: Schema.NullOr(Receipt) }, rejects: [NotOwner, RunRejected] }) {}
 export class FenceChildThread extends Domain.Command("FenceChildThread", { target: ThreadId, middleware: [ReceiptOwnerGuard, Session], input: { binding: ChildBinding, reason: Schema.NonEmptyString }, events: [ChildAdmissionClosed, RunCancelled, RunBecameUnknown], rejects: [NotOwner, RunRejected] }) {}
 
 export class ContextCompactionPlanned extends Domain.Event("ContextCompactionPlanned", { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString, plan: Schema.NullOr(ContextPlan) }) {}

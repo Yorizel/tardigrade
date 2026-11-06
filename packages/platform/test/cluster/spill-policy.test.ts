@@ -1,3 +1,4 @@
+import { ModelAccessFixture } from "../../../domain/test/ModelAccess.fixture"
 import { expect, test } from "bun:test"
 import * as Domain from "@alchemy.run/domain"
 import { ConfigProvider, Effect, Layer, Option, Schema } from "effect"
@@ -92,4 +93,4 @@ test("code admission uses the persisted spill policy when a later planner propos
   const parent = yield* threads.state("thread")
   expect(parent._tag === "Open" && parent.active?.status).toBe("completed")
   expect(parent._tag === "Open" && parent.active?.text).toBe("Stored with accepted policy")
-})).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(world))))
+})).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(world)).pipe(Effect.provide(ModelAccessFixture))))

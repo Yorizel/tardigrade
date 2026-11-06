@@ -1,14 +1,15 @@
+import { ModelChoice, ModelGrant } from "../Execution/Model.schemas"
 import { CompactionSettlement } from "../Execution/Context.schemas"
 import { planCompaction, compactedPrompt, promptChars } from "../Execution/Context.compaction"
 import { BeginCompaction, RecordCompaction, ContextCompactionPlanned, ContextCompacted, ContextCompactionDiscarded } from "./Thread.commands"
 import * as Domain from "@alchemy.run/domain"
-import { Array, DateTime, Effect, Option, Schema, String } from "effect"
+import { Array, DateTime, Effect, Option, Schema, String, Struct } from "effect"
 import { delegationKey } from "../Delegation/Delegation.schemas"
 import { CurrentCaller, Session } from "../Actor.context"
 import { ThreadId, ThreadState, RunLimits, Prompt, StepSettlement, OpenState, Run, RunRequest, ChildBinding, ChildAdmission } from "./Thread.schemas"
 import { validateOutput } from "../Output/Output"
 import { OutputDeclaration } from "../Output/Output.schemas"
-import { OpenThread, RequestRun, BeginStep, ConfirmDispatch, RecordStep, ApproveRun, CompleteRun, FailRun, CancelRun, MarkUnknown, ThreadOpened, RunRequested, StepPrepared, StepDispatched, StepRecorded, RunApproved, RunCompleted, RunFailed, RunCancelled, RunBecameUnknown, RunRejected, NotOwner, RunAcknowledged, StepOutputRejected, ExpireRun, StepReconciled, ResolveUnknown, ChildAdmissionReserved, ChildAdmissionClosed, ChildThreadOpened, ReserveChildThread, OpenChildThread, RequestChildRun, FenceChildThread } from "./Thread.commands"
+import { OpenThread, RequestRun, SelectRunModel, RunModelSelected, BeginStep, ConfirmDispatch, RecordStep, ApproveRun, CompleteRun, FailRun, CancelRun, MarkUnknown, ThreadOpened, RunRequested, StepPrepared, StepDispatched, StepRecorded, RunApproved, RunCompleted, RunFailed, RunCancelled, RunBecameUnknown, RunRejected, NotOwner, RunAcknowledged, StepOutputRejected, ExpireRun, StepReconciled, ResolveUnknown, ChildAdmissionReserved, ChildAdmissionClosed, ChildThreadOpened, ReserveChildThread, OpenChildThread, RequestChildRun, FenceChildThread } from "./Thread.commands"
 
 const owned = Effect.fn("Thread.owned")(function* (state: typeof ThreadState.Type) {
   const caller = yield* CurrentCaller
@@ -23,16 +24,18 @@ const working = (state: typeof ThreadState.Type, runId: string) => {
   return { thread: state, run: state.active }
 }
 
-const receiptOf = (run: typeof Run.Type) => ({ runId: run.runId, digest: run.digest, input: run.input, output: run.output, status: run.status, tokens: run.tokens, compactions: run.compactions, step: run.step, text: run.text, result: run.result, reason: run.reason })
+const receiptOf = (run: typeof Run.Type) => ({ runId: run.runId, digest: run.digest, input: run.input, output: run.output, status: run.status, tokens: run.tokens, compactions: run.compactions, step: run.step, text: run.text, result: run.result, reason: run.reason, ...Struct.pick(run, ["requestedModel", "model"]) })
 
-const admitRun = Effect.fn("Thread.admitRun")(function* (current: typeof OpenState.Type, command: typeof RunRequest.Type, now: DateTime.Utc) {
+const admitRun = Effect.fn("Thread.admitRun")(function* (current: typeof OpenState.Type, command: typeof RunRequest.Type, now: DateTime.Utc, grantedModel?: typeof ModelGrant.Type) {
       const previous = Array.findFirst(current.receipts, receipt => receipt.runId === command.runId)
       if (Option.isSome(previous)) {
-        if (previous.value.digest !== command.digest || !Schema.toEquivalence(Prompt.Prompt)(previous.value.input, command.prompt) || !Schema.toEquivalence(Schema.NullOr(OutputDeclaration))(previous.value.output, command.output ?? null)) return yield* RunRejected.make({ reason: "RunIdConflict" })
+        if (grantedModel !== undefined && !Schema.toEquivalence(Schema.UndefinedOr(ModelGrant))(previous.value.model, grantedModel)) return yield* RunRejected.make({ reason: "ModelSelectionConflict" })
+        if (!Schema.toEquivalence(Schema.UndefinedOr(ModelChoice))(previous.value.requestedModel, command.model) || previous.value.digest !== command.digest || !Schema.toEquivalence(Prompt.Prompt)(previous.value.input, command.prompt) || !Schema.toEquivalence(Schema.NullOr(OutputDeclaration))(previous.value.output, command.output ?? null)) return yield* RunRejected.make({ reason: "RunIdConflict" })
         return [RunAcknowledged.make({ receipt: previous.value })]
       }
       if (current.active !== null && current.active.runId === command.runId) {
-        if (current.active.digest !== command.digest || !Schema.toEquivalence(Prompt.Prompt)(current.active.input, command.prompt) || !Schema.toEquivalence(Schema.NullOr(OutputDeclaration))(current.active.output, command.output ?? null)) return yield* RunRejected.make({ reason: "RunIdConflict" })
+        if (grantedModel !== undefined && !Schema.toEquivalence(Schema.UndefinedOr(ModelGrant))(current.active.model, grantedModel)) return yield* RunRejected.make({ reason: "ModelSelectionConflict" })
+        if (!Schema.toEquivalence(Schema.UndefinedOr(ModelChoice))(current.active.requestedModel, command.model) || current.active.digest !== command.digest || !Schema.toEquivalence(Prompt.Prompt)(current.active.input, command.prompt) || !Schema.toEquivalence(Schema.NullOr(OutputDeclaration))(current.active.output, command.output ?? null)) return yield* RunRejected.make({ reason: "RunIdConflict" })
         return [RunAcknowledged.make({ receipt: receiptOf(current.active) })]
       }
       if (current.active !== null && !["completed", "failed", "cancelled"].includes(current.active.status)) return yield* RunRejected.make({ reason: "RunBusy" })
@@ -40,7 +43,9 @@ const admitRun = Effect.fn("Thread.admitRun")(function* (current: typeof OpenSta
       const prompt = Prompt.concat(current.history, command.prompt)
       if (prompt.content.length > current.limits.maxMessages) return yield* RunRejected.make({ reason: "MessageBudgetExceeded" })
       const startedAt = DateTime.toEpochMillis(now)
-      return [RunRequested.make({ run: { runId: command.runId, digest: command.digest, output: command.output ?? null, input: command.prompt, prompt, status: "pending", startedAt, deadlineAt: startedAt + current.limits.maxDurationMs, turns: 0, toolCalls: 0, tokens: 0, stepSerial: 0, settlements: [], compactions: [], step: null, text: "", result: null, reason: null } })]
+      const pending = { ...Struct.renameKeys(Struct.pick(command, ["model"]), { model: "requestedModel" }), runId: command.runId, digest: command.digest, output: command.output ?? null, input: command.prompt, prompt, status: "pending", startedAt, deadlineAt: startedAt + current.limits.maxDurationMs, turns: 0, toolCalls: 0, tokens: 0, stepSerial: 0, settlements: [], compactions: [], step: null, text: "", result: null, reason: null } as const
+      const run = Option.match(Option.fromUndefinedOr(grantedModel), { onNone: () => pending, onSome: model => ({ ...pending, model }) })
+      return [RunRequested.make({ run })]
 })
 
 const admissionOf = (state: typeof ThreadState.Type) => {
@@ -55,7 +60,7 @@ export class Thread extends Domain.Aggregate("Thread", {
   id: ThreadId,
   state: ThreadState,
   initial: { _tag: "Unopened" },
-  commands: [BeginCompaction, RecordCompaction, OpenThread, RequestRun, BeginStep, ConfirmDispatch, RecordStep, ApproveRun, CompleteRun, FailRun, CancelRun, MarkUnknown, ExpireRun, ResolveUnknown, ReserveChildThread, OpenChildThread, RequestChildRun, FenceChildThread],
+  commands: [BeginCompaction, RecordCompaction, OpenThread, RequestRun, SelectRunModel, BeginStep, ConfirmDispatch, RecordStep, ApproveRun, CompleteRun, FailRun, CancelRun, MarkUnknown, ExpireRun, ResolveUnknown, ReserveChildThread, OpenChildThread, RequestChildRun, FenceChildThread],
   decide: {
     OpenThread: Effect.fn("Thread.OpenThread")(function* (state, command) {
       const caller = yield* CurrentCaller
@@ -74,6 +79,19 @@ export class Thread extends Domain.Aggregate("Thread", {
         return []
       }
       return [ThreadOpened.make({ actor: command.actor, instance: command.instance, name: command.name, limits: command.limits, owner: caller.subject })]
+    }),
+    SelectRunModel: Effect.fn("Thread.SelectRunModel")(function* (state, command) {
+      yield* owned(state)
+      if (state._tag !== "Open" || state.active === null || state.active.runId !== command.runId) return yield* RunRejected.make({ reason: "UnknownRun" })
+      if (state.active.model !== undefined) {
+        if (Schema.toEquivalence(ModelGrant)(state.active.model, command.model)) return []
+        return yield* RunRejected.make({ reason: "ModelSelectionConflict" })
+      }
+      const current = working(state, command.runId)
+      if ("_tag" in current) return yield* current
+      if (current.run.turns !== 0 || current.run.step !== null) return yield* RunRejected.make({ reason: "ModelSelectionTooLate" })
+      if (current.run.requestedModel !== undefined && !Schema.toEquivalence(ModelChoice)(current.run.requestedModel, command.model)) return yield* RunRejected.make({ reason: "ModelSelectionConflict" })
+      return [RunModelSelected.make({ runId: command.runId, model: command.model })]
     }),
     RequestRun: Effect.fn("Thread.RequestRun")(function* (state, command, { now }) {
       const current = yield* owned(state)
@@ -118,7 +136,9 @@ export class Thread extends Domain.Aggregate("Thread", {
       if (!Schema.toEquivalence(ChildBinding)(admission.binding, command.binding)) return yield* RunRejected.make({ reason: "ChildBindingConflict" })
       if (admission.closed) return yield* RunRejected.make({ reason: "ChildAdmissionClosed" })
       if (current._tag !== "Open") return yield* RunRejected.make({ reason: "ChildNotOpen" })
-      return yield* admitRun(current, { ...command, runId: admission.binding.childRunId }, now)
+      const request = { runId: admission.binding.childRunId, digest: command.digest, prompt: command.prompt, ...Struct.pick(command, ["output"]) }
+      if (command.model === undefined) return yield* admitRun(current, request, now)
+      return yield* admitRun(current, { ...request, model: Struct.pick(command.model, ["provider", "model"]) }, now, command.model)
     }),
     FenceChildThread: Effect.fn("Thread.FenceChildThread")(function* (state, command, { id }) {
       const caller = yield* CurrentCaller
@@ -304,6 +324,10 @@ export class Thread extends Domain.Aggregate("Thread", {
     },
   },
   evolve: {
+    RunModelSelected: (state, event) => {
+      if (state._tag !== "Open" || state.active === null || state.active.runId !== event.runId) return state
+      return { ...state, active: { ...state.active, model: event.model } }
+    },
     ContextCompactionPlanned: state => state,
     ContextCompactionDiscarded: (state, event) => {
       if (state._tag !== "Open") return state

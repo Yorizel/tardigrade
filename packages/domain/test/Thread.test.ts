@@ -2,7 +2,7 @@ import * as Domain from "@alchemy.run/domain"
 import { Effect, Layer, Result } from "effect"
 import { expect, test } from "bun:test"
 import { Thread } from "../src/Thread/Thread.aggregate"
-import { OpenThread, RequestRun, BeginStep, ConfirmDispatch, ApproveRun, CompleteRun, CancelRun, RecordStep, FailRun, ResolveUnknown } from "../src/Thread/Thread.commands"
+import { OpenThread, RequestRun, SelectRunModel, BeginStep, ConfirmDispatch, ApproveRun, CompleteRun, CancelRun, RecordStep, FailRun, ResolveUnknown } from "../src/Thread/Thread.commands"
 import { CurrentCaller } from "../src/Actor.context"
 import { DEFAULT_RUN_LIMITS, Prompt, Response } from "../src/Thread/Thread.schemas"
 
@@ -111,4 +111,42 @@ test("oversized model output preserves bounded context and allows a fresh run", 
   expect(state.active?.prompt.content.length).toBeLessThanOrEqual(1)
   expect(state.history.content).toHaveLength(0)
   yield* threads.send("a", RequestRun.make({ runId: "next", digest: "next", prompt }))
+})))
+
+
+test("model selection is immutable and admission retries preserve the requested choice", () => run(Effect.gen(function* () {
+  const threads = yield* Thread
+  const model = { provider: "fixture", model: "small" }
+  const grant = { ...model, maxOutputTokens: 50 }
+  yield* threads.send("models", OpenThread.make({ actor: "agent", instance: "i", name: "models", limits: DEFAULT_RUN_LIMITS }))
+  const request = RequestRun.make({ runId: "r", digest: "d", prompt, model })
+  yield* threads.send("models", request)
+  const foreign = yield* threads.send("models", SelectRunModel.make({ runId: "r", model: grant })).pipe(Effect.provideService(CurrentCaller, { subject: "bob" }), Effect.result)
+  expect(Result.isFailure(foreign)).toBe(true)
+  yield* threads.send("models", SelectRunModel.make({ runId: "r", model: grant }))
+  yield* threads.send("models", SelectRunModel.make({ runId: "r", model: grant }))
+  const retry = yield* threads.send("models", request)
+  expect(retry.reply.receipt?.requestedModel).toEqual(model)
+  expect(retry.reply.receipt?.model).toEqual(grant)
+  const changedRequest = yield* threads.send("models", RequestRun.make({ runId: "r", digest: "d", prompt, model: { ...model, model: "large" } })).pipe(Effect.result)
+  expect(Result.isFailure(changedRequest)).toBe(true)
+  const changedGrant = yield* threads.send("models", SelectRunModel.make({ runId: "r", model: { ...grant, maxOutputTokens: 100 } })).pipe(Effect.result)
+  expect(Result.isFailure(changedGrant)).toBe(true)
+  if (Result.isFailure(changedGrant) && changedGrant.failure._tag === "RunRejected") expect(changedGrant.failure.reason).toBe("ModelSelectionConflict")
+  yield* threads.send("models", CompleteRun.make({ runId: "r", text: "done" }))
+  const terminalRetry = yield* threads.send("models", request)
+  expect(terminalRetry.reply.receipt?.model).toEqual(grant)
+})))
+
+test("model identity cannot be assigned after dispatch or contradict the request", () => run(Effect.gen(function* () {
+  const threads = yield* Thread
+  yield* threads.send("late", OpenThread.make({ actor: "agent", instance: "i", name: "late", limits: DEFAULT_RUN_LIMITS }))
+  const model = { provider: "fixture", model: "small" }
+  yield* threads.send("late", RequestRun.make({ runId: "r", digest: "d", prompt, model }))
+  const mismatch = yield* threads.send("late", SelectRunModel.make({ runId: "r", model: { ...model, model: "large" } })).pipe(Effect.result)
+  expect(Result.isFailure(mismatch)).toBe(true)
+  yield* threads.send("late", BeginStep.make({ runId: "r", stepId: "r:1", kind: "model", mutation: false, requiresApproval: false }))
+  const late = yield* threads.send("late", SelectRunModel.make({ runId: "r", model })).pipe(Effect.result)
+  expect(Result.isFailure(late)).toBe(true)
+  if (Result.isFailure(late) && late.failure._tag === "RunRejected") expect(late.failure.reason).toBe("ModelSelectionTooLate")
 })))

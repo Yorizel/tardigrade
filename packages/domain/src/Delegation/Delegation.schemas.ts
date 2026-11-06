@@ -1,3 +1,4 @@
+import { ModelGrant } from "../Execution/Model.schemas"
 import { OutputDeclaration } from "../Output/Output.schemas"
 import { Ownership } from "../Actor.context"
 import { Function, Schema } from "effect"
@@ -20,6 +21,7 @@ export const Reservation = Schema.Struct({
   limits: DelegationLimits,
   prompt: Prompt.Prompt,
   output: Schema.optionalKey(OutputDeclaration),
+  model: Schema.optionalKey(ModelGrant),
 })
 export const DelegationStatus = Schema.Literals(["reserved", "running", "cancel_requested", "completed", "failed", "cancelled", "unknown"])
 export const Outcome = Schema.Struct({

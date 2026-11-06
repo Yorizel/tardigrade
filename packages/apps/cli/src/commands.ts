@@ -1,3 +1,4 @@
+import { ModelChoice } from "@clavia/tardigrade-domain/Execution/Model.schemas"
 import * as Domain from "@alchemy.run/domain"
 import { toCli } from "@alchemy.run/domain/Cli"
 import { Envelope } from "@alchemy.run/domain/Aggregate"
@@ -58,6 +59,7 @@ export const cli = Command.make("tardie-chat", {
   instance: Flag.String("instance").pipe(Flag.withDefault("cli"), Flag.withDescription("Native actor instance for a new thread.")),
   name: Flag.String("name").pipe(Flag.optional, Flag.withDescription("Display name for a new thread.")),
   message: Flag.String("message").pipe(Flag.optional, Flag.withDescription("Send one literal message and exit after its durable result.")),
+  model: Flag.String("model").pipe(Flag.withSchema(Schema.fromJsonString(ModelChoice)), Flag.optional, Flag.withDescription("Request an allowed {provider,model} choice for each admitted message.")),
   output: Flag.String("output").pipe(Flag.withSchema(Schema.fromJsonString(OutputDeclaration)), Flag.optional, Flag.withDescription("Persist a declared {name,schema} JSON output contract for each admitted message.")),
   runId: Flag.String("run-id").pipe(Flag.optional, Flag.withDescription("Retry a message on --thread using the same durable run ID.")),
 }, options => Effect.scoped(Effect.gen(function* () {
@@ -88,9 +90,10 @@ export const cli = Command.make("tardie-chat", {
       digest: yield* digest.digestHex(Digest.sha256, new TextEncoder().encode(text)),
       prompt: AiPrompt.make(text),
     }
+    const selected = Option.match(options.model, { onNone: () => request, onSome: model => ({ ...request, model }) })
     const receipt = yield* Option.match(options.output, {
-      onNone: () => sendMessage(threadId, request, authorization),
-      onSome: output => sendMessage(threadId, { ...request, output }, authorization),
+      onNone: () => sendMessage(threadId, selected, authorization),
+      onSome: output => sendMessage(threadId, { ...selected, output }, authorization),
     })
     if (receipt.status !== "completed") return yield* ChatRejected.make({ reason: `${receipt.status}: ${receipt.reason}` })
     yield* Console.log(stripVTControlCharacters(receipt.text))

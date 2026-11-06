@@ -1,3 +1,4 @@
+import { ModelAccessFixture } from "../../../domain/test/ModelAccess.fixture"
 import { expect, test } from "bun:test"
 import * as Domain from "@alchemy.run/domain"
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient"
@@ -111,4 +112,4 @@ test("the actual Code registry exposes workspace readers and refuses an unconfig
   const denied = yield* methods.plan({ actor: "agent", scope, operationId: "no-sql", call: { ordinal: 0, package: "workspace", method: "sql", input: { query: "SELECT * FROM workflow_messages" } }, prompt: Prompt.empty }).pipe(Effect.result)
   expect(Result.isFailure(denied)).toBe(true)
   if (Result.isFailure(denied)) expect(denied.failure._tag).toBe("ExecutionRejected")
-})).pipe(Effect.provide(CodeMethodsLive), Effect.provide(world), Effect.provide(Digest.layerWebCrypto), Effect.provide(FetchHttpClient.layer), Effect.provide(Layer.succeed(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown({ TARDIGRADE_ACTOR: "agent" }))))))
+})).pipe(Effect.provide(CodeMethodsLive), Effect.provide(world), Effect.provide(Digest.layerWebCrypto), Effect.provide(FetchHttpClient.layer), Effect.provide(Layer.succeed(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown({ TARDIGRADE_ACTOR: "agent" })))).pipe(Effect.provide(ModelAccessFixture))))
