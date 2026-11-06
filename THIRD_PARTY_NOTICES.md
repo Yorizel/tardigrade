@@ -2,7 +2,7 @@
 
 ## JSON Schema format assertions
 
-The nine JSON Schema format assertions in `packages/domain/src/Output/Output.format.ts` derive from `@cfworker/json-schema` 4.1.1, `src/format.ts`, from [cfworker/cfworker](https://github.com/cfworker/cfworker). The selected date, time, date-time, duration, email, hostname, IPv4, IPv6 and UUID assertion routines retain their source semantics. Their integration uses Effect Schema filters; the JSON Schema evaluation engine is not included.
+The nine JSON Schema format assertions in `packages/domain/src/Output/Output.format.ts` derive from `@cfworker/json-schema` 4.1.1, `src/format.ts`, from [cfworker/cfworker](https://github.com/cfworker/cfworker). The selected date, duration, email, hostname, IPv4, IPv6 and UUID routines retain their source semantics. Time and date-time additionally require complete bounded RFC 3339 offsets and check leap-second placement against UTC. Their integration uses Effect Schema filters; the JSON Schema evaluation engine is not included.
 
 MIT License
 

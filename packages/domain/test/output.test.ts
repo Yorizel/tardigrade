@@ -1,5 +1,5 @@
 import * as Domain from "@alchemy.run/domain"
-import { Record, String as Str, Effect, Layer, Option, Result, Schema } from "effect"
+import { Record, String as Str, Effect, Layer, Match, Option, Result, Schema } from "effect"
 import { expect, test } from "bun:test"
 import { validateOutput } from "../src/Output/Output"
 import { OutputDeclaration } from "../src/Output/Output.schemas"
@@ -47,8 +47,6 @@ test("output validation uses the declared schema once and returns decoded JSON",
 
 test("output formats enforce the existing JSON Schema assertions", () => Effect.runPromise(Effect.gen(function* () {
   const fixtures = {
-    "date-time": ["2024-02-29T23:59:60+02:30", "2023-02-29T12:00:00Z", "2024-01-01T12:00:00"],
-    time: ["23:59:60-05:30", "24:00:00Z", "12:00:00+25:00"],
     date: ["2000-02-29", "1900-02-29", "2024-13-01"],
     duration: ["P1Y2M3DT4H5M6S", "P1,5W", "PT"],
     email: ["person+tag@example-domain.test", "a..b@example.test", "\"quoted\"@example.test"],
@@ -140,4 +138,23 @@ test("declared output identity is enforced for both active and archived run retr
   expect(replay.reply.receipt?.output).toEqual(declaration)
   const archivedConflict = yield* threads.send("a", changed).pipe(Effect.result)
   expect(Result.isFailure(archivedConflict)).toBe(true)
+})))
+
+
+test("time formats require complete bounded RFC3339 offsets", () => Effect.runPromise(Effect.gen(function* () {
+  const cases = [
+    ["12:00:00Z", true], ["12:00:00z", true], ["12:00:00+01:30", true], ["12:00:00-23:59", true],
+    ["12:00:00", false], ["12:00:00+99:99", false], ["12:00:00+01", false], ["12:00:00+0130", false],
+    ["12:00:00+24:00", false], ["12:00:00+00:60", false], ["24:00:00Z", false],
+    ["23:59:60Z", true], ["02:29:60+02:30", true], ["23:59:60+02:30", false], ["12:00:60Z", false],
+    ["12:00:00.123-00:00", true],
+  ] as const
+  for (const format of ["time", "date-time"] as const) {
+    const formatted = OutputDeclaration.make({ name: "answer", schema: { type: "object", properties: { value: { type: "string", format } }, required: ["value"], additionalProperties: false } })
+    for (const [clock, accepted] of cases) {
+      const value = Match.value(format).pipe(Match.when("time", () => clock), Match.orElse(() => `2025-01-01T${clock}`))
+      const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Struct({ value: Schema.String })))({ value })
+      expect(Option.isSome(validateOutput(formatted, encoded))).toBe(accepted)
+    }
+  }
 })))

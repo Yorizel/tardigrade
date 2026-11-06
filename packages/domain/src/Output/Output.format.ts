@@ -3,7 +3,7 @@ import type { SchemaAST } from "effect"
 
 const DATE = /^(\d\d\d\d)-(\d\d)-(\d\d)$/
 const DAYS = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-const TIME = /^(\d\d):(\d\d):(\d\d)(\.\d+)?(z|[+-]\d\d(?::?\d\d)?)?$/i
+const TIME = /^(\d\d):(\d\d):(\d\d)(\.\d+)?(z|([+-])(\d\d):(\d\d))$/i
 const HOSTNAME = /^(?=.{1,253}\.?$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[-0-9a-z]{0,61}[0-9a-z])?)*\.?$/i
 const UUID = /^(?:urn:uuid:)?[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i
 const IPV4 = /^(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)$/
@@ -40,27 +40,32 @@ const date = (input: string) => {
   return maximumDay !== undefined && day <= maximumDay
 }
 
-const time = (input: string, full: boolean) => {
+const time = (input: string) => {
   const matched = Str.match(TIME)(input)
   if (Option.isNone(matched)) return false
   const matches = matched.value
   const hour = Number(matches[1])
   const minute = Number(matches[2])
   const second = Number(matches[3])
-  const timeZone = Boolean(matches[5])
-  return ((hour <= 23 && minute <= 59 && second <= 59) || (hour === 23 && minute === 59 && second === 60)) && (!full || timeZone)
+  const offsetHour = Number(matches[7] ?? 0)
+  const offsetMinute = Number(matches[8] ?? 0)
+  if (hour > 23 || minute > 59 || offsetHour > 23 || offsetMinute > 59) return false
+  if (second <= 59) return true
+  if (second !== 60) return false
+  if (matches[6] === "-") return (hour * 60 + minute + offsetHour * 60 + offsetMinute) % 1440 === 1439
+  return (hour * 60 + minute - offsetHour * 60 - offsetMinute + 1440) % 1440 === 1439
 }
 
 const dateTime = (input: string) => {
   const parts = Str.split(/t|\s/i)(input)
   if (parts.length !== 2) return false
   const [day, clock] = parts
-  return day !== undefined && clock !== undefined && date(day) && time(clock, true)
+  return day !== undefined && clock !== undefined && date(day) && time(clock)
 }
 
 export const OutputFormatChecks = Record.map({
   "date-time": dateTime,
-  time: (input: string) => time(input, false),
+  time,
   date,
   duration: DURATION,
   email: EMAIL,
