@@ -23,7 +23,7 @@ test("template staging excludes local state and secrets, including stale output"
     for (const template of ["quickstart", "agent", "rlm"]) {
       const source = join(root, "examples", template)
       await mkdir(join(source, ".tardigrade"), { recursive: true })
-      await writeFile(join(source, "actor.ts"), `export default "${template}"`)
+      await writeFile(join(source, template === "rlm" ? "preset.ts" : "actor.ts"), `export default "${template}"`)
       if (template !== "rlm") for (const file of [template === "quickstart" ? "SKILL.md.template" : "services.ts.template", "server.ts.template", "worker.ts.template"]) await writeFile(join(source, file), "export {}")
       if (template === "agent") await writeFile(join(source, "Dockerfile.template"), "FROM fixture")
       await writeFile(join(source, ".env"), "SECRET=fixture")
@@ -41,8 +41,8 @@ test("template staging excludes local state and secrets, including stale output"
     expect((await readdir(join(stage, "examples", "alchemy"))).sort()).toEqual([...ALCHEMY_TEMPLATE_FILES].sort())
     for (const template of ["quickstart", "agent", "rlm"]) {
       const target = join(stage, "examples", template)
-      expect((await readdir(target)).sort()).toEqual(template === "quickstart" ? ["SKILL.md.template", "actor.ts", "server.ts.template", "worker.ts.template"] : template === "agent" ? ["Dockerfile.template", "actor.ts", "server.ts.template", "services.ts.template", "worker.ts.template"] : ["actor.ts"])
-      expect(await readFile(join(target, "actor.ts"), "utf8")).toBe(`export default "${template}"`)
+      expect((await readdir(target)).sort()).toEqual(template === "quickstart" ? ["SKILL.md.template", "actor.ts", "server.ts.template", "worker.ts.template"] : template === "agent" ? ["Dockerfile.template", "actor.ts", "server.ts.template", "services.ts.template", "worker.ts.template"] : ["preset.ts"])
+      expect(await readFile(join(target, template === "rlm" ? "preset.ts" : "actor.ts"), "utf8")).toBe(`export default "${template}"`)
     }
   } finally {
     await rm(root, { recursive: true, force: true })

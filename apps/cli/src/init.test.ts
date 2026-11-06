@@ -3,7 +3,6 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { join } from "node:path"
 
 import { buildActor } from "./build"
-import { CLOUDFLARE_MODEL_CATALOG_MIGRATION } from "@clavia/tardigrade-cloudflare/catalog-migration"
 import { DEFAULT_ACTOR_ENTRY, DEFAULT_ALCHEMY_ENTRY, DEFAULT_INIT_ACTOR_NAME, DEFAULT_MODEL_LOCK, DEFAULT_PACKAGE_MANIFEST, DEFAULT_SERVER_ENTRY, DEFAULT_WORKER_ENTRY, defaultInitDirectory, initActor, initSummary, terminalColorsEnabled } from "./init"
 
 let root = ""
@@ -66,7 +65,6 @@ describe("initActor", () => {
     expect(initialized.alchemy).toBe(join(cwd, "reviewer", DEFAULT_ALCHEMY_ENTRY))
     expect(initialized.packageManifest).toBe(join(cwd, "reviewer", DEFAULT_PACKAGE_MANIFEST))
     expect(initialized.modelLock).toBe(join(cwd, "reviewer", DEFAULT_MODEL_LOCK))
-    expect(initialized.catalogMigration).toBeUndefined()
     expect(source).toContain('const actorName = "reviewer"')
     expect(source).toContain("defineActor(actorName, Effect.sync")
     expect(server).toContain('import definition, { notifyLayer } from "./actor"')
@@ -158,15 +156,26 @@ describe("initActor", () => {
     expect(initialized.entry).toBe(join(cwd, "actors", "custom", DEFAULT_ACTOR_ENTRY))
   })
 
-  test("writes the stated actor template", async () => {
+  test("creates RLM with the shared native runtime and research policy", async () => {
     const cwd = await temporaryRoot()
     const initialized = await initActor("reviewer", { cwd, template: "rlm" })
+    expect(initialized.template).toBe("rlm")
+    expect(initialized.entry).toBe(join(initialized.directory, "AgentExecution.ts"))
+    expect(initialized.modelLock).toBeUndefined()
+    expect(await readFile(initialized.manifest, "utf8")).toContain("TARDIGRADE_INSTRUCTIONS=You are a focused research agent.")
+    expect(await readFile(initialized.manifest, "utf8")).toContain("agents.run({text,budget})")
+    expect(await readFile(initialized.entry, "utf8")).toBe(await readFile(new URL("../../../examples/alchemy/AgentExecution.ts", import.meta.url), "utf8"))
+    expect(await readFile(initialized.worker, "utf8")).toContain("DomainCloudflare.layerDurableObjects()")
+    expect(await readFile(join(initialized.directory, "runner.ts"), "utf8")).toContain("LocalClusterWorkflowLive")
+    expect(initSummary(initialized, undefined, undefined)).toContain("Native Domain model")
+    await expect(readFile(join(initialized.directory, "actor.ts"), "utf8")).rejects.toThrow()
+    await expect(readFile(join(initialized.directory, "models.lock.json"), "utf8")).rejects.toThrow()
+  })
 
-    expect(await readFile(initialized.entry, "utf8")).toContain("codeMode([")
-    expect(await readFile(initialized.catalogMigration!, "utf8")).toBe(CLOUDFLARE_MODEL_CATALOG_MIGRATION)
-    const alchemy = await readFile(initialized.alchemy, "utf8")
-    expect(alchemy).toContain('Cloudflare.D1.Database("Catalog", { migrations: "./migrations" })')
-    expect(alchemy).toContain('Cloudflare.WorkerLoader("LOADER")')
+  test("rejects legacy provider settings for native RLM rather than ignoring them", async () => {
+    const cwd = await temporaryRoot()
+    await expect(initActor("reviewer", { cwd, template: "rlm", modelProvider: "openrouter" })).rejects.toThrow("native provider Layers")
+    await expect(readFile(join(cwd, "reviewer", "package.json"), "utf8")).rejects.toThrow()
   })
 
 })

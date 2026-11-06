@@ -34,17 +34,6 @@ describe("actorTemplate", () => {
     expect(source).toContain("Decremented")
   })
 
-  test("builds the RLM template", async () => {
-    const source = await actorTemplate({ name: "reviewer", template: "rlm" })
-    const built = await build(source)
-
-    expect(built.manifest.name).toBe("reviewer")
-    expect(source).toContain("You are ${actorName}, a focused research agent.")
-    expect(source).toContain("fetch()")
-    expect(source).toContain("agents()")
-    expect(source).toContain("workspace()")
-  })
-
   test("keeps custom instructions valid inside the editable template literal", async () => {
     const source = await actorTemplate({
       name: "reviewer",

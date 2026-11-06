@@ -113,7 +113,7 @@ export const SpillStorageLive = SpillStorage.toLayer(Effect.gen(function* () {
           const offset = value.indexOf(input.pattern, cursor.offset)
           if (offset === -1) return Option.none()
           const match = { ref: record.ref, offset, context: value.slice(Math.max(0, offset - catalog.policy.contextChars), offset + input.pattern.length + catalog.policy.contextChars) }
-          return Option.some([match, { offset: offset + input.pattern.length + catalog.policy.contextChars, count: cursor.count + 1 }] as const)
+          return Option.some([match, { offset: offset + 1, count: cursor.count + 1 }] as const)
         })
         return { matches: [...result.matches, ...found.slice(0, remaining)], truncated: found.length > remaining }
       }))

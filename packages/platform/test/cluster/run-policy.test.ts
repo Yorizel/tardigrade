@@ -51,6 +51,7 @@ test("Domain policies start, approve and cancel Cluster workflows through actual
   yield* Layer.build(HttpServer.serve()(domainEndpoint).pipe(Layer.provide(Layer.succeedContext(domainServerContext))))
   const calls = yield* Ref.make({ models: 0, tools: 0 })
   const adapter = AgentExecution.toLayer(Effect.succeed({
+    compact: () => Effect.die("Unexpected compaction"),
     infer: Effect.fn("PolicyFixture.infer")(function* (input) {
       yield* Ref.update(calls, value => ({ ...value, models: value.models + 1 }))
       if (input.prompt.content.some(message => message.role === "tool")) {

@@ -65,6 +65,7 @@ test.each(["code", "direct", "delegated-code"] as const)("a committed HTTP mutat
     const methods = yield* CodeMethods
     const catalog = yield* methods.catalog({ actor: "fixture" }).pipe(Effect.orDie)
     return {
+    compact: () => Effect.die("Unexpected compaction"),
       infer: Effect.fn("Uncertainty.infer")(function* (input) {
         yield* Ref.update(inferred, values => [...values, input.actor])
         if (input.actor === "delegator") {

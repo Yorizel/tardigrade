@@ -60,6 +60,7 @@ export class CodeExecution extends Domain.Aggregate("CodeExecution", {
       if (!current.request.catalog[command.package]?.includes(command.method)) return new CodeRejected({ reason: "MethodNotSelected" })
       if (command.ordinal !== current.calls.length) return new CodeRejected({ reason: "CallOrderConflict" })
       if (current.calls.length >= current.request.limits.maxCalls) return new CodeRejected({ reason: "CallBudgetExceeded" })
+      if (request.execution !== undefined && (!request.mutation || request.execution.toolCalls > request.execution.limits.maxToolCalls)) return new CodeRejected({ reason: "InvalidDelegationCapability" })
       return [CodeCallPrepared.make({ call: { callId: `${id.length}:${id}:${command.ordinal}`, request, status: "prepared", approved: !command.requiresApproval, outcome: null, settlementSequence: null, reason: null } })]
     },
     ApproveCodeCall: Effect.fn("Code.Approve")(function* (state, command) {

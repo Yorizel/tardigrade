@@ -1,14 +1,14 @@
+import { RLM_INSTRUCTIONS } from "../../../examples/rlm/preset"
 import { ACTOR_NAME_PATTERN } from "tardie/deprecated"
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { relative, resolve } from "node:path"
 import { DEFAULT_PROJECT_CONFIG_PATH } from "@clavia/tardigrade-server/config"
-import { CLOUDFLARE_MODEL_CATALOG_MIGRATION } from "@clavia/tardigrade-cloudflare/catalog-migration"
-import { modelProviderModuleOf, type ModelProtocol } from "@clavia/tardigrade-model/providers/directory"
+import type { ModelProtocol } from "@clavia/tardigrade-model/providers/directory"
 
 import { actorTemplate, ALCHEMY_TEMPLATE_FILES, DEFAULT_INIT_TEMPLATE, type InitTemplate } from "./template"
 import type { SetupAnswers, SetupFiles } from "./setup"
 import { dependencyVersionIn, versionIn } from "./version"
-import { callCommand, RLM_ONBOARDING_BRIEF, shellWord } from "./workflow"
+import { shellWord } from "./workflow"
 import { emptyModelLock, MODEL_LOCK_FILE, type ModelLock } from "./model-lock"
 import { PROVIDER_REGISTRY_FILE, providerRegistrySource } from "./provider-registry"
 
@@ -19,7 +19,6 @@ export const DEFAULT_WORKER_ENTRY = "worker.ts"
 export const DEFAULT_ALCHEMY_ENTRY = "alchemy.run.ts"
 export const DEFAULT_PACKAGE_MANIFEST = "package.json"
 export const DEFAULT_MODEL_LOCK = MODEL_LOCK_FILE
-export const DEFAULT_CATALOG_MIGRATION = "migrations/0001_catalog.sql"
 export const DISCORD_INVITE_URL = "https://discord.gg/Z74jwRxz4k"
 
 export interface InitActorOptions {
@@ -44,34 +43,22 @@ export interface InitializedActor {
   readonly alchemy: string
   readonly packageManifest: string
   readonly modelLock?: string
-  readonly catalogMigration?: string
 }
 
 export const defaultInitDirectory = (name: string): string => name
 
-const manifestTemplate = (template: Exclude<InitTemplate, "alchemy">): string => {
+const manifestTemplate = (template: Exclude<InitTemplate, "alchemy" | "rlm">): string => {
   const vars = {
     quickstart: { TARDIGRADE_CONFIG: {} },
     agent: { TARDIGRADE_CONFIG: {} },
-    rlm: {
-      TARDIGRADE_ALARM_DELAY_MILLIS: "120000",
-      TARDIGRADE_COMPACTION_FIRE_RATIO: "0.8",
-      TARDIGRADE_COMPACTION_KEEP_RATIO: "0.5",
-      TARDIGRADE_MAX_CONCURRENT_THREADS: "4",
-      TARDIGRADE_MODEL_CATALOG_URL: "https://models.dev/api.json",
-      TARDIGRADE_MODEL_CATALOG_LOAD_POLICY: "refresh",
-      TARDIGRADE_MODEL_CATALOG_TIMEOUT_MILLIS: "10000",
-      TARDIGRADE_CONFIG: {},
-    },
   }
   return `${JSON.stringify({ vars: vars[template] }, null, 2)}\n`
 }
 
-const alchemyTemplate = (name: string, template: Exclude<InitTemplate, "alchemy">, now: Date): string => {
+const alchemyTemplate = (name: string, template: Exclude<InitTemplate, "alchemy" | "rlm">, now: Date): string => {
   const imports = {
     quickstart: 'import type { ActorDO, ThreadDO } from "./worker"',
     agent: 'import type { ActorDO, ThreadDO, Sandbox } from "./worker"',
-    rlm: 'import type { ActorDO, ThreadDO } from "./worker"',
   }
   const resources = {
     quickstart: "",
@@ -80,12 +67,10 @@ const alchemyTemplate = (name: string, template: Exclude<InitTemplate, "alchemy"
       context: "./container",
       dockerfile: "Dockerfile",
     })\n`,
-    rlm: '    const catalog = yield* Cloudflare.D1.Database("Catalog", { migrations: "./migrations" })\n',
   }
   const bindings = {
     quickstart: "",
     agent: '        SANDBOX: Cloudflare.DurableObject<InstanceType<typeof Sandbox>>("SANDBOX", { className: "Sandbox", containers: [workspace] }),\n',
-    rlm: '        LOADER: Cloudflare.WorkerLoader("LOADER"),\n        CATALOG_DB: catalog,\n',
   }
   return `import * as Alchemy from "alchemy"
 import * as Cloudflare from "@alchemy.run/cloudflare"
@@ -120,58 +105,6 @@ ${bindings[template]}      },
 `
 }
 
-const workerTemplate = (provider: string): string => `import { providerLayer } from "tardie/model/providers/${provider}"
-import definition from "./actor"
-import { defineWorkerHost, workerHttp, workerModelServices, modelScopeFrom } from "tardie/deprecated/worker"
-import modelLock from "./models.lock.json"
-
-const services = workerModelServices({
-  model: { providerLayer },
-  scope: modelScopeFrom(modelLock)
-})
-
-const host = defineWorkerHost(definition, { services })
-const http = workerHttp(host)
-
-export const { ActorDO, ThreadDO } = host
-
-export default {
-  fetch: http.fetch
-}
-`
-
-const serverTemplate = (provider: string): string => `import { providerLayer } from "tardie/model/providers/${provider}"
-import { createBunHost, serve } from "tardie/deprecated/bun"
-import { bunModelServices } from "tardie/deprecated/server/model-services"
-import definition from "./actor"
-
-const { config, layers, api } = await bunModelServices({
-  model: { providerLayer },
-  env: process.env
-})
-const host = await createBunHost({
-  actor: definition,
-  storage: config.actorData,
-  driver: { maxConcurrentThreads: config.maxConcurrentThreads },
-  layersFor: () => layers
-})
-
-try {
-  const server = await serve(host, { port: config.port, token: config.token, api })
-  try {
-    await new Promise<void>((resolve) => {
-      const stop = () => { process.off("SIGINT", stop); process.off("SIGTERM", stop); resolve() }
-      process.once("SIGINT", stop)
-      process.once("SIGTERM", stop)
-    })
-  } finally {
-    await server.close()
-  }
-} finally {
-  await host.close()
-}
-`
-
 const packageTemplate = (
   version: string,
   effectVersion: string,
@@ -204,7 +137,7 @@ const packageTemplate = (
 
 const initAlchemyActor = async (name: string, options: InitActorOptions): Promise<InitializedActor> => {
   if (!ACTOR_NAME_PATTERN.test(name)) throw new Error("actor name is invalid")
-  if (options.modelProvider !== undefined || options.modelProtocol !== undefined || options.modelLock !== undefined) throw new Error("The Alchemy template configures native provider Layers in AgentExecution.ts and settings in .env")
+  if (options.modelProvider !== undefined || options.modelProtocol !== undefined || options.modelLock !== undefined) throw new Error("Native templates configure native provider Layers in AgentExecution.ts and settings in .env")
   const directory = resolve(options.cwd ?? process.cwd(), options.directory ?? name)
   const packageVersion = options.packageVersion ?? await versionIn(import.meta.url)
   const dependencies = Object.fromEntries(await Promise.all(["alchemy", "@alchemy.run/cloudflare", "@alchemy.run/domain", "@effect/platform-bun", "@effect/ai-openai", "@effect/sql-sqlite-bun", "effect"].map(async dependency => [dependency, await dependencyVersionIn(dependency, import.meta.url)] as const)))
@@ -215,7 +148,7 @@ const initAlchemyActor = async (name: string, options: InitActorOptions): Promis
     for (const file of ALCHEMY_TEMPLATE_FILES) {
       const content = await readFile(new URL(`../../examples/alchemy/${file}`, import.meta.url), "utf8").catch(() => readFile(new URL(`../../../examples/alchemy/${file}`, import.meta.url), "utf8"))
       if (file === ".env.example") {
-        await writeFile(resolve(directory, file), content.replace("TARDIGRADE_ACTOR=assistant", `TARDIGRADE_ACTOR=${name}`), "utf8")
+        await writeFile(resolve(directory, file), (options.template === "rlm" ? content.replace(/^TARDIGRADE_INSTRUCTIONS=.*$/mu, `TARDIGRADE_INSTRUCTIONS=${RLM_INSTRUCTIONS}`) : content).replace("TARDIGRADE_ACTOR=assistant", `TARDIGRADE_ACTOR=${name}`), "utf8")
       } else if (file === "worker.ts") {
         await writeFile(resolve(directory, file), content.replace('date: "2026-11-05"', `date: ${JSON.stringify((options.now ?? new Date()).toISOString().slice(0, 10))}`), "utf8")
       } else if (file === "alchemy.run.ts") {
@@ -226,7 +159,7 @@ const initAlchemyActor = async (name: string, options: InitActorOptions): Promis
     }
     await writeFile(resolve(directory, ".gitignore"), ".env\n.env.*\n!.env.example\n.alchemy/\nrunner.sqlite*\nartifacts.sqlite*\nnode_modules/\n", "utf8")
     await writeFile(resolve(directory, DEFAULT_PACKAGE_MANIFEST), `${JSON.stringify({ private: true, type: "module", scripts: { dev: "alchemy dev", "dev:cloudflare": "alchemy dev", "dev:memory": "bun --env-file=.env server.ts", "dev:runner": "bun --env-file=.env runner.ts", "plan:cloudflare": "alchemy plan", "deploy:cloudflare": "alchemy deploy", "destroy:cloudflare": "alchemy destroy", cli: "bun --env-file=.env client.ts" }, dependencies: { ...dependencies, tardie: packageVersion } }, null, 2)}\n`, "utf8")
-    return { name, directory, entry: resolve(directory, "AgentExecution.ts"), server: resolve(directory, "server.ts"), worker: resolve(directory, "worker.ts"), alchemy: resolve(directory, "alchemy.run.ts"), manifest: resolve(directory, ".env.example"), packageManifest: resolve(directory, DEFAULT_PACKAGE_MANIFEST), template: "alchemy" }
+    return { name, directory, entry: resolve(directory, "AgentExecution.ts"), server: resolve(directory, "server.ts"), worker: resolve(directory, "worker.ts"), alchemy: resolve(directory, "alchemy.run.ts"), manifest: resolve(directory, ".env.example"), packageManifest: resolve(directory, DEFAULT_PACKAGE_MANIFEST), template: options.template ?? "alchemy" }
   } catch (error) {
     await rm(directory, { recursive: true, force: true })
     throw error
@@ -235,7 +168,7 @@ const initAlchemyActor = async (name: string, options: InitActorOptions): Promis
 
 export const initActor = async (name: string, options: InitActorOptions): Promise<InitializedActor> => {
   const template = options.template ?? DEFAULT_INIT_TEMPLATE
-  if (template === "alchemy") return initAlchemyActor(name, options)
+  if (template === "alchemy" || template === "rlm") return initAlchemyActor(name, options)
   const cwd = options.cwd ?? process.cwd()
   const directory = resolve(cwd, options.directory ?? defaultInitDirectory(name))
   const entry = resolve(directory, DEFAULT_ACTOR_ENTRY)
@@ -245,12 +178,10 @@ export const initActor = async (name: string, options: InitActorOptions): Promis
   const alchemy = resolve(directory, DEFAULT_ALCHEMY_ENTRY)
   const packageManifest = resolve(directory, DEFAULT_PACKAGE_MANIFEST)
   const modelLock = resolve(directory, DEFAULT_MODEL_LOCK)
-  const catalogMigration = resolve(directory, DEFAULT_CATALOG_MIGRATION)
   const source = await actorTemplate({
     name,
     template,
   })
-  const modern = template !== "rlm"
   const manifestSource = manifestTemplate(template)
   const templateFile = (file: string) => readFile(new URL(`../../examples/${template}/${file}.template`, import.meta.url), "utf8").catch(() => readFile(new URL(`../../../examples/${template}/${file}.template`, import.meta.url), "utf8"))
   const packageVersion = options.packageVersion ?? await versionIn(import.meta.url)
@@ -272,8 +203,8 @@ export const initActor = async (name: string, options: InitActorOptions): Promis
 
   try {
     await writeFile(entry, source, "utf8")
-    await writeFile(server, modern ? await templateFile("server.ts") : serverTemplate(modelProviderModuleOf(options.modelProvider, options.modelProtocol ?? "openai-chat-completions")), "utf8")
-    await writeFile(worker, modern ? await templateFile("worker.ts") : workerTemplate(modelProviderModuleOf(options.modelProvider, options.modelProtocol ?? "openai-chat-completions")), "utf8")
+    await writeFile(server, await templateFile("server.ts"), "utf8")
+    await writeFile(worker, await templateFile("worker.ts"), "utf8")
     if (template === "quickstart") await writeFile(resolve(directory, "SKILL.md"), await templateFile("SKILL.md"), "utf8")
     if (template === "agent") {
       await writeFile(resolve(directory, "services.ts"), await templateFile("services.ts"), "utf8")
@@ -286,16 +217,13 @@ export const initActor = async (name: string, options: InitActorOptions): Promis
     await writeFile(alchemy, alchemyTemplate(name, template, options.now ?? new Date()), "utf8")
     await writeFile(packageManifest, packageTemplate(packageVersion, effectVersion, platformBunVersion, alchemyVersion, cloudflareVersion, template), "utf8")
     await writeFile(modelLock, `${JSON.stringify(options.modelLock ?? emptyModelLock(), null, 2)}\n`, "utf8")
-    if (!modern) {
-      await mkdir(resolve(directory, "migrations"))
-      await writeFile(catalogMigration, CLOUDFLARE_MODEL_CATALOG_MIGRATION, "utf8")
-    }
+
   } catch (error) {
     await rm(directory, { recursive: true, force: true })
     throw error
   }
 
-  return { name, directory, entry, server, worker, manifest, alchemy, packageManifest, modelLock, ...(!modern ? { catalogMigration } : {}), template: options.template ?? DEFAULT_INIT_TEMPLATE }
+  return { name, directory, entry, server, worker, manifest, alchemy, packageManifest, modelLock, template: options.template ?? DEFAULT_INIT_TEMPLATE }
 }
 
 const shownPath = (cwd: string, path: string): string => {
@@ -325,7 +253,7 @@ export const initSummary = (
   answers: SetupAnswers | undefined,
   options: InitSummaryOptions = {}
 ): string => {
-  if (actor.template === "alchemy") return `Created ${actor.name} in ${actor.directory}\nNative Domain model: Thread aggregate, RunExecution policy, ExecuteRun saga.\nCopy .env.example to .env and supply the required settings.\nRun bun run dev; use bun run cli --help for native commands.\n`
+  if (actor.template === "alchemy" || actor.template === "rlm") return `Created ${actor.name} in ${actor.directory}\nNative Domain model: Thread aggregate, RunExecution policy, ExecuteRun saga.\nCopy .env.example to .env and supply the required settings.\nRun bun run dev and bun run dev:runner; use bun run cli --help for native commands.\n`
   const colors = options.colors ?? false
   const cwd = options.cwd ?? process.cwd()
   const directory = shownPath(cwd, actor.directory)
@@ -344,7 +272,6 @@ export const initSummary = (
     summaryField("", shownPath(actor.directory, actor.alchemy), colors),
     summaryField("", shownPath(actor.directory, actor.packageManifest), colors),
     ...(actor.modelLock === undefined ? [] : [summaryField("", shownPath(actor.directory, actor.modelLock), colors)]),
-    ...(actor.catalogMigration ? [summaryField("", shownPath(actor.directory, actor.catalogMigration), colors)] : []),
     ...(actor.template === "quickstart" ? [summaryField("", "SKILL.md", colors)] : []),
     ...(credential === undefined ? [] : [summaryField("credential", credential, colors)]),
     ...(answers?.region === undefined ? [] : [summaryField("region", answers.region, colors)]),
@@ -355,7 +282,7 @@ export const initSummary = (
     "",
     styled("→ call from another terminal", "1;36", colors),
     "  tdg thread create --name main",
-    actor.template === "quickstart" ? "  tdg call increment null --thread main" : actor.template === "agent" ? '  tdg call message \'{"text":"List the files here and summarize the README."}\' --thread main' : `  ${callCommand(RLM_ONBOARDING_BRIEF)}`,
+    actor.template === "quickstart" ? "  tdg call increment null --thread main" : '  tdg call message \'{"text":"List the files here and summarize the README."}\' --thread main',
     "",
     styled("↗ deploy", "1;36", colors),
     summaryField("Cloudflare", "bun run deploy:cloudflare", colors),

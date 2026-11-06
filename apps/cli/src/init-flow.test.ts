@@ -7,10 +7,12 @@ import { BunServices } from "@effect/platform-bun"
 import { openCliClient } from "./client"
 import { tdg } from "./commands"
 import { Cli } from "./services"
+import { initActor } from "./init"
+import { DEFAULT_RUN_LIMITS } from "tardie/domain"
 
 const repository = new URL("../../../", import.meta.url).pathname
 // bundleEntry resolves the public package namespaces against their publish sources.
-const bundleEntry = async (directory: string, entry: "server.ts" | "worker.ts" = "server.ts") => {
+const bundleEntry = async (directory: string, entry: "server.ts" | "worker.ts" | "client.ts" = "server.ts") => {
   const packed = process.env.TARDIE_TEST_PACKAGE
   const exports = packed === undefined ? undefined : (await Bun.file(join(packed, "package.json")).json() as { exports: Record<string, string> }).exports
   const compiler = `
@@ -348,3 +350,37 @@ test("the generated server resolver supports the public model entry", async () =
     await rm(directory, { recursive: true, force: true })
   }
 })
+
+
+test("generated native RLM serves authenticated Domain admission and reads", async () => {
+  await mkdir(join(repository, ".cache/cli-tests"), { recursive: true })
+  const root = await mkdtemp(join(repository, ".cache/cli-tests/native-rlm-"))
+  const reservation = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response() })
+  const port = reservation.port!
+  reservation.stop(true)
+  const project = await initActor("researcher", { cwd: root, template: "rlm" })
+  try {
+    await bundleEntry(project.directory)
+    await bundleEntry(project.directory, "client.ts")
+    const env = { ...process.env, PORT: String(port), TARDIGRADE_TOKEN: "fixture-secret", TARDIGRADE_SUBJECT: "alice", WORKER_TO_RUNNER_TOKEN: "worker-secret", RUNNER_TO_DOMAIN_TOKEN: "domain-secret", TARDIGRADE_RUNNER_URL: "http://127.0.0.1:1", TARDIGRADE_URL: `http://127.0.0.1:${port}` }
+    const server = Bun.spawn([process.execPath, "build/server.js"], { cwd: project.directory, env, stdout: "ignore", stderr: "pipe" })
+    try {
+      await eventually(async () => fetch(env.TARDIGRADE_URL).then(() => true, () => false))
+      const cli = async (...args: ReadonlyArray<string>) => {
+        const child = Bun.spawn([process.execPath, "build/client.js", ...args], { cwd: project.directory, env, stdout: "pipe", stderr: "pipe" })
+        const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
+        expect({ code, stderr }).toEqual({ code: 0, stderr: "" })
+        return stdout
+      }
+      await cli("open-thread", "--target", "research", "--actor", "researcher", "--instance", "main", "--name", "Research", "--limits", JSON.stringify(DEFAULT_RUN_LIMITS))
+      const state = await cli("thread", "get", "--key", "research")
+      expect(state).toContain("Research")
+      expect(state).toContain("alice")
+    } finally {
+      server.kill("SIGTERM")
+      await server.exited
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}, 30_000)

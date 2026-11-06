@@ -1,3 +1,4 @@
+import { ContextPlan } from "../Execution/Context.schemas"
 import * as Domain from "@alchemy.run/domain"
 import { Schema } from "effect"
 import { ReceiptOwnerGuard, Session } from "../Actor.context"
@@ -20,7 +21,7 @@ export class RunBecameUnknown extends Domain.Event("RunBecameUnknown", { runId: 
 
 export class OpenThread extends Domain.Command("OpenThread", { target: ThreadId, middleware: [ReceiptOwnerGuard, Session], input: { actor: Schema.NonEmptyString, instance: Schema.NonEmptyString, name: Schema.NonEmptyString, limits: RunLimits }, events: [ThreadOpened], rejects: [NotOwner, RunRejected] }) {}
 export class RequestRun extends Domain.Command("RequestRun", { target: ThreadId, middleware: [ReceiptOwnerGuard, Session], input: RunRequest.fields, events: [RunRequested, RunAcknowledged], reply: { receipt: Schema.NullOr(Receipt) }, rejects: [NotOwner, RunRejected] }) {}
-export class BeginStep extends Domain.Command("BeginStep", { target: ThreadId, input: { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString, kind: Schema.Literals(["model", "tool"]), mutation: Schema.Boolean, requiresApproval: Schema.Boolean }, events: [StepPrepared], rejects: [RunRejected] }) {}
+export class BeginStep extends Domain.Command("BeginStep", { target: ThreadId, input: { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString, kind: Step.fields.kind, mutation: Schema.Boolean, requiresApproval: Schema.Boolean }, events: [StepPrepared], rejects: [RunRejected] }) {}
 export class ConfirmDispatch extends Domain.Command("ConfirmDispatch", { target: ThreadId, input: { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString }, events: [StepDispatched], rejects: [RunRejected] }) {}
 export class RecordStep extends Domain.Command("RecordStep", { target: ThreadId, input: { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString, prompt: Prompt.Prompt, usage: Response.Usage }, events: [StepRecorded, StepOutputRejected, RunFailed], rejects: [RunRejected] }) {}
 export class ApproveRun extends Domain.Command("ApproveRun", { target: ThreadId, middleware: [ReceiptOwnerGuard, Session], input: { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString }, events: [RunApproved], rejects: [NotOwner, RunRejected] }) {}
@@ -42,3 +43,9 @@ export class ReserveChildThread extends Domain.Command("ReserveChildThread", { t
 export class OpenChildThread extends Domain.Command("OpenChildThread", { target: ThreadId, middleware: [ReceiptOwnerGuard, Session], input: { binding: ChildBinding, name: Schema.NonEmptyString, limits: RunLimits }, events: [ChildThreadOpened], rejects: [NotOwner, RunRejected] }) {}
 export class RequestChildRun extends Domain.Command("RequestChildRun", { target: ThreadId, middleware: [ReceiptOwnerGuard, Session], input: { binding: ChildBinding, digest: Schema.NonEmptyString, prompt: Prompt.Prompt }, events: [RunRequested, RunAcknowledged], reply: { receipt: Schema.NullOr(Receipt) }, rejects: [NotOwner, RunRejected] }) {}
 export class FenceChildThread extends Domain.Command("FenceChildThread", { target: ThreadId, middleware: [ReceiptOwnerGuard, Session], input: { binding: ChildBinding, reason: Schema.NonEmptyString }, events: [ChildAdmissionClosed, RunCancelled, RunBecameUnknown], rejects: [NotOwner, RunRejected] }) {}
+
+export class ContextCompactionPlanned extends Domain.Event("ContextCompactionPlanned", { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString, plan: Schema.NullOr(ContextPlan) }) {}
+export class ContextCompacted extends Domain.Event("ContextCompacted", { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString, plan: ContextPlan, summary: Schema.String, usage: Response.Usage, prompt: Prompt.Prompt, tokensAfter: Schema.Int }) {}
+export class ContextCompactionDiscarded extends Domain.Event("ContextCompactionDiscarded", { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString, summary: Schema.String, usage: Response.Usage, tokensAfter: Schema.Int, reason: Schema.String }) {}
+export class BeginCompaction extends Domain.Command("BeginCompaction", { target: ThreadId, input: { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString }, events: [ContextCompactionPlanned, StepPrepared], reply: { plan: Schema.NullOr(ContextPlan) }, rejects: [RunRejected] }) {}
+export class RecordCompaction extends Domain.Command("RecordCompaction", { target: ThreadId, input: { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString, summary: Schema.String, usage: Response.Usage }, events: [ContextCompacted, ContextCompactionDiscarded, RunFailed], rejects: [RunRejected] }) {}

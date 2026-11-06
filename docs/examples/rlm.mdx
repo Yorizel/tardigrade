@@ -1,6 +1,6 @@
 ---
 title: Recursive Language Model
-description: A durable RLM built from Tardigrade components.
+description: Native durable research with Alchemy Domain and Effect workflows.
 route: /docs/examples/rlm
 section: Examples
 sectionOrder: 5
@@ -8,70 +8,34 @@ order: 1
 articleClass: example-article
 ---
 
-## What is an RLM?
+## Create a research agent
 
-An RLM puts long context inside a code environment. The model inspects and partitions that context, calls models over smaller pieces, and combines their work into one answer.
-
-<div className="rlm-reading">
-  <a href="https://alexzhang13.github.io/blog/2025/rlm/" rel="noreferrer" target="_blank">Original write-up</a>
-  <a href="https://arxiv.org/abs/2512.24601" rel="noreferrer" target="_blank">Read the paper</a>
-</div>
-
-<RlmDiagram />
-
-## Build it with Tardigrade
-
-Code mode provides the environment. Packages expose fetch, workspace storage, and child agents. Budgets and compaction keep the recursive work bounded.
-
-<div className="example-source-heading"><span>README.md / Compose an agent</span><a href="https://github.com/clavia-labs/tardigrade#compose-an-agent" rel="noreferrer" target="_blank">View on GitHub</a></div>
-
-```ts
-import { actor } from "tardie/deprecated/core"
-import { agentMethods, agents, budget, caller, escalate, codeMode, compact, messages, infer, outputValidateOnce, system } from "tardie/deprecated/agent"
-import { fetch, workspace } from "tardie/code"
-
-const instructions = system(
-  "Investigate with code and delegate independent work."
-)
-
-const rlm = actor({
-  name: "researcher",
-  methods: agentMethods,
-  components: [
-    infer([
-      instructions,
-      escalate(
-        budget(codeMode([
-          fetch(),
-          agents(),
-          workspace()
-        ]), {
-          limit: 40,
-          usage: ({ calls }) => calls.length,
-          onExhausted: (reason, settle) => settle({ error: reason })
-        }),
-        { authority: caller(), requests: { decide: request => request.grant() } }
-      ),
-      compact(messages()),
-      outputValidateOnce
-    ])
-  ]
-})
+```sh
+tdg init researcher --template rlm
+cd researcher
+cp .env.example .env
 ```
 
-The `budget` component records its starting allowance as `BudgetGranted` before inference. Set `{ limit: 20, authority: caller() }` to start with 20 tool calls; the default is `DEFAULT_BUDGET_POLICY.limit`, which is 40. Further grants add to that allowance. Each tool call uses only the grants recorded before it, so a later grant cannot admit an earlier refused call. Restarting with a different default leaves a recorded allowance unchanged.
+The RLM preset uses the same native hosting files as the Alchemy template. It specializes the model's research instructions while keeping one implementation of the provider, tool catalog, authentication and durable execution. Configure the required settings in `.env`, including the model, provider credential, authenticated subject and transport tokens. Start `bun run dev` for the Domain Worker and `bun run dev:runner` for the Effect Cluster and SQL workflow runner. `bun run dev:memory` starts an ephemeral local Domain server for development. Its state does not survive restart.
 
-## How it is assembled
+Use `bun run cli --help` for the generated native Domain command interface. `OpenThread` accepts explicit run limits; those accepted limits become persisted thread policy. `RequestRun` admits an identified run, and the native policy starts its workflow. Model and tool work executes through durable Activities. Approval, cancellation, uncertain external mutations and retries remain owned by the native Thread and execution aggregates.
 
-<div className="rlm-parts">
-  <div><code>codeMode</code><p>Lets the model act by writing JavaScript.</p></div>
-  <div><code>agentsPackage</code><p>Lets that code spawn durable child agents.</p></div>
-  <div><code>workspacePackage</code><p>Stores large values outside the model context.</p></div>
-  <div><code>budget + compaction</code><p>Bounds delegated work and the context sent to the model.</p></div>
-</div>
+## Research inside code
 
-## Start from the quickstart
+The model can call `execute` to inspect data in an isolated QuickJS guest. The trusted host publishes its actual tool catalog and validates each host call before dispatch. Large results become durable spill references. Inside code, `workspace.read` and `workspace.grep` retrieve bounded excerpts from those spills. Workspace text tools persist authored research notes separately. SQL is not advertised by the default research workspace.
 
-Initialize a project with the RLM template to get this assembly directly.
+```js
+const report = await agents.run({
+  text: "Find primary sources for the claim and return their URLs.",
+  budget: 8
+})
+return report.text
+```
 
-<Command value="tdg init researcher --template rlm" label="Initialize the RLM project" />
+`agents.run` waits for a real native child execution and returns its completed report. The trusted planner determines the target actor and delegation limits. Unsupported legacy options such as background execution, per-call model selection and child output contracts are rejected. Reports and fetched documents remain evidence; the research instructions explicitly forbid treating their contents as trusted instructions.
+
+## Context and declared output
+
+Native context compaction is enabled through the thread's accepted context policy. It summarizes a complete old prefix, preserves the original user task and tool exchange boundaries, and charges the summary call against the existing token and turn budgets. Stored events retain the source history. Configure the policy at thread admission rather than changing an environment setting after the thread has opened.
+
+Per-message declared JSON output schemas and `outputValidateOnce` are not yet supported by the native run request. This capability requires a persisted declared output contract and terminal validation. Research instructions alone do not validate structured output. Do not send legacy message output declarations to the native API or assume they are enforced.

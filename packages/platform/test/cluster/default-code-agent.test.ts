@@ -48,7 +48,7 @@ import { GrepSpills, ReadSpill } from "../../src/cluster/spill-tools"
 
 const ToolCodeResult = Schema.Struct({ outcome: CodeOutcome, logs: Schema.Array(Schema.String) })
 
-test.each(["code", "delegation", "fetch-direct", "fetch-code", "workspace-direct", "workspace-code", "spill", "spill-rejected"] as const)("default Alchemy agent executes %s through the real OpenAI HTTP provider and native policies", scenario => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+test.each(["code", "code-agents", "delegation", "fetch-direct", "fetch-code", "workspace-direct", "workspace-code", "spill", "spill-rejected"] as const)("default Alchemy agent executes %s through the real OpenAI HTTP provider and native policies", scenario => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
   const directory = yield* Effect.acquireRelease(Effect.promise(() => mkdtemp(join(tmpdir(), "tardigrade-default-code-agent-"))), path => Effect.promise(() => rm(path, { recursive: true, force: true })))
   const requests = yield* Ref.make<ReadonlyArray<typeof OpenAiSchema.CreateResponse.Type>>([])
   const observedResult = yield* Ref.make<string | null>(null)
@@ -68,6 +68,25 @@ test.each(["code", "delegation", "fetch-direct", "fetch-code", "workspace-direct
     const body = yield* Schema.decodeUnknownEffect(OpenAiSchema.CreateResponse)(yield* httpRequest.json).pipe(Effect.orDie)
     const previous = yield* Ref.getAndUpdate(requests, values => [...values, body])
     const usage = { input_tokens: 20, output_tokens: 10, total_tokens: 30 }
+    if (scenario === "code-agents") {
+      if (previous.length === 0) return yield* HttpServerResponse.schemaJson(OpenAiSchema.Response)({
+        id: "agents-code", object: "response", model: "gpt-4.1-mini", created_at: 1700000000, usage,
+        output: [{ type: "function_call", id: "agents-call", call_id: "agents-call", name: CodeTool.name, arguments: Schema.encodeSync(Schema.fromJsonString(CodeTool.parametersSchema))({ code: "const child = await agents.run({text: 'Find the primary source.', budget: 2}); return child.text;" }), status: "completed" }],
+      }).pipe(Effect.orDie)
+      if (previous.length === 1) {
+        expect(Schema.encodeSync(Schema.fromJsonString(OpenAiSchema.CreateResponse))(body)).toContain("Find the primary source.")
+        return yield* HttpServerResponse.schemaJson(OpenAiSchema.Response)({
+          id: "agents-child", object: "response", model: "gpt-4.1-mini", created_at: 1700000001, usage,
+          output: [{ type: "message", id: "agents-child", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Primary source located.", annotations: [] }] }],
+        }).pipe(Effect.orDie)
+      }
+      expect(previous.length).toBe(2)
+      expect(Schema.encodeSync(Schema.fromJsonString(OpenAiSchema.CreateResponse))(body)).toContain("Primary source located.")
+      return yield* HttpServerResponse.schemaJson(OpenAiSchema.Response)({
+        id: "agents-parent", object: "response", model: "gpt-4.1-mini", created_at: 1700000002, usage,
+        output: [{ type: "message", id: "agents-parent", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Recursive research completed.", annotations: [] }] }],
+      }).pipe(Effect.orDie)
+    }
     if (scenario === "spill-rejected") {
       if (previous.length === 0) return yield* HttpServerResponse.schemaJson(OpenAiSchema.Response)({
         id: "spill-budget-create", object: "response", model: "gpt-4.1-mini", created_at: 1700000000, usage,
@@ -310,7 +329,7 @@ test.each(["code", "delegation", "fetch-direct", "fetch-code", "workspace-direct
   const runnerEndpoint = yield* RpcServer.toHttpEffect(RunRpcs.merge(CodeRpcs).merge(DelegationRpcs)).pipe(Effect.provide(Layer.succeedContext(runnerContext)), Effect.provide(RpcSerialization.layerNdjson))
   yield* Layer.build(HttpServer.serve()(runnerEndpoint).pipe(Layer.provide(Layer.succeedContext(runnerServerContext))))
   yield* threads.send("default-code", OpenThread.make({ actor: "default", instance: "instance", name: "default", limits: DEFAULT_RUN_LIMITS })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
-  yield* threads.send("default-code", RequestRun.make({ runId: "run", digest: "default-code", prompt: Prompt.make({ code: "Read the current time using Code Mode.", delegation: "Delegate a child task and report its completed result.", "fetch-direct": "Read the granted URL with fetch_get.", "fetch-code": "Read the granted URL using Code Mode.", "workspace-direct": "Write text, read a bounded slice, and list the durable workspace.", "workspace-code": "Use Code Mode to write, read and list the durable workspace.", spill: "Return a large Code result then read and grep its complete persisted value.", "spill-rejected": "Report a known archive allowance refusal without retrying the completed Code." }[scenario]) })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
+  yield* threads.send("default-code", RequestRun.make({ runId: "run", digest: "default-code", prompt: Prompt.make({ "code-agents": "Use agents.run inside Code to research a primary source.", code: "Read the current time using Code Mode.", delegation: "Delegate a child task and report its completed result.", "fetch-direct": "Read the granted URL with fetch_get.", "fetch-code": "Read the granted URL using Code Mode.", "workspace-direct": "Write text, read a bounded slice, and list the durable workspace.", "workspace-code": "Use Code Mode to write, read and list the durable workspace.", spill: "Return a large Code result then read and grep its complete persisted value.", "spill-rejected": "Report a known archive allowance refusal without retrying the completed Code." }[scenario]) })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
   const completed = yield* Effect.repeat(threads.state("default-code"), { until: value => value._tag === "Open" && value.active !== null && ["completed", "failed", "cancelled", "unknown"].includes(value.active.status), schedule: Schedule.spaced("10 millis") }).pipe(Effect.timeout("10 seconds"), Effect.onError(() => Effect.gen(function* () {
     yield* Effect.logError("DefaultCodeAgent failure", yield* threads.state("default-code"), yield* Ref.get(requests))
     const id = yield* ExecuteRun.executionId({ threadId: "default-code", runId: "run", owner: "alice", key: executionKey({ threadId: "default-code", runId: "run", owner: "alice" }) })
@@ -344,6 +363,16 @@ test.each(["code", "delegation", "fetch-direct", "fetch-code", "workspace-direct
     const reused = yield* Effect.repeat(threads.state("default-code"), { until: value => value._tag === "Open" && value.active?.runId === "spill-reuse" && ["completed", "failed", "cancelled", "unknown"].includes(value.active.status), schedule: Schedule.spaced("10 millis") }).pipe(Effect.timeout("10 seconds"))
     expect(reused._tag === "Open" && reused.active?.status).toBe("completed")
     expect((yield* Ref.get(requests)).length).toBe(5)
+    return
+  }
+  if (scenario === "code-agents") {
+    expect(completed._tag === "Open" && completed.active?.text).toBe("Recursive research completed.")
+    const code = yield* codes.state(runKey("default-code", "run:2"))
+    if (code._tag !== "Open") return yield* Effect.die("Expected completed Code")
+    expect(code.status).toBe("completed")
+    expect(code.calls[0]?.request).toMatchObject({ package: "agents", method: "run", execution: { _tag: "Delegate", targetActor: "default", toolCalls: 2 } })
+    expect(code.outcome).toMatchObject({ _tag: "Returned", value: "Primary source located." })
+    expect((yield* Ref.get(requests)).length).toBe(3)
     return
   }
   if (scenario === "workspace-direct") {
@@ -393,7 +422,7 @@ test.each(["code", "delegation", "fetch-direct", "fetch-code", "workspace-direct
   expect(code._tag).toBe("Open")
   if (code._tag !== "Open") return yield* Effect.die("Expected durable Code execution")
   expect(code.status).toBe("completed")
-  expect(code.request.catalog).toEqual({ tools: ["current_time", "fetch_get", "fetch_request", "write_text", "read_text", "list_texts", "read_spill", "grep_spills"], workspace: ["read", "grep"] })
+  expect(code.request.catalog).toEqual({ tools: ["current_time", "fetch_get", "fetch_request", "write_text", "read_text", "list_texts", "read_spill", "grep_spills", "run_agent"], agents: ["run"], workspace: ["read", "grep"] })
   if (scenario === "workspace-code") {
     expect(code.calls.length).toBe(3)
     expect(code.calls.map(call => ({ method: call.request.method, mutation: call.request.mutation }))).toEqual([{ method: WriteText.name, mutation: true }, { method: ReadText.name, mutation: false }, { method: ListTexts.name, mutation: false }])

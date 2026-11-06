@@ -48,6 +48,7 @@ const planner = AgentExecution.toLayer(Effect.gen(function* () {
   const methods = yield* CodeMethods
   const catalog = yield* methods.catalog({ actor: "fixture" }).pipe(Effect.orDie)
   return {
+    compact: () => Effect.die("Unexpected compaction"),
     infer: Effect.fn("SpillPolicyFixture.infer")(function* (input) {
       const result = input.prompt.content.flatMap(message => {
         if (message.role !== "tool") return []

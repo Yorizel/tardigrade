@@ -1,9 +1,11 @@
+import { ContextPolicy, CompactionSettlement } from "../Execution/Context.schemas"
 import { Ownership } from "../Actor.context"
 import { Schema } from "effect"
 import { Prompt, Response } from "effect/ai"
 
 export const ThreadId = Schema.NonEmptyString
 export const RunLimits = Schema.Struct({
+  context: Schema.optionalKey(ContextPolicy),
   maxTurns: Schema.Int.check(Schema.isGreaterThan(0)),
   maxToolCalls: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   maxTokens: Schema.Int.check(Schema.isGreaterThan(0)),
@@ -15,7 +17,7 @@ export const DEFAULT_RUN_LIMITS = { maxTurns: 16, maxToolCalls: 64, maxTokens: 1
 export const RunStatus = Schema.Literals(["pending", "running", "awaiting_approval", "unknown", "completed", "failed", "cancelled"])
 export const Step = Schema.Struct({
   stepId: Schema.NonEmptyString,
-  kind: Schema.Literals(["model", "tool"]),
+  kind: Schema.Literals(["model", "tool", "compaction"]),
   mutation: Schema.Boolean,
   requiresApproval: Schema.Boolean,
   approved: Schema.Boolean,
@@ -35,6 +37,7 @@ export const Run = Schema.Struct({
   tokens: Schema.Int,
   stepSerial: Schema.Int,
   settlements: Schema.Array(StepSettlement),
+  compactions: Schema.Array(CompactionSettlement),
   step: Schema.NullOr(Step),
   text: Schema.String,
   reason: Schema.NullOr(Schema.String),

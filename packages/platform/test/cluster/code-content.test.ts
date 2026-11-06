@@ -147,6 +147,7 @@ test("the parent workflow receives native Code file bytes and logs through the o
   const inferred = yield* Ref.make(0)
   const usage = Response.Usage.make({ inputTokens: { total: 1 }, outputTokens: { total: 1 } })
   const agent = AgentExecution.toLayer(Effect.succeed({
+    compact: () => Effect.die("Unexpected compaction"),
     infer: Effect.fn("CodeContent.infer")(function* ({ prompt }) {
       yield* Ref.update(inferred, count => count + 1)
       const result = prompt.content.flatMap(message => {

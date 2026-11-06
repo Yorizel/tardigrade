@@ -20,7 +20,7 @@ export const stageInitTemplates = async (root: string, stage: string): Promise<v
       alchemy: ALCHEMY_TEMPLATE_FILES,
       quickstart: ["actor.ts", "SKILL.md.template", "server.ts.template", "worker.ts.template"],
       agent: ["actor.ts", "services.ts.template", "server.ts.template", "worker.ts.template", "Dockerfile.template"],
-      rlm: ["actor.ts"],
+      rlm: ["preset.ts"],
     }[template]
     for (const file of files) await cp(join(root, "examples", template, file), join(target, file))
   }))

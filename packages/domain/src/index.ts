@@ -31,3 +31,6 @@ export { WorkspacePolicy, DEFAULT_WORKSPACE_POLICY, WorkspaceScope, WorkspaceId,
 export { SpillCatalog } from "./Spill/Spill.aggregate"
 export { SpillStorage } from "./Spill/SpillStorage.external"
 export { SpillPolicy, DEFAULT_SPILL_POLICY, SpillPointer } from "./Spill/Spill.schemas"
+
+export { ContextPolicy, ContextSummary, DEFAULT_CONTEXT_POLICY } from "./Execution/Context.schemas"
+export { AgentsRun } from "./Delegation/AgentsRun"

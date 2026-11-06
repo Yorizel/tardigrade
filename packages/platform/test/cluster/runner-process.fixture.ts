@@ -22,6 +22,7 @@ const FixtureExecutionLive = AgentExecution.toLayer(Effect.gen(function* () {
   const mode = yield* Config.schema(Schema.Literals(["approval", "unknown"]), "FIXTURE_MODE")
   yield* sql`CREATE TABLE IF NOT EXISTS fixture_calls (kind TEXT NOT NULL, operation_id TEXT NOT NULL)`
   return {
+    compact: () => Effect.die("Unexpected compaction"),
     infer: Effect.fn("ProcessFixture.infer")(function* (input: Parameters<Context.Service.Shape<typeof AgentExecution>["infer"]>[0]) {
       yield* sql`INSERT INTO fixture_calls (kind, operation_id) VALUES ('infer', ${input.operationId})`.pipe(Effect.orDie)
       if (input.prompt.content.some(message => message.role === "tool")) return { prompt: Prompt.make([{ role: "assistant", content: "Stored 42 after restart." }]), usage, text: "Stored 42 after restart.", tools: [] }

@@ -1,4 +1,9 @@
 import { Cause, Effect, Exit, Layer, Queue, Ref, Schema, Semaphore, Scope, Stream } from "effect"
+import { Prompt } from "effect/ai"
+import { AgentsRun, AgentRunResult, codeAgentRequestId } from "../Delegation/AgentsRun"
+import { delegationLineage } from "../Delegation/Delegation.lineage"
+import { Reservation, delegationExecutionKey, delegationKey } from "../Delegation/Delegation.schemas"
+import { RunDelegation } from "../Delegation/RunDelegation.saga"
 import { Activity, DurableDeferred, Workflow } from "effect/workflow"
 import type { WorkflowEngine, WorkflowInstance } from "effect/workflow/WorkflowEngine"
 import { ActorInternalApi } from "../ActorInternal.api"
@@ -38,6 +43,42 @@ export const ExecuteCodeLive = Layer.unwrap(Effect.gen(function* () {
     const live = yield* Ref.make<ReadonlySet<number>>(new Set())
     const permits = yield* Semaphore.make(initial.code.request.limits.maxCalls)
     const settle = Effect.fn("ExecuteCode.hostCall")(function* (call: typeof CodeCall.Type) {
+      if (call.request.execution !== undefined) {
+        const capability = call.request.execution
+        const current = yield* authority()
+        const entry = current.code.calls.find(value => value.request.ordinal === call.request.ordinal)
+        if (entry === undefined) return yield* Effect.die("Code delegation call is unavailable")
+        if (entry.outcome !== null) return
+        if (current.code.status !== "running" || current.run === null || current.run.runId !== current.code.request.runId || ["completed", "failed", "cancelled", "unknown"].includes(current.run.status)) return yield* Effect.die("Code execution is terminal")
+        const reservation = yield* Activity.make({
+          name: `delegate-plan-${call.request.ordinal}`, success: Reservation,
+          execute: Effect.gen(function* () {
+            const params = yield* Schema.decodeUnknownEffect(AgentsRun.parametersSchema, { onExcessProperty: "error" })(entry.request.input).pipe(Effect.orDie)
+            const toolCalls = params.budget ?? capability.toolCalls
+            if (toolCalls > capability.toolCalls || toolCalls > current.parent.limits.maxToolCalls) return yield* Effect.die("Delegation tool-call budget exceeded")
+            const scope = { threadId: current.code.request.threadId, runId: current.code.request.runId, owner }
+            const lineage = yield* delegationLineage(scope, capability.limits).pipe(Effect.provideService(ActorInternalApi.Client, api))
+            return { requestId: codeAgentRequestId(executionId, entry.request.ordinal), parentThreadId: scope.threadId, parentRunId: scope.runId, targetActor: capability.targetActor, lineage, toolCalls, limits: capability.limits, prompt: Prompt.make(params.text) }
+          }),
+        })
+        const delegationId = delegationKey(reservation.parentThreadId, reservation.parentRunId, reservation.requestId)
+        const key = delegationExecutionKey(owner, delegationId)
+        if (entry.status === "prepared") yield* api.DispatchCodeCall(executionId, { ordinal: entry.request.ordinal }, { headers, commandId: commandId(`dispatch:${entry.request.ordinal}`) }).pipe(Effect.orDie)
+        else if (entry.status !== "dispatched") return yield* Effect.die("Code delegation cannot be dispatched")
+        const delegated = yield* RunDelegation.execute({ key, delegationId, owner, reservation }).pipe(Effect.onInterrupt(() => api.RequestDelegationCancellation(delegationId, { reason: "Code execution interrupted" }, { headers, commandId: commandId(`delegate-cancel:${entry.request.ordinal}`) }).pipe(Effect.catchTag("NotOwner", () => Effect.void), Effect.catchTag("DelegationRejected", () => Effect.void), Effect.orDie)))
+        if (delegated.status === "unknown") {
+          yield* api.MarkCodeCallUnknown(executionId, { ordinal: entry.request.ordinal, reason: "Delegated child outcome is unknown; reconciliation required" }, { headers, commandId: commandId(`unknown:${entry.request.ordinal}`) }).pipe(Effect.orDie)
+          return yield* Effect.die("Delegated child outcome is unknown")
+        }
+        const result = delegated.inbox.find(message => message.content._tag === "Result")
+        if (delegated.status === "completed" && result?.content._tag === "Result" && result.content.outcome.receipt?.status === "completed") {
+          const value = yield* Schema.encodeEffect(AgentRunResult)({ delegationId, childThreadId: delegated.childThreadId, childRunId: delegated.childRunId, targetActor: delegated.reservation.targetActor, status: "completed", text: result.content.outcome.receipt.text }).pipe(Effect.orDie)
+          yield* api.SettleCodeCall(executionId, { ordinal: entry.request.ordinal, outcome: { _tag: "Returned", value } }, { headers, commandId: commandId(`settle:${entry.request.ordinal}`) }).pipe(Effect.orDie)
+          return
+        }
+        yield* api.SettleCodeCall(executionId, { ordinal: entry.request.ordinal, outcome: { _tag: "Failed", reason: `Delegated child ${delegated.status}` } }, { headers, commandId: commandId(`settle:${entry.request.ordinal}`) }).pipe(Effect.orDie)
+        return
+      }
       const outcome = yield* Activity.make({
         name: `invoke-${call.request.ordinal}`, success: CodeOutcome,
         execute: Effect.gen(function* () {

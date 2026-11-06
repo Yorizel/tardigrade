@@ -1,3 +1,5 @@
+import { compactRun } from "./CompactRun"
+import { delegationLineage } from "../Delegation/Delegation.lineage"
 import { Cause, Clock, Effect, Layer, Result, Schema } from "effect"
 import { Digest } from "effect/crypto"
 import { CodeTool } from "../Code/CodeTool"
@@ -37,11 +39,12 @@ export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
       yield* commands.FailRun(threadId, { runId, reason }, { headers, commandId: runKey(threadId, `fail:${runId}`) }).pipe(Effect.catchTag("RunRejected", () => Effect.void), Effect.orDie, Effect.asVoid)
     })
     const loop = Effect.fn("ExecuteRun.turn")(function* (turn: number): Effect.fn.Return<void, typeof RunRejected.Type | typeof ExecutionRejected.Type, WorkflowEngine | WorkflowInstance> {
-      const snapshot = yield* Activity.make({ name: `snapshot-${turn}`, success: ThreadState, execute: commands.Thread.get(threadId, { headers }).pipe(Effect.orDie, Effect.flatMap(state => {
+      const initialSnapshot = yield* Activity.make({ name: `snapshot-${turn}`, success: ThreadState, execute: commands.Thread.get(threadId, { headers }).pipe(Effect.orDie, Effect.flatMap(state => {
         if (state === null) return Effect.die("Thread is unavailable")
         if (state._tag !== "Open" || state.owner !== owner) return Effect.die("Unauthorized workflow scope")
         return Effect.succeed(state)
       })) })
+      const snapshot = yield* compactRun(initialSnapshot, { threadId, runId, owner }).pipe(Effect.provideService(ActorInternalApi.Client, commands), Effect.provideService(AgentExecution, execution))
       if (snapshot._tag !== "Open" || snapshot.active === null || snapshot.active.runId !== runId || ["completed", "failed", "cancelled", "unknown"].includes(snapshot.active.status)) return
       const accepted = snapshot.active
       const modelStep = `${runId}:${accepted.stepSerial + 1}`
@@ -143,16 +146,7 @@ export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
               name: `delegation-input-${stepId}`, success: Reservation,
               execute: Effect.gen(function* () {
                 const params = yield* Schema.decodeUnknownEffect(DelegateTool.parametersSchema, { onExcessProperty: "error" })(tool.call.params).pipe(Effect.orDie)
-                const ancestry = Effect.fn("ExecuteRun.ancestry")(function* (id: string, depth: number): Effect.fn.Return<ReadonlyArray<string>> {
-                  if (depth >= capability.limits.maxDepth) return yield* Effect.die("Delegation depth budget exceeded")
-                  const ancestor = yield* commands.Thread.get(id, { headers }).pipe(Effect.orDie)
-                  if (ancestor._tag !== "Open" || ancestor.owner !== owner) return yield* Effect.die("Delegation ancestry is unavailable")
-                  if (ancestor.child === null) return [id]
-                  const parents = yield* ancestry(ancestor.child.binding.parentThreadId, depth + 1)
-                  if (parents.includes(id)) return yield* Effect.die("Delegation ancestry cycle")
-                  return [...parents, id]
-                })
-                const lineage = yield* ancestry(threadId, 0)
+                const lineage = yield* delegationLineage({ owner, threadId, runId }, capability.limits).pipe(Effect.provideService(ActorInternalApi.Client, commands))
                 return { requestId: stepId, parentThreadId: threadId, parentRunId: runId, targetActor: capability.targetActor, lineage, toolCalls: capability.toolCalls, limits: capability.limits, prompt: Prompt.make(params.task) }
               }),
             })

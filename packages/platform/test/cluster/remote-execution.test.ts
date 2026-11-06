@@ -55,6 +55,7 @@ test("Cluster executes against authenticated Domain HTTP with approval, cancella
   const remoteClient = ActorInternalApi.layerClientHttp(url).pipe(Layer.provide(http))
   const calls = yield* Ref.make({ models: 0, tools: 0 })
   const adapter = AgentExecution.toLayer(Effect.succeed({
+    compact: () => Effect.die("Unexpected compaction"),
     infer: Effect.fn("HttpFixture.infer")(function* (input) {
       yield* Ref.update(calls, value => ({ ...value, models: value.models + 1 }))
       if (input.prompt.content.some(message => message.role === "tool")) {

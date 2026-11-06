@@ -42,6 +42,7 @@ test.each([
 ])("native saga isolates external operations for $threadId / $runId", ({ threadId, runId, modelOperation, toolOperation }) => Effect.runPromise(Effect.gen(function* () {
   const calls = yield* Ref.make({ models: 0, tools: 0 })
   const adapter = AgentExecution.toLayer(Effect.succeed({
+    compact: () => Effect.die("Unexpected compaction"),
     infer: Effect.fn("Fixture.infer")(function* (input) {
       expect(input.remainingTokens).toBeGreaterThan(0)
       if (!input.prompt.content.some(message => message.role === "tool")) expect(input.operationId).toBe(modelOperation)
@@ -80,6 +81,7 @@ test("the native model definitions are valid", () => expect(Domain.verify(TestMo
 test("a mismatched workflow owner cannot dispatch or fail another owner's run", () => Effect.runPromise(Effect.gen(function* () {
   const calls = yield* Ref.make(0)
   const adapter = AgentExecution.toLayer(Effect.succeed({
+    compact: () => Effect.die("Unexpected compaction"),
     infer: () => Ref.update(calls, count => count + 1).pipe(Effect.andThen(Effect.die("Unauthorized dispatch"))),
     invoke: () => Ref.update(calls, count => count + 1).pipe(Effect.andThen(Effect.die("Unauthorized dispatch"))),
   }))

@@ -94,6 +94,7 @@ const fixture = Effect.fn("DelegationHttp.fixture")(function* (pauseReservation 
   yield* Layer.build(HttpServer.serve()(domainEndpoint).pipe(Layer.provide(Layer.succeedContext(domainServerContext))))
   const calls = yield* Ref.make({ parentModels: 0, childModels: 0, tools: 0 })
   const adapter = AgentExecution.toLayer(Effect.succeed({
+    compact: () => Effect.die("Unexpected compaction"),
     infer: Effect.fn("DelegationHttp.infer")(function* (input) {
       if (input.actor === "parent-agent") {
         yield* Ref.update(calls, value => ({ ...value, parentModels: value.parentModels + 1 }))

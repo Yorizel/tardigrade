@@ -2,6 +2,7 @@ import { Ownership } from "../Actor.context"
 import { Schema } from "effect"
 import { Prompt } from "effect/ai"
 import { SpillPolicy } from "../Spill/Spill.schemas"
+import { AgentRunCapability } from "../Delegation/AgentsRun"
 
 export const CodeLimits = Schema.Struct({
   maxCalls: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
@@ -35,6 +36,7 @@ export const HostCallInput = Schema.Struct({
   input: Schema.optionalKey(Schema.Json),
   mutation: Schema.Boolean,
   requiresApproval: Schema.Boolean,
+  execution: Schema.optionalKey(AgentRunCapability),
 })
 export const CodeOutcome = Schema.Union([
   Schema.TaggedStruct("Returned", { value: Schema.optionalKey(Schema.Json), modelOutput: Schema.optionalKey(Schema.Array(Prompt.ToolModelOutputPart)) }),

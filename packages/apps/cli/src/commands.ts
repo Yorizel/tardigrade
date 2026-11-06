@@ -5,7 +5,7 @@ import { ActorApi } from "@clavia/tardigrade-domain/Actor.api"
 import { Thread } from "@clavia/tardigrade-domain/Thread/Thread.aggregate"
 import { DEFAULT_RUN_LIMITS, RunLimits } from "@clavia/tardigrade-domain/Thread/Thread.schemas"
 import { stripVTControlCharacters } from "node:util"
-import { Config, Console, Effect, Layer, Option, Redacted, Schema, Stdio, Stream } from "effect"
+import { Config, Console, Effect, Layer, Option, Redacted, Schema, Stdio, Stream, String as Str } from "effect"
 import { Prompt as AiPrompt } from "effect/ai"
 import { Command, Flag, Prompt } from "effect/cli"
 import { Digest, SecureRandom } from "effect/crypto"
@@ -64,7 +64,7 @@ export const cli = Command.make("tardie-chat", {
   if (Option.isSome(options.runId) && Option.isNone(options.thread)) return yield* ChatRejected.make({ reason: "--run-id requires --thread so a retry cannot create another thread" })
   const stdio = yield* Stdio.Stdio
   if (Option.isNone(options.message) && !(yield* stdio.stdinIsTerminal)) return yield* ChatRejected.make({ reason: "Use --message without an interactive terminal" })
-  if (Option.isSome(options.message) && !options.message.value.trim()) return yield* ChatRejected.make({ reason: "--message must not be empty" })
+  if (Option.isSome(options.message) && Str.trim(options.message.value) === "") return yield* ChatRejected.make({ reason: "--message must not be empty" })
   const api = yield* ActorApi.Client
   const authorization = yield* headers
   const random = yield* SecureRandom.SecureRandom
@@ -93,8 +93,8 @@ export const cli = Command.make("tardie-chat", {
   yield* Console.error("/exit closes the client. The runner owns execution; use actor commands in another terminal for approval and cancellation.")
   yield* Effect.gen(function* () {
     const text = yield* Prompt.String({ message: "You" })
-    if (text.trim() === "/exit") return false
-    if (!text.trim()) return true
+    if (Str.trim(text) === "/exit") return false
+    if (Str.trim(text) === "") return true
     yield* submit(text)
     return true
   }).pipe(Effect.repeat({ while: value => value }))

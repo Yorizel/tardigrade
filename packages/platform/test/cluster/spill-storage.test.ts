@@ -109,6 +109,20 @@ test("grep searches full SQL values after reopening and reports only additional 
   }).pipe(Effect.provide(SpillStorageLive), Effect.provide(ArtifactKeyValueStoreLive), Effect.provideService(ConfigProvider.ConfigProvider, config))
 })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(world), Effect.provide(Digest.layerWebCrypto))))
 
+test("grep context never skips adjacent or overlapping occurrences and truncation counts actual matches", () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+  const config = yield* fixture
+  yield* Effect.gen(function* () {
+    const storage = yield* SpillStorage
+    const nearby = { ...policy, contextChars: 200 }
+    yield* storage.put({ scope, ref: "near", value: "x x", policy: nearby })
+    yield* storage.put({ scope, ref: "overlap", value: "aaa", policy: nearby })
+    yield* storage.put({ scope, ref: "clipped", value: "x x x", policy: nearby })
+    expect(yield* storage.grep({ scope, input: { pattern: "x", ref: "near" } })).toEqual({ matches: [{ ref: "near", offset: 0, context: "x x" }, { ref: "near", offset: 2, context: "x x" }], truncated: false })
+    expect(yield* storage.grep({ scope, input: { pattern: "aa", ref: "overlap" } })).toEqual({ matches: [{ ref: "overlap", offset: 0, context: "aaa" }, { ref: "overlap", offset: 1, context: "aaa" }], truncated: false })
+    expect(yield* storage.grep({ scope, input: { pattern: "x", ref: "clipped" } })).toEqual({ matches: [{ ref: "clipped", offset: 0, context: "x x x" }, { ref: "clipped", offset: 2, context: "x x x" }], truncated: true })
+  }).pipe(Effect.provide(SpillStorageLive), Effect.provide(ArtifactKeyValueStoreLive), Effect.provideService(ConfigProvider.ConfigProvider, config))
+})).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(world), Effect.provide(Digest.layerWebCrypto))))
+
 test("missing and corrupted committed SQL payloads preserve a concrete integrity defect", () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
   const config = yield* fixture
   yield* Effect.gen(function* () {
