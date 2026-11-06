@@ -58,6 +58,7 @@ export const DelegationLimits = Schema.Struct({
 export const DEFAULT_DELEGATION_LIMITS = { maxDepth: 4, maxToolCalls: 20, maxInboxMessages: 64 } as const
 export const Reservation = Schema.Struct({
   requestId: Schema.NonEmptyString,
+  executionMode: Schema.optionalKey(Schema.Literals(["foreground", "background"])),
   parentThreadId: Schema.NonEmptyString,
   parentRunId: Schema.NonEmptyString,
   targetActor: Schema.NonEmptyString,

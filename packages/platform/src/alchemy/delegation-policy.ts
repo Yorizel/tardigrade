@@ -16,6 +16,7 @@ export const DelegationExecutionPolicyLive = Layer.unwrap(Effect.gen(function* (
     return Effect.fn("DelegationExecutionPolicy")(function* ({ source, event }) {
       const state = yield* delegations.state(source)
       if (state._tag !== "Reserved" || state.delegationId !== source.id) return yield* Effect.die("Delegation execution is unavailable")
+      if (state.reservation.executionMode === "background") return
       if (["completed", "failed", "cancelled", "unknown"].includes(state.status)) return
       const options = { headers: { authorization: `Bearer ${Redacted.value(credential)}` } }
       const payload = { delegationId: source.id, owner: state.owner, key: delegationExecutionKey(state.owner, source.id) }
