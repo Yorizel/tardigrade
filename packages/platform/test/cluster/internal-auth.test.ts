@@ -1,3 +1,4 @@
+import { Workspace } from "@clavia/tardigrade-domain/Workspace/Workspace.aggregate"
 import { expect, test } from "bun:test"
 import * as Domain from "@alchemy.run/domain"
 import { BunHttpServer } from "@effect/platform-bun"
@@ -13,7 +14,7 @@ import { OpenThread, RequestRun } from "@clavia/tardigrade-domain/Thread/Thread.
 import { DEFAULT_RUN_LIMITS } from "@clavia/tardigrade-domain/Thread/Thread.schemas"
 import { internalApi } from "../../src/alchemy/internal"
 
-const StateModel = Domain.Model("InternalAuthenticationTest", { aggregates: [Thread, CodeExecution, Delegation] })
+const StateModel = Domain.Model("InternalAuthenticationTest", { aggregates: [Thread, CodeExecution, Delegation, Workspace] })
 const fixtureToken = "runner-authentication-fixture-token"
 const config = Layer.succeed(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown({ RUNNER_TO_DOMAIN_TOKEN: fixtureToken }))
 const state = StateModel.layer(Layer.empty).pipe(Layer.provide(Domain.InMemory))

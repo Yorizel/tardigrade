@@ -12,3 +12,4 @@ export { CodeRpcs, CodeRpcHandlers } from "./code-control"
 export { DelegationRpcs, DelegationRpcHandlers } from "./delegation-control"
 
 export { FetchGet, FetchRequest, FetchTools, FetchToolsLive, FetchPolicy, FetchResponse, FetchRejected, DEFAULT_FETCH_POLICY } from "./fetch-tool"
+export { WriteText, ReadText, ListTexts, WorkspaceTools, WorkspaceToolRejected, invokeWorkspaceTool } from "./workspace-tools"

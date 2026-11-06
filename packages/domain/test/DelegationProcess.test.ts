@@ -1,3 +1,4 @@
+import { Workspace } from "../src/Workspace/Workspace.aggregate"
 import { expect, test } from "bun:test"
 import * as Domain from "@alchemy.run/domain"
 import { Internals } from "@alchemy.run/domain/Model"
@@ -18,7 +19,7 @@ import { Thread } from "../src/Thread/Thread.aggregate"
 import { BeginStep, CompleteRun, ConfirmDispatch, FenceChildThread, OpenChildThread, OpenThread, RequestChildRun, RequestRun, ReserveChildThread } from "../src/Thread/Thread.commands"
 import { DEFAULT_RUN_LIMITS } from "../src/Thread/Thread.schemas"
 
-const StateModel = Domain.Model("DelegationProcessState", { aggregates: [Thread, CodeExecution, Delegation] })
+const StateModel = Domain.Model("DelegationProcessState", { aggregates: [Thread, CodeExecution, Delegation, Workspace] })
 const id = delegationKey("parent", "parent-run", "request")
 const reservation = {
   requestId: "request", parentThreadId: "parent", parentRunId: "parent-run", targetActor: "child-agent", lineage: ["parent"], toolCalls: 2,

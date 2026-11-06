@@ -1,7 +1,7 @@
 import { OpenAiLanguageModel } from "@effect/ai-openai"
-import { AgentExecution, CodeMethods, CodeTool, CodeLimits, DEFAULT_CODE_LIMITS, DelegateTool, DelegationLimits, DEFAULT_DELEGATION_LIMITS, ExecutionRejected } from "tardie/domain"
+import { AgentExecution, CodeMethods, CodeTool, CodeLimits, DEFAULT_CODE_LIMITS, DelegateTool, DelegationLimits, DEFAULT_DELEGATION_LIMITS, ExecutionRejected, RunScope } from "tardie/domain"
 import { Config, Context, DateTime, Effect, Layer, Result, Schema, Stream } from "effect"
-import { FetchGet, FetchRequest, FetchTools, FetchToolsLive } from "tardie/platform/cluster"
+import { FetchGet, FetchRequest, FetchTools, FetchToolsLive, WriteText, ReadText, ListTexts, WorkspaceTools, invokeWorkspaceTool } from "tardie/platform/cluster"
 import { LanguageModel, Prompt, Tool, Toolkit } from "effect/ai"
 
 const CurrentTime = Tool.make("current_time", {
@@ -11,7 +11,8 @@ const CurrentTime = Tool.make("current_time", {
 }).annotate(Tool.Readonly, true)
 const timeTools = Toolkit.make(CurrentTime)
 const tools = Toolkit.merge(timeTools, FetchTools)
-const modelTools = Toolkit.merge(tools, Toolkit.make(CodeTool, DelegateTool))
+const availableTools = Toolkit.merge(tools, WorkspaceTools)
+const modelTools = Toolkit.merge(availableTools, Toolkit.make(CodeTool, DelegateTool))
 const toolHandlers = Layer.merge(timeTools.toLayer({ current_time: () => DateTime.now.pipe(Effect.map(DateTime.formatIso)) }), FetchToolsLive)
 const decodeTime = Effect.fn("Tools.currentTime.params")(function* (input: unknown = {}) {
   return yield* Schema.decodeUnknownEffect(CurrentTime.parametersSchema, { onExcessProperty: "error" })(input).pipe(Effect.orDie)
@@ -40,10 +41,42 @@ const prepareTool = Effect.fn("Tools.prepare")(function* (name: string, input: u
     const params = yield* Schema.decodeUnknownEffect(FetchRequest.parametersSchema, { onExcessProperty: "error" })(input).pipe(Effect.orDie)
     return { name: FetchRequest.name, params, mutation: !Context.get(FetchRequest.annotations, Tool.Readonly), requiresApproval: false }
   }
+  if (name === WriteText.name) {
+    const params = yield* Schema.decodeUnknownEffect(WriteText.parametersSchema, { onExcessProperty: "error" })(input).pipe(Effect.orDie)
+    return { name: WriteText.name, params, mutation: !Context.get(WriteText.annotations, Tool.Readonly), requiresApproval: false }
+  }
+  if (name === ReadText.name) {
+    const params = yield* Schema.decodeUnknownEffect(ReadText.parametersSchema, { onExcessProperty: "error" })(input).pipe(Effect.orDie)
+    return { name: ReadText.name, params, mutation: !Context.get(ReadText.annotations, Tool.Readonly), requiresApproval: false }
+  }
+  if (name === ListTexts.name) {
+    const params = yield* Schema.decodeUnknownEffect(ListTexts.parametersSchema, { onExcessProperty: "error" })(input ?? {}).pipe(Effect.orDie)
+    return { name: ListTexts.name, params, mutation: !Context.get(ListTexts.annotations, Tool.Readonly), requiresApproval: false }
+  }
   return yield* new ExecutionRejected({ reason: "UnexposedTool" })
 })
-const invokeTool = Effect.fn("Tools.invoke")(function* (handlers: Toolkit.WithHandler<typeof tools.tools>, name: string, input: unknown, operationId: string) {
+const invokeTool = Effect.fn("Tools.invoke")(function* (
+  handlers: Toolkit.WithHandler<typeof tools.tools>,
+  workspace: Context.Context<Effect.Services<ReturnType<typeof invokeWorkspaceTool>>>,
+  scope: typeof RunScope.Type,
+  name: string,
+  input: unknown,
+  operationId: string,
+) {
   const prepared = yield* prepareTool(name, input, operationId, Prompt.empty)
+  if (prepared.name === WriteText.name || prepared.name === ReadText.name || prepared.name === ListTexts.name) {
+    const failure = Tool.failureResultSchema(WriteText)
+    return yield* invokeWorkspaceTool(scope, operationId, prepared.name, prepared.params).pipe(
+      Effect.provide(workspace),
+      Effect.map(result => ({ isFailure: false as const, result, reason: null })),
+      Effect.catchIf(Schema.is(failure), error => Effect.gen(function* () {
+        const result = yield* Schema.encodeEffect(failure)(error).pipe(Effect.orDie)
+        const reason = yield* Schema.encodeEffect(Schema.fromJsonString(failure))(error).pipe(Effect.orDie)
+        return { isFailure: true as const, result, reason }
+      })),
+      Effect.orDie,
+    )
+  }
   const completed = yield* Effect.gen(function* () {
     const stream = yield* handlers.handle(prepared.name, prepared.params, operationId)
     return yield* Stream.runLast(stream)
@@ -73,10 +106,11 @@ const invokeTool = Effect.fn("Tools.invoke")(function* (handlers: Toolkit.WithHa
 export const CodeMethodsLive = CodeMethods.toLayer(Effect.gen(function* () {
   const actor = yield* Config.NonEmptyString("TARDIGRADE_ACTOR")
   const handlers = yield* tools
+  const workspace = yield* Effect.context<Effect.Services<ReturnType<typeof invokeWorkspaceTool>>>()
   return {
     catalog: Effect.fn("CodeMethods.catalog")(function* (input) {
       if (input.actor !== actor) return yield* new ExecutionRejected({ reason: "UnknownActor" })
-      return { tools: Object.values(tools.tools).map(tool => tool.name) }
+      return { tools: Object.values(availableTools.tools).map(tool => tool.name) }
     }),
     plan: Effect.fn("CodeMethods.plan")(function* (input) {
       if (input.actor !== actor) return yield* new ExecutionRejected({ reason: "UnknownActor" })
@@ -87,7 +121,7 @@ export const CodeMethodsLive = CodeMethods.toLayer(Effect.gen(function* () {
     invoke: Effect.fn("CodeMethods.invoke")(function* (input) {
       if (input.actor !== actor) return yield* new ExecutionRejected({ reason: "UnknownActor" })
       if (input.call.package !== "tools") return yield* new ExecutionRejected({ reason: "UnexposedTool" })
-      const result = yield* invokeTool(handlers, input.call.method, input.call.input, input.operationId)
+      const result = yield* invokeTool(handlers, workspace, input.scope, input.call.method, input.call.input, input.operationId)
       if (result.isFailure) return { _tag: "Failed" as const, reason: result.reason }
       return { _tag: "Returned" as const, value: result.result }
     }),
@@ -103,6 +137,7 @@ export const AgentExecutionLive = AgentExecution.toLayer(Effect.gen(function* ()
   const methods = yield* CodeMethods
   const catalog = yield* methods.catalog({ actor }).pipe(Effect.orDie)
   const handlers = yield* tools
+  const workspace = yield* Effect.context<Effect.Services<ReturnType<typeof invokeWorkspaceTool>>>()
   const model = yield* OpenAiLanguageModel.make({ model: modelId })
   return {
     infer: Effect.fn("AgentExecution.infer")(function* (input) {
@@ -135,7 +170,7 @@ export const AgentExecutionLive = AgentExecution.toLayer(Effect.gen(function* ()
     invoke: Effect.fn("AgentExecution.invoke")(function* (input) {
       if (input.actor !== actor) return yield* new ExecutionRejected({ reason: "UnknownActor" })
       if (input.call.providerExecuted) return yield* new ExecutionRejected({ reason: "UnexposedTool" })
-      const result = yield* invokeTool(handlers, input.call.name, input.call.params, input.operationId)
+      const result = yield* invokeTool(handlers, workspace, input.scope, input.call.name, input.call.params, input.operationId)
       return Prompt.fromMessages([Prompt.toolMessage({ content: [Prompt.toolResultPart({
         id: input.call.id, name: input.call.name, result: result.result,
         isFailure: result.isFailure, providerExecuted: false,

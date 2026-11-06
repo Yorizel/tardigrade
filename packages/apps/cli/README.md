@@ -22,7 +22,7 @@ Without `--thread`, a launch opens a fresh thread and prints its immutable ID to
 
 `--message` sends literal text, including a leading slash, waits for a durable result and prints its answer to stdout. Failed, cancelled and unknown outcomes exit unsuccessfully. Without an interactive terminal, `--message` is required. In interactive mode, `/exit` closes the client. A message waits for its run before the next prompt.
 
-`--run-id` makes a noninteractive send retryable. Supply the same thread, run ID and message after a disconnected client or lost reply. The client hashes the literal message; Domain refuses a conflicting retry and returns the recorded result for a matching completed run. Use a new run ID for a new message.
+`--run-id` requires `--thread` and makes a noninteractive send retryable. Supply the same thread, run ID and message after a disconnected client or lost reply. A run ID without a thread is refused before any thread is created. The client hashes the literal message; Domain refuses a conflicting retry and returns the recorded result for a matching completed run. Use a new run ID for a new message.
 
 New threads use the exported `DEFAULT_RUN_LIMITS` from the domain package. Set `TARDIGRADE_RUN_LIMITS` to a complete JSON object matching `RunLimits` to override them. These limits are persisted with the thread, and cannot be replaced by resuming it.
 

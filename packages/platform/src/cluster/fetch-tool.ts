@@ -1,4 +1,4 @@
-import { Config, Effect, Schema, Stream } from "effect"
+import { Config, Context, Effect, Schema, Stream } from "effect"
 import { Tool, Toolkit } from "effect/ai"
 import { HttpClient, HttpClientError, HttpClientRequest } from "effect/http"
 
@@ -49,7 +49,8 @@ export const FetchTools = Toolkit.make(FetchGet, FetchRequest)
 export const FetchToolsLive = FetchTools.toLayer(Effect.gen(function* () {
   const client = yield* HttpClient.HttpClient
   const policy = yield* Config.schema(Schema.fromJsonString(FetchPolicy), "TARDIGRADE_FETCH_POLICY").pipe(Config.withDefault(DEFAULT_FETCH_POLICY))
-  const send = Effect.fn("FetchTools.send")(function* (input: typeof FetchRequestInput.Type) {
+  const send = Effect.fn("FetchTools.send")(function* (input: typeof FetchRequestInput.Type, tool: typeof FetchGet | typeof FetchRequest) {
+    const readOnly = Context.get(tool.annotations, Tool.Readonly)
     const url = yield* Schema.decodeUnknownEffect(Schema.URLFromString)(input.url).pipe(Effect.mapError(cause => FetchRejected.make({ reason: "InvalidUrl", policy, cause })))
     if (url.protocol !== "http:" && url.protocol !== "https:") return yield* FetchRejected.make({ reason: "UnsupportedProtocol", policy })
     if (input.body !== undefined && new TextEncoder().encode(input.body).byteLength > policy.maxRequestBodyBytes) return yield* FetchRejected.make({ reason: "RequestBodyTooLarge", policy })
@@ -86,12 +87,19 @@ export const FetchToolsLive = FetchTools.toLayer(Effect.gen(function* () {
         policy,
       }
     })).pipe(
-      Effect.mapError(HttpClientError.HttpClientErrorSchema.fromHttpClientError),
-      Effect.timeoutOrElse({ duration: policy.timeoutMs, orElse: () => Effect.fail(FetchRejected.make({ reason: "Timeout", policy })) }),
+      Effect.catch(error => {
+        if (readOnly || error.reason._tag === "InvalidUrlError" || error.reason._tag === "EncodeError") return Effect.fail(HttpClientError.HttpClientErrorSchema.fromHttpClientError(error))
+        return Effect.die(error)
+      }),
+      Effect.timeoutOrElse({ duration: policy.timeoutMs, orElse: () => {
+        const error = FetchRejected.make({ reason: "Timeout", policy })
+        if (readOnly) return Effect.fail(error)
+        return Effect.die(error)
+      } }),
     )
   })
   return {
-    fetch_get: Effect.fn("FetchTools.get")(function* (input) { return yield* send({ ...input, method: "GET" }) }),
-    fetch_request: send,
+    fetch_get: Effect.fn("FetchTools.get")(function* (input) { return yield* send({ ...input, method: "GET" }, FetchGet) }),
+    fetch_request: Effect.fn("FetchTools.request")((input) => send(input, FetchRequest)),
   }
 }))

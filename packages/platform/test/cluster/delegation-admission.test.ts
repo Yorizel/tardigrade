@@ -1,3 +1,4 @@
+import { Workspace } from "@clavia/tardigrade-domain/Workspace/Workspace.aggregate"
 import { expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -26,7 +27,7 @@ import { RunScope, executionKey } from "@clavia/tardigrade-domain/Execution/Run.
 import { internalApi } from "../../src/alchemy/internal"
 import { DomainClientLive } from "../../src/cluster/domain-client"
 
-const StateModel = Domain.Model("DelegationAdmissionStateTest", { aggregates: [Thread, CodeExecution, Delegation] })
+const StateModel = Domain.Model("DelegationAdmissionStateTest", { aggregates: [Thread, CodeExecution, Delegation, Workspace] })
 const Child = Workflow.make("Fixture/DelegationAdmissionChild", {
   payload: { key: RunDelegation.payloadSchema.fields.key, ...RunScope.fields },
   idempotencyKey: payload => payload.key,

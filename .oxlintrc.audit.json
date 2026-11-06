@@ -19,6 +19,8 @@
       {
         "allow": []
       }
-    ]
+    ],
+    "effecttsgo/unstable-api-usage": "error",
+    "effecttsgo/api-stability-leak": "error"
   }
 }

@@ -24,3 +24,6 @@ export { RunCode, RunCodeLive } from "./Code/RunCode.saga"
 export { DelegateTool } from "./Delegation/DelegateTool"
 export { RunDelegation, RunDelegationLive } from "./Delegation/RunDelegation.saga"
 export { ExecuteDelegation, ExecuteDelegationLive } from "./Delegation/ExecuteDelegation.saga"
+
+export { Workspace } from "./Workspace/Workspace.aggregate"
+export { WorkspacePolicy, DEFAULT_WORKSPACE_POLICY, WorkspaceScope, WorkspaceId, workspaceKey } from "./Workspace/Workspace.schemas"

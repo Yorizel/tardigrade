@@ -10,7 +10,7 @@ export const GuestCall = Schema.Struct({
 })
 export const CodeAttempt = Schema.Union([
   Schema.TaggedStruct("Suspended", { requested: Schema.Array(GuestCall), observedCalls: Schema.Int, logs: Schema.Array(Schema.String) }),
-  Schema.TaggedStruct("Completed", { outcome: CodeOutcome, observedCalls: Schema.Int, logs: Schema.Array(Schema.String) }),
+  Schema.TaggedStruct("Completed", { outcome: CodeOutcome, observedCalls: Schema.Int, logs: Schema.Array(Schema.String), returnedCallOrdinal: Schema.optionalKey(HostCallInput.fields.ordinal) }),
 ])
 export class CodeRuntimeRejected extends Domain.Rejection("CodeRuntimeRejected", { reason: Schema.NonEmptyString, cause: Schema.optionalKey(Schema.Defect()) }) {}
 export class CodeRuntime extends Domain.ExternalSystem("CodeRuntime", {

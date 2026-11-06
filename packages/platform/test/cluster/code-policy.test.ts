@@ -1,3 +1,4 @@
+import { Workspace } from "@clavia/tardigrade-domain/Workspace/Workspace.aggregate"
 import { expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -29,7 +30,7 @@ import { DomainClientLive } from "../../src/cluster/domain-client"
 import { CodeRuntimeLive } from "../../src/cluster/code-runtime"
 import { CodeRpcHandlers, CodeRpcs } from "../../src/cluster/code-control"
 
-const StateModel = Domain.Model("CodePolicyState", { aggregates: [Thread, CodeExecution, Delegation], policies: [CodeExecutionPolicy] })
+const StateModel = Domain.Model("CodePolicyState", { aggregates: [Thread, CodeExecution, Delegation, Workspace], policies: [CodeExecutionPolicy] })
 
 test("Code policies start, approve, cancel and expire real Cluster workflows over HTTP", () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
   const directory = yield* Effect.acquireRelease(

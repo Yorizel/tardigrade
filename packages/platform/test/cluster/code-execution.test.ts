@@ -1,3 +1,4 @@
+import { Workspace } from "@clavia/tardigrade-domain/Workspace/Workspace.aggregate"
 import { expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -26,7 +27,7 @@ import { internalApi } from "../../src/alchemy/internal"
 import { DomainClientLive } from "../../src/cluster/domain-client"
 import { CodeRuntimeLive } from "../../src/cluster/code-runtime"
 
-const StateModel = Domain.Model("QuickJSExecutionStateTest", { aggregates: [Thread, CodeExecution, Delegation] })
+const StateModel = Domain.Model("QuickJSExecutionStateTest", { aggregates: [Thread, CodeExecution, Delegation, Workspace] })
 const catalog = { tools: ["slow", "fast", "after", "write", "fail", "hold", "blocked"] }
 
 test("QuickJS uses the Domain journal for concurrent replay, approval and cancellation", () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {

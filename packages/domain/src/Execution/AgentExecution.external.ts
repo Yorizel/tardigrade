@@ -3,6 +3,7 @@ import { Schema } from "effect"
 import { Reservation } from "../Delegation/Delegation.schemas"
 import { CodeInput } from "../Code/Code.schemas"
 import { AiError, Prompt, Response } from "effect/ai"
+import { RunScope } from "./Run.workflow"
 
 export class ExecutionRejected extends Domain.Rejection("ExecutionRejected", { reason: Schema.String }) {}
 export const ToolExecution = Schema.Union([
@@ -19,7 +20,7 @@ export class AgentExecution extends Domain.ExternalSystem("AgentExecution", {
     error: [AiError.AiError, ExecutionRejected],
   },
   invoke: {
-    args: { actor: Schema.NonEmptyString, operationId: Schema.NonEmptyString, call: Prompt.ToolCallPart },
+    args: { actor: Schema.NonEmptyString, operationId: Schema.NonEmptyString, scope: RunScope, call: Prompt.ToolCallPart },
     success: Prompt.Prompt,
     error: [AiError.AiError, ExecutionRejected],
   },

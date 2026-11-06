@@ -1,3 +1,4 @@
+import { Workspace } from "@clavia/tardigrade-domain/Workspace/Workspace.aggregate"
 import { expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { join } from "node:path"
@@ -25,7 +26,7 @@ import { ExecuteRunLive } from "@clavia/tardigrade-domain/Execution/ExecuteRun.s
 import { ExecuteRun, approval, executionKey } from "@clavia/tardigrade-domain/Execution/Run.workflow"
 import { internalApi } from "../../src/alchemy/internal"
 
-const StateModel = Domain.Model("HttpExecutionStateTest", { aggregates: [Thread, CodeExecution, Delegation] })
+const StateModel = Domain.Model("HttpExecutionStateTest", { aggregates: [Thread, CodeExecution, Delegation, Workspace] })
 const fixtureToken = "remote-execution-fixture-token"
 const usage = Response.Usage.make({ inputTokens: { total: 2 }, outputTokens: { total: 3 } })
 

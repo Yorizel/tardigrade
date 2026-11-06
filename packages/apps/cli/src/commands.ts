@@ -57,10 +57,11 @@ export const cli = Command.make("tardie-chat", {
   instance: Flag.String("instance").pipe(Flag.withDefault("cli"), Flag.withDescription("Native actor instance for a new thread.")),
   name: Flag.String("name").pipe(Flag.optional, Flag.withDescription("Display name for a new thread.")),
   message: Flag.String("message").pipe(Flag.optional, Flag.withDescription("Send one literal message and exit after its durable result.")),
-  runId: Flag.String("run-id").pipe(Flag.optional, Flag.withDescription("Retry a noninteractive message using the same durable run ID.")),
+  runId: Flag.String("run-id").pipe(Flag.optional, Flag.withDescription("Retry a message on --thread using the same durable run ID.")),
 }, options => Effect.scoped(Effect.gen(function* () {
   if (Option.isSome(options.thread) && Option.isSome(options.name)) return yield* ChatRejected.make({ reason: "--name applies only to a new thread" })
   if (Option.isSome(options.runId) && Option.isNone(options.message)) return yield* ChatRejected.make({ reason: "--run-id requires --message" })
+  if (Option.isSome(options.runId) && Option.isNone(options.thread)) return yield* ChatRejected.make({ reason: "--run-id requires --thread so a retry cannot create another thread" })
   const stdio = yield* Stdio.Stdio
   if (Option.isNone(options.message) && !(yield* stdio.stdinIsTerminal)) return yield* ChatRejected.make({ reason: "Use --message without an interactive terminal" })
   if (Option.isSome(options.message) && !options.message.value.trim()) return yield* ChatRejected.make({ reason: "--message must not be empty" })

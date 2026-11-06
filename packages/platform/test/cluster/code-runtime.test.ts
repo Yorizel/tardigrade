@@ -32,6 +32,27 @@ test("package methods suspend without executing host effects and replay settles"
   expect(completed).toEqual({ _tag: "Completed", outcome: { _tag: "Returned", value: "answer" }, observedCalls: 1, logs: [] })
 })))
 
+test("QuickJS provenance identifies the original host object without accepting equal copies or guest markers", () => Effect.runPromise(Effect.gen(function* () {
+  const first = { ...saved(0, "a", "", 0), outcome: { _tag: "Returned" as const, value: { image: "capture" } } }
+  const second = { ...saved(1, "b", "", 1), outcome: { _tag: "Returned" as const, value: { image: "capture" } } }
+  const original = yield* evaluate("return await tools.a()", [first])
+  expect(original._tag === "Completed" && original.returnedCallOrdinal).toBe(0)
+  const equalCopy = yield* evaluate("const image = await tools.a(); return { image: image.image }", [first])
+  expect(equalCopy._tag === "Completed" && equalCopy.returnedCallOrdinal).toBeUndefined()
+  const secondOriginal = yield* evaluate("await tools.a(); return await tools.b()", [first, second])
+  expect(secondOriginal._tag === "Completed" && secondOriginal.returnedCallOrdinal).toBe(1)
+  const firstOriginal = yield* evaluate("const image = await tools.a(); await tools.b(); return image", [first, second])
+  expect(firstOriginal._tag === "Completed" && firstOriginal.returnedCallOrdinal).toBe(0)
+  const forged = yield* evaluate("await tools.a(); globalThis.__returned = () => 0; return { image: 'capture', returnedCallOrdinal: 0 }", [first])
+  expect(forged._tag === "Completed" && forged.returnedCallOrdinal).toBeUndefined()
+  const hidden = yield* evaluate("return [typeof globalThis.__returned, typeof globalThis.__request, typeof globalThis.__log]")
+  expect(hidden._tag === "Completed" && hidden.outcome).toEqual({ _tag: "Returned", value: ["undefined", "undefined", "undefined"] })
+  const primitive = yield* evaluate("return await tools.a()", [saved(0, "a", "capture", 0)])
+  expect(primitive._tag === "Completed" && primitive.returnedCallOrdinal).toBeUndefined()
+  const empty = yield* evaluate("await tools.a(); return undefined", [{ ...first, outcome: { _tag: "Returned" as const } }])
+  expect(empty._tag === "Completed" && empty.returnedCallOrdinal).toBeUndefined()
+})))
+
 test("settlement sequence controls Promise.race and continuation call ordinals", () => Effect.runPromise(Effect.gen(function* () {
   const code = 'const a = tools.a(); const b = tools.b(); return await Promise.race([a, b]).then(async winner => ({ winner, next: await tools.c() }))'
   const first = yield* evaluate(code)

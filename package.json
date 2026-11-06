@@ -34,7 +34,8 @@
     "postinstall": "bun run exports",
     "lint:tsgo": "effect-tsgo oxlint --type-aware --max-warnings=0",
     "typecheck:tsrs": "effect-tsgo tsrs@0.21.0-ts7.1.0-beta --noEmit",
-    "lint:audit": "effect-tsgo --tsrs-lint=0.21.0-ts7.1.0-beta oxlint --type-aware --max-warnings=0 --config .oxlintrc.audit.json"
+    "lint:audit": "effect-tsgo --tsrs-lint=0.21.0-ts7.1.0-beta oxlint --type-aware --max-warnings=0 --config .oxlintrc.audit.json",
+    "lint:effect:audit": "bun run tools/effect-lint-audit.ts"
   },
   "dependencies": {
     "@types/node": "^24",

@@ -13,9 +13,9 @@ const ExecutionLive = AgentExecutionLive.pipe(Layer.provide(
   OpenAiClient.layerConfig({ apiKey: Config.Redacted("OPENAI_API_KEY") }).pipe(Layer.provide(FetchHttpClient.layer)),
 ))
 const RunnerLive = Layer.mergeAll(ExecuteRunLive, RunCodeLive, ExecuteCodeLive, RunDelegationLive, ExecuteDelegationLive, RunRpcHandlers, CodeRpcHandlers, DelegationRpcHandlers).pipe(
-  Layer.provide(DomainClientLive),
   Layer.provide(ExecutionLive),
   Layer.provide(CodeMethodsLive),
+  Layer.provide(DomainClientLive),
   Layer.provide(CodeRuntimeLive),
   Layer.provide(LocalClusterWorkflowLive),
   Layer.provide(SqliteClient.layerConfig({ filename: Config.NonEmptyString("TARDIGRADE_RUNNER_DB") })),

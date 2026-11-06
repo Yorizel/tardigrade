@@ -1,3 +1,4 @@
+import { Workspace } from "@clavia/tardigrade-domain/Workspace/Workspace.aggregate"
 import { expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -37,7 +38,7 @@ import { RunRpcHandlers, RunRpcs } from "../../src/cluster/run-control"
 import { DelegationRpcHandlers, DelegationRpcs } from "../../src/cluster/delegation-control"
 
 class FailAfterStart extends Domain.Policy("DelegationHttpFailAfterStart", { from: Delegation, on: [DelegationStarted] }) {}
-const StateModel = Domain.Model("DelegationHttpState", { aggregates: [Thread, CodeExecution, Delegation], policies: [RunExecution, DelegationExecutionPolicy, FailAfterStart] })
+const StateModel = Domain.Model("DelegationHttpState", { aggregates: [Thread, CodeExecution, Delegation, Workspace], policies: [RunExecution, DelegationExecutionPolicy, FailAfterStart] })
 const RunnerRpcs = RunRpcs.merge(DelegationRpcs)
 const domainToken = "delegation-domain-fixture-token"
 const runnerToken = "delegation-runner-fixture-token"

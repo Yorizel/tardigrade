@@ -134,6 +134,22 @@ test("one-shot CLI sends literal input and retries the same native run without a
   if (Result.isFailure(changed)) expect(changed.failure._tag).toBe("RunRejected")
 })).pipe(Effect.provide(world), Effect.provide(BunServices.layer))))
 
+test("a retry identifier without an existing thread never creates another thread", () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+  const setup = yield* fixture
+  const run = Command.runWith(cli, { version: "test", renderErrors: false })
+  const rejected = run(["--run-id", "retry", "--message", "repeat"]).pipe(Effect.provide(setup.config), Effect.result)
+  const attempts = yield* Effect.all([rejected, rejected], { concurrency: 1 })
+  for (const result of attempts) {
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure._tag).toBe("ChatRejected")
+      if (result.failure._tag === "ChatRejected") expect(result.failure.reason).toContain("--thread")
+    }
+  }
+  const directory = yield* setup.api.ThreadDirectory.list("alice", { headers: authorization })
+  expect(directory.entries).toEqual([])
+})).pipe(Effect.provide(world), Effect.provide(BunServices.layer))))
+
 test("native CLI rejects obsolete local runtime flags before acquiring its remote client", () => Effect.runPromise(Effect.gen(function* () {
   const run = Command.runWith(cli, { version: "test", renderErrors: false })
   const help = yield* Effect.sync(() => new Array<string>())

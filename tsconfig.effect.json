@@ -9,7 +9,7 @@
           "acquireReleaseDisposable": "error",
           "allOfMapToForEach": "error",
           "anyUnknownInErrorContext": "error",
-          "apiStabilityLeak": "error",
+          "apiStabilityLeak": "off",
           "asyncFunction": "error",
           "catchAllTagDispatchToCatchTag": "error",
           "catchAllToMapError": "error",
@@ -149,7 +149,7 @@
           "unnecessaryPipeChain": "error",
           "unnecessaryTypeofType": "error",
           "unsafeEffectTypeAssertion": "error",
-          "unstableApiUsage": "error",
+          "unstableApiUsage": "off",
           "yieldInCallArgument": "error"
         }
       }

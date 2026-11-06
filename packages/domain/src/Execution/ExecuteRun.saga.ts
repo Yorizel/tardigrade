@@ -84,6 +84,10 @@ export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
             const result = yield* RunCode.execute({ key: codeExecutionKey(owner, executionId), executionId, owner, request })
             const stored = yield* commands.CodeExecution.get(executionId, { headers }).pipe(Effect.orDie)
             if (stored._tag !== "Open" || stored.owner !== owner) return yield* Effect.die("Code execution result is unavailable")
+            if (stored.status === "unknown") {
+              yield* commands.MarkUnknown(threadId, { runId, stepId, reason: stored.reason ?? "Code host mutation requires reconciliation" }, { headers, commandId: runKey(threadId, `code-unknown:${stepId}`) }).pipe(Effect.orDie)
+              return yield* Effect.die("Code execution outcome requires reconciliation")
+            }
             if (result.outcome._tag === "Returned" && result.outcome.modelOutput !== undefined) {
               const logParts = stored.logs.map(text => Prompt.textPart({ text }))
               return Prompt.fromMessages([Prompt.toolMessage({ content: [Prompt.toolResultPart({
@@ -122,6 +126,10 @@ export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
               }),
             })
             const delegated = yield* RunDelegation.execute({ key: delegationExecutionKey(owner, delegationId), delegationId, owner, reservation })
+            if (delegated.status === "unknown") {
+              yield* commands.MarkUnknown(threadId, { runId, stepId, reason: "Delegated child mutation requires reconciliation" }, { headers, commandId: runKey(threadId, `delegation-unknown:${stepId}`) }).pipe(Effect.orDie)
+              return yield* Effect.die("Delegation outcome requires reconciliation")
+            }
             const result = yield* Schema.encodeEffect(ReservedState)(delegated).pipe(Effect.orDie)
             return Prompt.fromMessages([Prompt.toolMessage({ content: [Prompt.toolResultPart({
               id: tool.call.id, name: tool.call.name, result, isFailure: delegated.status !== "completed", providerExecuted: false,
@@ -143,7 +151,7 @@ export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
               return yield* new ExecutionRejected({ reason: "ToolOutcomeUnknown" })
             }
             yield* commands.ConfirmDispatch(threadId, { runId, stepId }, { headers, commandId: runKey(threadId, `dispatch:${stepId}`) }).pipe(Effect.orDie)
-            return yield* execution.invoke({ actor: state.actor, operationId: runKey(threadId, stepId), call: tool.call }).pipe(Effect.orDie)
+            return yield* execution.invoke({ actor: state.actor, operationId: runKey(threadId, stepId), scope: { threadId, runId, owner }, call: tool.call }).pipe(Effect.orDie)
           }),
         })
         })

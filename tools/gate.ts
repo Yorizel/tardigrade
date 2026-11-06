@@ -22,8 +22,6 @@ const apps = ["cli", "server", "voyager"]
 const typecheckedApps = [...apps, "web"]
 const examplePkg = (name: string) => `${root}examples/react-rlm-chat/${name}`
 const examplePackages = ["server", "web"]
-// Apps that ship a bundle. A typecheck proves the sources agree; only a build proves the bundler
-// can resolve and emit them.
 const bundled = ["voyager", "web"]
 
 const tsconfigsIn = (directory: string): ReadonlyArray<string> =>
@@ -48,8 +46,6 @@ const effectTaskId = (project: string): string => {
     .replaceAll("/", ":")}`
 }
 
-// effectLint runs the Effect rules at the severities tsconfig.effect.json states. `--strict` makes
-// warnings fail, and one process per project lets the gate run the checks in parallel.
 const effectLint = (project: string): ReadonlyArray<string> => [
   "bun",
   "--bun",
@@ -71,11 +67,10 @@ const tasks: ReadonlyArray<Task> = [
   { id: "test:publish-paths", cmd: ["bun", "test", "tools/publish-paths.test.ts"] },
   { id: "test:code-graph", cmd: ["bun", "test", "tools/code-graph/analyze.test.ts"] },
   { id: "lint", cmd: ["bun", "run", "lint"] },
-  // Prose carries house rules the code linter does not know, so it has its own check.
   { id: "lint:docs", cmd: ["bun", "run", "tools/docs-lint.ts"] },
   { id: "lint:effect:policy", cmd: ["bun", "run", "tools/effect-lint-policy.ts"] },
+  { id: "test:effect-lint-policy", cmd: ["bun", "test", "tools/effect-lint-policy.test.ts"] },
   ...effectProjects.map((project) => ({ id: effectTaskId(project), cmd: effectLint(project) })),
-  // Root tsconfig covers tools/*.ts; each package typechecks itself against the shared base.
   { id: "typecheck:tools", cmd: ["bun", "--bun", "node_modules/.bin/tsc", "--noEmit"] },
   ...packages.map((name) => ({ id: `typecheck:${packageId(name)}`, cwd: pkg(name), cmd: ["bun", "run", "typecheck"] })),
   ...platforms.map((name) => ({ id: `typecheck:platform-${name}`, cwd: platformPkg(name), cmd: ["bun", "run", "typecheck"] })),
@@ -97,7 +92,6 @@ const tasks: ReadonlyArray<Task> = [
   { id: "bundle:model-providers", cmd: ["bun", "run", "tools/model-provider-bundles.ts"] },
   { id: "bundle:platform-cloudflare", cwd: platformPkg("cloudflare"), cmd: ["bun", "run", "bundle"] },
   ...bundled.map((name) => ({ id: `build:app-${name}`, cwd: appPkg(name), cmd: ["bun", "run", "build"] })),
-  // Knip checks the complete graph, the shipped graph, cycles, and tsconfig discovery as separate views.
   { id: "knip", cmd: ["bun", "run", "knip"] },
   { id: "knip:production", cmd: ["bun", "--bun", "node_modules/.bin/knip", "--production", "--no-progress", "--treat-config-hints-as-errors", "--treat-tag-hints-as-errors"] },
   { id: "knip:cycles", cmd: ["bun", "--bun", "node_modules/.bin/knip", "--cycles", "--no-progress"] },
@@ -123,7 +117,6 @@ if (args.includes("--list")) {
 
 const formatMs = (ms: number) => (ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`)
 
-// Interleaved output is unreadable without a tag, so every line carries its task id.
 const pipe = async (id: string, stream: ReadableStream<Uint8Array> | null) => {
   if (!stream) return
   const decoder = new TextDecoder()
@@ -154,7 +147,6 @@ console.log(`gate: ${selected.length} tasks, ${jobs} parallel jobs`)
 const startedAt = Date.now()
 const queue = [...selected]
 const results: Array<{ task: Task; code: number; ms: number }> = []
-// Every task runs even after a failure: one gate run should surface every problem at once.
 await Promise.all(
   Array.from({ length: Math.min(jobs, queue.length) }, async () => {
     for (let task = queue.shift(); task !== undefined; task = queue.shift()) results.push(await run(task))

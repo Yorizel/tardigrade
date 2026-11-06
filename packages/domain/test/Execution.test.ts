@@ -1,3 +1,4 @@
+import { Workspace } from "../src/Workspace/Workspace.aggregate"
 import { expect, test } from "bun:test"
 import * as Domain from "@alchemy.run/domain"
 import { Effect, Exit, Layer, Option, Ref, Schema } from "effect"
@@ -17,7 +18,7 @@ import { AgentExecution } from "../src/Execution/AgentExecution.external"
 import { ExecuteRun, executionKey } from "../src/Execution/Run.workflow"
 import { ExecuteRunLive } from "../src/Execution/ExecuteRun.saga"
 
-const TestModel = Domain.Model("RemoteExecutionTest", { aggregates: [Thread, CodeExecution, Delegation] })
+const TestModel = Domain.Model("RemoteExecutionTest", { aggregates: [Thread, CodeExecution, Delegation, Workspace] })
 const TestSession = Layer.succeed(Session, (effect, { headers }) => {
   const owner = Headers.get(headers, "x-tardigrade-owner")
   if (Option.isNone(owner)) return Effect.fail(Unauthorized.make())

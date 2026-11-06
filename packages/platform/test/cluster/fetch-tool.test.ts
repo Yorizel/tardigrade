@@ -1,9 +1,18 @@
 import { expect, test } from "bun:test"
-import { ConfigProvider, Context, Effect, Layer, Schema, Stream } from "effect"
+import * as Domain from "@alchemy.run/domain"
+import { ActorInternalApi } from "@clavia/tardigrade-domain/ActorInternal.api"
+import { CurrentCaller, Session, Unauthorized } from "@clavia/tardigrade-domain/Actor.context"
+import { ReceiptOwnerGuardLive } from "@clavia/tardigrade-domain/Actor.model"
+import { Thread } from "@clavia/tardigrade-domain/Thread/Thread.aggregate"
+import { CodeExecution } from "@clavia/tardigrade-domain/Code/Code.aggregate"
+import { Delegation } from "@clavia/tardigrade-domain/Delegation/Delegation.aggregate"
+import { Workspace } from "@clavia/tardigrade-domain/Workspace/Workspace.aggregate"
+import { Cause, ConfigProvider, Context, Effect, Exit, Layer, Option, Result, Schema, Stream } from "effect"
 import { Prompt, Tool } from "effect/ai"
 import { CodeMethods } from "@clavia/tardigrade-domain/Code/CodeMethods.external"
 import { CodeMethodsLive } from "../../../../examples/alchemy/AgentExecution"
-import { FetchHttpClient } from "effect/http"
+import { FetchHttpClient, Headers, HttpClientError } from "effect/http"
+import { Digest } from "effect/crypto"
 import { DEFAULT_FETCH_POLICY, FetchGet, FetchPolicy, FetchRequest, FetchResponse, FetchTools, FetchToolsLive } from "../../src/cluster/fetch-tool"
 
 const serve = Effect.fn("FetchToolsTest.serve")(function* (fetch: (request: Request) => Response | Promise<Response>) {
@@ -65,6 +74,12 @@ test("request budgets and URL validation reject before sending an HTTP request",
   const invalid = yield* invoke(FetchGet.name, { url: "invalid url" }).pipe(Effect.provide(FetchToolsLive), Effect.provide(configured()))
   expect(invalid[0]?.isFailure).toBe(true)
   expect(invalid[0]?.encodedResult).toMatchObject({ _tag: "FetchRejected", reason: "InvalidUrl" })
+  const invalidMutation = yield* invoke(FetchRequest.name, { method: "POST", url: "invalid url", body: "valid body" }).pipe(Effect.provide(FetchToolsLive), Effect.provide(configured()))
+  expect(invalidMutation[0]?.isFailure).toBe(true)
+  expect(invalidMutation[0]?.encodedResult).toMatchObject({ _tag: "FetchRejected", reason: "InvalidUrl" })
+  const protocolMutation = yield* invoke(FetchRequest.name, { method: "POST", url: "file:///tmp/private", body: "valid body" }).pipe(Effect.provide(FetchToolsLive), Effect.provide(configured()))
+  expect(protocolMutation[0]?.isFailure).toBe(true)
+  expect(protocolMutation[0]?.encodedResult).toMatchObject({ _tag: "FetchRejected", reason: "UnsupportedProtocol" })
   expect(calls).toEqual([])
 }))))
 
@@ -79,6 +94,36 @@ test("timeout covers a response that starts then never finishes and transport er
   const transport = yield* invoke(FetchGet.name, { url }).pipe(Effect.provide(FetchToolsLive), Effect.provide(configured()))
   expect(transport[0]?.isFailure).toBe(true)
   expect(transport[0]?.encodedResult).toMatchObject({ _tag: "HttpError", kind: "TransportError" })
+}))))
+
+test.each(["abort", "timeout"] as const)("a POST committed before a lost response remains uncertain: %s", scenario => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+  const committed: string[] = []
+  const server = yield* serve(async request => {
+    committed.push(`${request.method}:${await request.text()}`)
+    if (scenario === "timeout") return new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode("committed")) } }))
+    return new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new TextEncoder().encode("committed")) },
+      pull(controller) { controller.error(new Error("The committed response was lost")) },
+    }))
+  })
+  const policy = { ...DEFAULT_FETCH_POLICY, timeoutMs: 100 }
+  const result = yield* invoke(FetchRequest.name, { method: "POST", url: server.url.toString(), body: "mutation" }).pipe(Effect.exit, Effect.provide(FetchToolsLive), Effect.provide(configured(policy)))
+  expect(committed).toEqual(["POST:mutation"])
+  expect(Exit.isFailure(result)).toBe(true)
+  if (!Exit.isFailure(result)) return yield* Effect.die("An uncertain mutation cannot become a known tool result")
+  expect(Cause.hasDies(result.cause)).toBe(true)
+  expect(Cause.hasFails(result.cause)).toBe(false)
+  const defect = Cause.findDefect(result.cause)
+  if (Result.isFailure(defect)) return yield* Effect.die("Expected the original uncertain failure")
+  if (scenario === "timeout") {
+    expect(defect.success).toMatchObject({ _tag: "FetchRejected", reason: "Timeout", policy })
+  } else {
+    expect(HttpClientError.isHttpClientError(defect.success)).toBe(true)
+    if (!HttpClientError.isHttpClientError(defect.success)) return yield* Effect.die("Expected the native HTTP client failure")
+    expect(["TransportError", "DecodeError"]).toContain(defect.success.reason._tag)
+    expect(defect.success.request.method).toBe("POST")
+    expect(defect.success.cause).toBeDefined()
+  }
 }))))
 
 
@@ -110,4 +155,11 @@ test("actual CodeMethods preserves native fetch failures as readable failed outc
   if (outcome._tag !== "Failed") return yield* Effect.die("Expected failed fetch outcome")
   const failure = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.toEncoded(Tool.failureResultSchema(FetchRequest))))(outcome.reason)
   expect(failure).toMatchObject({ _tag: "FetchRejected", reason: "UnsupportedProtocol" })
-}).pipe(Effect.provide(CodeMethodsLive), Effect.provide(configured()))))
+}).pipe(Effect.provide(CodeMethodsLive), Effect.provide(ActorInternalApi.layerClientInProcess.pipe(
+  Layer.provide(Layer.succeed(Session, (effect, { headers }) => {
+    const owner = Headers.get(headers, "x-tardigrade-owner")
+    if (Option.isNone(owner)) return Effect.fail(Unauthorized.make())
+    return effect.pipe(Effect.provideService(CurrentCaller, { subject: owner.value }))
+  })),
+  Layer.provide(Layer.merge(Domain.Model("FetchCodeMethodsTest", { aggregates: [Thread, CodeExecution, Delegation, Workspace] }).layer(Layer.empty), ReceiptOwnerGuardLive).pipe(Layer.provide(Domain.InMemory))),
+)), Effect.provide(Digest.layerWebCrypto), Effect.provide(configured()))))

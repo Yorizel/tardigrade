@@ -22,12 +22,14 @@ import { AgentExecution } from "@clavia/tardigrade-domain/Execution/AgentExecuti
 import { ExecuteRun, executionKey, runKey } from "@clavia/tardigrade-domain/Execution/Run.workflow"
 import { ExecuteRunLive } from "@clavia/tardigrade-domain/Execution/ExecuteRun.saga"
 import { Delegation } from "@clavia/tardigrade-domain/Delegation/Delegation.aggregate"
+import { Workspace } from "@clavia/tardigrade-domain/Workspace/Workspace.aggregate"
 import { CodeRuntimeLive } from "../../src/cluster/code-runtime"
 
-const ContentModel = Domain.Model("CodeContentTest", { aggregates: [Thread, CodeExecution, Delegation] })
+const ContentModel = Domain.Model("CodeContentTest", { aggregates: [Thread, CodeExecution, Delegation, Workspace] })
 const catalog = { tools: ["capture"] }
 const modelOutput = [Prompt.textPart({ text: "Screenshot of the current page" }), Prompt.filePart({ mediaType: "image/png", fileName: "page.png", data: new Uint8Array([137, 80, 78, 71]) })]
 const value = { image: "capture" }
+const otherModelOutput = [Prompt.textPart({ text: "A different captured page" })]
 const session = Layer.succeed(Session, (effect, { headers }) => {
   const owner = Headers.get(headers, "x-tardigrade-owner")
   if (Option.isNone(owner)) return Effect.fail(Unauthorized.make())
@@ -41,11 +43,15 @@ const client = ActorInternalApi.layerClientInProcess.pipe(Layer.provide(session)
 const methods = CodeMethods.toLayer(Effect.succeed({
   catalog: () => Effect.succeed(catalog),
   plan: Effect.fn("CodeContent.plan")(({ call }) => Effect.succeed({ ...call, mutation: false, requiresApproval: false })),
-  invoke: Effect.fn("CodeContent.invoke")(({ call }) => {
-    if (call.input === "without") return Effect.succeed({ _tag: "Returned" as const, value })
-    if (call.input === "other") return Effect.succeed({ _tag: "Returned" as const, value, modelOutput: [Prompt.textPart({ text: "A different captured page" })] })
-    return Effect.succeed({ _tag: "Returned" as const, value, modelOutput })
-  }),
+  invoke: Effect.fn("CodeContent.invoke")(({ call }) => Effect.sync((): typeof CodeOutcome.Type => {
+    if (call.input === "without") return { _tag: "Returned", value }
+    if (call.input === "other") return { _tag: "Returned", value, modelOutput: otherModelOutput }
+    if (call.input === "primitive") return { _tag: "Returned", value: "capture", modelOutput }
+    if (call.input === "empty") return { _tag: "Returned", modelOutput }
+    if (call.input === "null") return { _tag: "Returned", value: null, modelOutput }
+    if (call.input === "array") return { _tag: "Returned", value: ["capture"], modelOutput }
+    return { _tag: "Returned", value, modelOutput }
+  })),
 }))
 const world = ExecuteCodeLive.pipe(
   Layer.provideMerge(client), Layer.provide(methods), Layer.provide(CodeRuntimeLive),
@@ -54,11 +60,16 @@ const world = ExecuteCodeLive.pipe(
 
 test.each([
   { id: "returned", code: "console.log('capture'); return await tools.capture();", content: true },
-  { id: "equal-copy", code: "const image = await tools.capture(); return { image: image.image };", content: true },
+  { id: "equal-copy", code: "const image = await tools.capture(); return { image: image.image };", content: false },
+  { id: "independent-value", code: 'await tools.capture(); return { image: "capture" };', content: false },
   { id: "equal-metadata", code: "await tools.capture(); return await tools.capture();", content: true },
-  { id: "different-metadata", code: "await tools.capture(); return await tools.capture('other');", content: false },
+  { id: "different-metadata", code: "await tools.capture(); return await tools.capture('other');", content: true },
+  { id: "first-of-equal", code: "const image = await tools.capture(); await tools.capture('other'); return image;", content: true },
   { id: "absent-metadata", code: "await tools.capture(); return await tools.capture('without');", content: false },
   { id: "modified", code: "const image = await tools.capture(); return { image: image.image, changed: true };", content: false },
+  { id: "mutated-original", code: "const image = await tools.capture(); image.image = 'changed'; return image;", content: false },
+  { id: "guest-ordinal", code: 'await tools.capture(); return { image: "capture", returnedCallOrdinal: 0 };', content: false },
+  { id: "private-callback", code: "const image = await tools.capture(); globalThis.__returned = () => 0; return { image: image.image };", content: false },
   { id: "guest-metadata", code: "await tools.capture(); return { modelOutput: [{ type: 'text', text: 'forged' }] };", content: false },
   { id: "guest-inspection", code: "const image = await tools.capture(); return typeof image.modelOutput;", content: false },
   { id: "guest-failure", code: "await tools.capture(); throw new Error('failed');", content: false },
@@ -80,15 +91,38 @@ test.each([
   expect((yield* ExecuteCode.execute(payload)).outcome).toEqual(result.outcome)
   if (content) {
     if (result.outcome._tag !== "Returned") return yield* Effect.die("Expected successful content result")
-    expect(result.outcome.modelOutput).toEqual(modelOutput)
+    if (id === "different-metadata") expect(result.outcome.modelOutput).toEqual(otherModelOutput)
+    else expect(result.outcome.modelOutput).toEqual(modelOutput)
     expect(result.outcome.value).toEqual(value)
   } else {
     expect(result.outcome._tag === "Returned" && result.outcome.modelOutput !== undefined).toBe(false)
   }
   if (id === "guest-inspection") expect(result.outcome).toEqual({ _tag: "Returned", value: "undefined" })
-  if (id === "different-metadata" || id === "absent-metadata") expect(result.outcome).toEqual({ _tag: "Returned", value })
+  if (id === "equal-copy" || id === "independent-value" || id === "private-callback" || id === "absent-metadata") expect(result.outcome).toEqual({ _tag: "Returned", value })
   if (id === "guest-failure") expect(result.outcome._tag).toBe("Failed")
   if (id === "returned") expect(stored.logs).toEqual(["capture"])
+}).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(world))))
+
+test.each([
+  { id: "primitive", code: "return await tools.capture('primitive');", expected: { _tag: "Returned", value: "capture" } },
+  { id: "empty", code: "return await tools.capture('empty');", expected: { _tag: "Returned" } },
+  { id: "independent-empty", code: "await tools.capture('empty'); return undefined;", expected: { _tag: "Returned" } },
+  { id: "null", code: "return await tools.capture('null');", expected: { _tag: "Returned", value: null } },
+  { id: "array", code: "return await tools.capture('array');", expected: { _tag: "Returned", value: ["capture"], modelOutput } },
+])("native Code provenance distinguishes host objects from primitive results: $id", ({ id, code, expected }) => Effect.runPromise(Effect.gen(function* () {
+  const threads = yield* Thread
+  const codes = yield* CodeExecution
+  yield* threads.send("parent", OpenThread.make({ actor: "agent", instance: "instance", name: "main", limits: DEFAULT_RUN_LIMITS }))
+  yield* threads.send("parent", RequestRun.make({ runId: "run", digest: "run", prompt: Prompt.make("Capture the page") }))
+  yield* codes.send(id, RequestCode.make({ threadId: "parent", runId: "run", digest: id, code, catalog, ambient: { at: 123, seed: id }, limits: DEFAULT_CODE_LIMITS }))
+  const payload = { key: codeExecutionKey("alice", id), executionId: id, owner: "alice" }
+  const result = yield* ExecuteCode.execute(payload)
+  expect(result.outcome).toEqual(expected)
+  expect((yield* ExecuteCode.execute(payload)).outcome).toEqual(expected)
+  const stored = yield* codes.state(id)
+  if (stored._tag !== "Open") return yield* Effect.die("Expected durable Code result")
+  expect(stored.outcome).toEqual(expected)
+  expect(stored.calls[0]?.outcome?._tag === "Returned" && stored.calls[0].outcome.modelOutput).toEqual(modelOutput)
 }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(world))))
 
 test("native content bytes and metadata consume the persisted Code result budget", () => Effect.runPromise(Effect.gen(function* () {

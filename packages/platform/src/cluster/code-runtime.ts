@@ -1,7 +1,7 @@
 import { CodeRuntime, CodeRuntimeRejected, GuestCall } from "@clavia/tardigrade-domain/Code/CodeRuntime.external"
 import { CodeOutcome, PackageCatalog } from "@clavia/tardigrade-domain/Code/Code.schemas"
 import { Clock, Effect, Result, Schema } from "effect"
-import { getQuickJS, type QuickJSDeferredPromise } from "quickjs-emscripten"
+import { getQuickJS, type QuickJSDeferredPromise, type QuickJSHandle } from "quickjs-emscripten"
 
 const GuestJson = Schema.fromJsonString(GuestCall)
 const OutcomeJson = Schema.fromJsonString(CodeOutcome)
@@ -26,6 +26,8 @@ export const CodeRuntimeLive = CodeRuntime.toLayer(Effect.succeed({
       })
       const vm = yield* Effect.acquireRelease(Effect.try({ try: () => runtime.newContext(), catch: cause => new CodeRuntimeRejected({ reason: "VMContextAllocationFailed", cause }) }), value => Effect.sync(() => value.dispose()))
       const promises = yield* Effect.acquireRelease(Effect.sync(() => new Map<number, QuickJSDeferredPromise>()), value => Effect.sync(() => value.forEach(promise => promise.dispose())))
+      const resolvedObjects = new Map<number, QuickJSHandle>()
+      const returnedOrdinals: number[] = []
       const observed: Array<typeof GuestCall.Type> = []
       const logs: string[] = []
       const failures: string[] = []
@@ -60,6 +62,14 @@ export const CodeRuntimeLive = CodeRuntime.toLayer(Effect.succeed({
       })
       vm.setProp(vm.global, "__log", log)
       log.dispose()
+      const returned = vm.newFunction("returned", handle => {
+        if (vm.typeof(handle) !== "object" || vm.eq(handle, vm.null)) return vm.undefined
+        const original = [...resolvedObjects].find(([, value]) => vm.eq(handle, value))
+        if (original !== undefined) returnedOrdinals.push(original[0])
+        return vm.undefined
+      })
+      vm.setProp(vm.global, "__returned", returned)
+      returned.dispose()
       const evaluate = Effect.fn("QuickJS.eval")(function* (code: string) {
         const result = vm.evalCode(code)
         if (result.error !== undefined) {
@@ -86,8 +96,10 @@ export const CodeRuntimeLive = CodeRuntime.toLayer(Effect.succeed({
       const program = `(() => {
         const request = globalThis.__request;
         const log = globalThis.__log;
+        const returned = globalThis.__returned;
         delete globalThis.__request;
         delete globalThis.__log;
+        delete globalThis.__returned;
         const stringify = JSON.stringify;
         const create = Object.create;
         const prototypeOf = Object.getPrototypeOf;
@@ -182,7 +194,10 @@ export const CodeRuntimeLive = CodeRuntime.toLayer(Effect.succeed({
           outcome._tag = 'Returned';
           if (value !== undefined) {
             const decoded = jsonInput(value, new NativeSet());
-            if (decoded.valid) outcome.value = decoded.value;
+            if (decoded.valid) {
+              outcome.value = decoded.value;
+              returned(value);
+            }
             else {
               outcome._tag = 'Failed';
               outcome.reason = 'InvalidGuestResult';
@@ -218,6 +233,7 @@ export const CodeRuntimeLive = CodeRuntime.toLayer(Effect.succeed({
             return yield* Effect.fail(new CodeRuntimeRejected({ reason: "ReplayValueDecodeFailed" }))
           }
           const value = yield* Effect.acquireRelease(Effect.succeed(parsed.value), handle => Effect.sync(() => handle.dispose()))
+          if (vm.typeof(value) === "object" && !vm.eq(value, vm.null)) resolvedObjects.set(recorded.request.ordinal, value)
           promise.resolve(value)
         }
         yield* drain()
@@ -240,6 +256,8 @@ export const CodeRuntimeLive = CodeRuntime.toLayer(Effect.succeed({
       const outcome = yield* Schema.decodeUnknownEffect(OutcomeJson)(text).pipe(Effect.mapError(() => new CodeRuntimeRejected({ reason: "InvalidGuestResult" })))
       if (text.length > request.limits.maxResultChars) return yield* Effect.fail(new CodeRuntimeRejected({ reason: "ResultBudgetExceeded" }))
       if (unfinished) return { _tag: "Suspended" as const, requested, observedCalls: observed.length, logs }
+      const returnedCallOrdinal = returnedOrdinals[0]
+      if (returnedCallOrdinal !== undefined) return { _tag: "Completed" as const, outcome, observedCalls: observed.length, logs, returnedCallOrdinal }
       return { _tag: "Completed" as const, outcome, observedCalls: observed.length, logs }
     }))
   }),
