@@ -1,18 +1,35 @@
 import { expect, test } from "bun:test"
 import * as Domain from "@alchemy.run/domain"
-import { Effect, Exit, Layer, Ref } from "effect"
+import { Effect, Exit, Layer, Option, Ref, Schema } from "effect"
 import { Prompt, Response } from "effect/ai"
-import { ActorModel } from "../src/Actor.model"
-import { ActorHandlers } from "../src/Actor.handlers"
+import { ReceiptOwnerGuardLive } from "../src/Actor.model"
+import { ActorInternalApi } from "../src/ActorInternal.api"
+import { Headers } from "effect/http"
+import { Digest } from "effect/crypto"
+import { WorkflowEngine } from "effect/workflow"
+import { CodeExecution } from "../src/Code/Code.aggregate"
+import { Delegation } from "../src/Delegation/Delegation.aggregate"
 import { Thread } from "../src/Thread/Thread.aggregate"
-import { CurrentCaller } from "../src/Actor.context"
+import { CurrentCaller, Session, Unauthorized } from "../src/Actor.context"
 import { OpenThread, RequestRun } from "../src/Thread/Thread.commands"
 import { DEFAULT_RUN_LIMITS } from "../src/Thread/Thread.schemas"
 import { AgentExecution } from "../src/Execution/AgentExecution.external"
-import { ExecuteRun, runKey } from "../src/Execution/Run.workflow"
+import { ExecuteRun, executionKey } from "../src/Execution/Run.workflow"
 import { ExecuteRunLive } from "../src/Execution/ExecuteRun.saga"
 
-const usage = new Response.Usage({ inputTokens: { total: 2 }, outputTokens: { total: 3 } })
+const TestModel = Domain.Model("RemoteExecutionTest", { aggregates: [Thread, CodeExecution, Delegation] })
+const TestSession = Layer.succeed(Session, (effect, { headers }) => {
+  const owner = Headers.get(headers, "x-tardigrade-owner")
+  if (Option.isNone(owner)) return Effect.fail(Unauthorized.make())
+  return Schema.decodeUnknownEffect(CurrentCaller.schema)({ subject: owner.value }).pipe(
+    Effect.mapError(() => Unauthorized.make()),
+    Effect.flatMap(caller => Effect.provideService(effect, CurrentCaller, caller)),
+  )
+})
+const stateLayer = Layer.merge(TestModel.layer(Layer.empty), ReceiptOwnerGuardLive).pipe(Layer.provide(Domain.InMemory))
+const clientLayer = ActorInternalApi.layerClientInProcess.pipe(Layer.provide(TestSession), Layer.provideMerge(stateLayer))
+
+const usage = Response.Usage.make({ inputTokens: { total: 2 }, outputTokens: { total: 3 } })
 
 test.each([
   { threadId: "thread", runId: "r", modelOperation: "6:threadr:1", toolOperation: "6:threadr:2" },
@@ -35,14 +52,13 @@ test.each([
       return Prompt.fromMessages([Prompt.toolMessage({ content: [Prompt.toolResultPart({ id: input.call.id, name: input.call.name, result: 42, isFailure: false, providerExecuted: false })] })])
     }),
   }))
-  const world = ActorModel.layer(ActorHandlers).pipe(Layer.provide(Layer.mergeAll(Domain.InMemory, adapter)))
+  const world = ExecuteRunLive.pipe(Layer.provideMerge(clientLayer), Layer.provide(adapter), Layer.provideMerge(WorkflowEngine.layerMemory), Layer.provide(Digest.layerWebCrypto))
   yield* Effect.gen(function* () {
     const threads = yield* Thread
-    const runs = yield* ExecuteRun
-    yield* threads.send(threadId, new OpenThread({ actor: "agent", instance: "i", name: "main", limits: DEFAULT_RUN_LIMITS }))
-    yield* threads.send(threadId, new RequestRun({ runId, digest: "d", prompt: Prompt.make("Read the number") }))
-    const saga = yield* runs.start(runKey(threadId, runId), { threadId, runId, owner: "alice" })
-    yield* saga.result
+    yield* threads.send(threadId, OpenThread.make({ actor: "agent", instance: "i", name: "main", limits: DEFAULT_RUN_LIMITS }))
+    yield* threads.send(threadId, RequestRun.make({ runId, digest: "d", prompt: Prompt.make("Read the number") }))
+    yield* ExecuteRun.workflow.execute({ key: executionKey({ threadId, runId, owner: "alice" }), threadId, runId, owner: "alice" })
+    yield* ExecuteRun.workflow.execute({ key: executionKey({ threadId, runId, owner: "alice" }), threadId, runId, owner: "alice" })
     const state = yield* threads.state(threadId)
     if (state._tag !== "Open") return yield* Effect.die("Expected open thread")
     expect(state.active?.status).toBe("completed")
@@ -54,7 +70,7 @@ test.each([
   }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(world))
 })), 15_000)
 
-test("the native model definitions are valid", () => expect(Domain.verify(ActorModel)).toEqual([]))
+test("the native model definitions are valid", () => expect(Domain.verify(TestModel)).toEqual([]))
 
 
 test("a mismatched workflow owner cannot dispatch or fail another owner's run", () => Effect.runPromise(Effect.gen(function* () {
@@ -63,16 +79,13 @@ test("a mismatched workflow owner cannot dispatch or fail another owner's run", 
     infer: () => Ref.update(calls, count => count + 1).pipe(Effect.andThen(Effect.die("Unauthorized dispatch"))),
     invoke: () => Ref.update(calls, count => count + 1).pipe(Effect.andThen(Effect.die("Unauthorized dispatch"))),
   }))
-  const Model = Domain.Model("ExecutionOwnerTest", { aggregates: [Thread], sagas: [ExecuteRun] })
-  const world = Model.layer(ExecuteRunLive).pipe(Layer.provide(Layer.mergeAll(Domain.InMemory, adapter)))
+  const world = ExecuteRunLive.pipe(Layer.provideMerge(clientLayer), Layer.provide(adapter), Layer.provideMerge(WorkflowEngine.layerMemory), Layer.provide(Digest.layerWebCrypto))
   yield* Effect.gen(function* () {
     const threads = yield* Thread
-    const runs = yield* ExecuteRun
-    yield* threads.send("private", new OpenThread({ actor: "agent", instance: "i", name: "main", limits: DEFAULT_RUN_LIMITS }))
-    yield* threads.send("private", new RequestRun({ runId: "r", digest: "d", prompt: Prompt.make("Private prompt") }))
+    yield* threads.send("private", OpenThread.make({ actor: "agent", instance: "i", name: "main", limits: DEFAULT_RUN_LIMITS }))
+    yield* threads.send("private", RequestRun.make({ runId: "r", digest: "d", prompt: Prompt.make("Private prompt") }))
     const before = yield* threads.state("private")
-    const unauthorized = yield* runs.start(runKey("private", "r"), { threadId: "private", runId: "r", owner: "bob" })
-    const result = yield* unauthorized.result.pipe(Effect.exit)
+    const result = yield* ExecuteRun.workflow.execute({ key: executionKey({ threadId: "private", runId: "r", owner: "bob" }), threadId: "private", runId: "r", owner: "bob" }).pipe(Effect.exit)
     expect(Exit.isFailure(result)).toBe(true)
     expect(yield* threads.state("private")).toEqual(before)
     expect(yield* Ref.get(calls)).toBe(0)

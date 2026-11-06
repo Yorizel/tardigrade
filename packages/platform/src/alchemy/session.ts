@@ -8,7 +8,7 @@ const AuthenticatedSessionLive = Layer.effect(Session, Effect.gen(function* () {
   const subject = yield* Config.NonEmptyString("TARDIGRADE_SUBJECT")
   return (effect, { headers }) => {
     const authorization = Headers.get(headers, "authorization")
-    if (Option.isNone(authorization) || authorization.value !== `Bearer ${Redacted.value(token)}`) return Effect.fail(new Unauthorized())
+    if (Option.isNone(authorization) || authorization.value !== `Bearer ${Redacted.value(token)}`) return Effect.fail(Unauthorized.make())
     return effect.pipe(Effect.provideService(CurrentCaller, { subject }))
   }
 }))

@@ -21,9 +21,9 @@ const interrupted = (state: typeof OpenCode.Type, reason: string, cancelled: boo
     if (call.status === "dispatched" && (call.request.mutation || call.request.ordinal === unknownOrdinal)) return { ...call, status: "unknown" as const, reason }
     return { ...call, status: "cancelled" as const, reason }
   })
-  if (calls.some(call => call.status === "unknown")) return [new CodeInterrupted({ status: "unknown", reason, calls })]
-  if (cancelled) return [new CodeInterrupted({ status: "cancelled", reason, calls })]
-  return [new CodeInterrupted({ status: "failed", reason, calls })]
+  if (calls.some(call => call.status === "unknown")) return [CodeInterrupted.make({ status: "unknown", reason, calls })]
+  if (cancelled) return [CodeInterrupted.make({ status: "cancelled", reason, calls })]
+  return [CodeInterrupted.make({ status: "failed", reason, calls })]
 }
 
 export class CodeExecution extends Domain.Aggregate("CodeExecution", {
@@ -42,7 +42,7 @@ export class CodeExecution extends Domain.Aggregate("CodeExecution", {
       }
       if (request.code.length > request.limits.maxCodeChars) return yield* new CodeRejected({ reason: "CodeBudgetExceeded" })
       const startedAt = DateTime.toEpochMillis(now)
-      return [new CodeStarted({ owner: caller.subject, request, startedAt, deadlineAt: startedAt + request.limits.maxDurationMs })]
+      return [CodeStarted.make({ owner: caller.subject, request, startedAt, deadlineAt: startedAt + request.limits.maxDurationMs })]
     }),
     PrepareCodeCall: (state, command, { id, now }) => {
       if (state._tag !== "Open") return new CodeRejected({ reason: "UnknownExecution" })
@@ -50,15 +50,16 @@ export class CodeExecution extends Domain.Aggregate("CodeExecution", {
       const previous = state.calls.find(call => call.request.ordinal === command.ordinal)
       if (previous !== undefined) {
         if (!Schema.toEquivalence(HostCallInput)(previous.request, request)) return new CodeRejected({ reason: "CallIdentityConflict" })
-        return [new CodeCallReplayed({ ordinal: command.ordinal })]
+        return [CodeCallReplayed.make({ ordinal: command.ordinal })]
       }
       const current = active(state)
       if (current._tag !== "Open") return current
       if (DateTime.toEpochMillis(now) >= current.deadlineAt) return new CodeRejected({ reason: "DurationBudgetExceeded" })
       if (request.input !== undefined && Schema.encodeSync(Schema.fromJsonString(Schema.Json))(request.input).length > current.request.limits.maxCallInputChars) return new CodeRejected({ reason: "CallInputBudgetExceeded" })
+      if (!current.request.catalog[command.package]?.includes(command.method)) return new CodeRejected({ reason: "MethodNotSelected" })
       if (command.ordinal !== current.calls.length) return new CodeRejected({ reason: "CallOrderConflict" })
       if (current.calls.length >= current.request.limits.maxCalls) return new CodeRejected({ reason: "CallBudgetExceeded" })
-      return [new CodeCallPrepared({ call: { callId: `${id.length}:${id}:${command.ordinal}`, request, status: "prepared", approved: !command.requiresApproval, outcome: null, reason: null } })]
+      return [CodeCallPrepared.make({ call: { callId: `${id.length}:${id}:${command.ordinal}`, request, status: "prepared", approved: !command.requiresApproval, outcome: null, settlementSequence: null, reason: null } })]
     },
     ApproveCodeCall: Effect.fn("Code.Approve")(function* (state, command) {
       const current = active(yield* owned(state))
@@ -67,7 +68,7 @@ export class CodeExecution extends Domain.Aggregate("CodeExecution", {
       if (call === undefined) return yield* new CodeRejected({ reason: "UnknownCall" })
       if (call.status !== "prepared") return yield* new CodeRejected({ reason: "CallNotPrepared" })
       if (call.approved) return []
-      return [new CodeCallApproved({ ordinal: command.ordinal })]
+      return [CodeCallApproved.make({ ordinal: command.ordinal })]
     }),
     DispatchCodeCall: (state, command, { now }) => {
       const current = active(state)
@@ -77,7 +78,7 @@ export class CodeExecution extends Domain.Aggregate("CodeExecution", {
       if (call === undefined) return new CodeRejected({ reason: "UnknownCall" })
       if (call.status !== "prepared") return new CodeRejected({ reason: "CallAlreadyDispatched" })
       if (!call.approved) return new CodeRejected({ reason: "ApprovalRequired" })
-      return [new CodeCallDispatched({ ordinal: command.ordinal })]
+      return [CodeCallDispatched.make({ ordinal: command.ordinal })]
     },
     SettleCodeCall: (state, command) => {
       if (state._tag !== "Open") return new CodeRejected({ reason: "UnknownExecution" })
@@ -94,7 +95,11 @@ export class CodeExecution extends Domain.Aggregate("CodeExecution", {
         if (call.request.mutation) return interrupted(current, "CallResultBudgetExceeded", false, command.ordinal)
         return interrupted(current, "CallResultBudgetExceeded", false, null)
       }
-      return [new CodeCallSettled({ ordinal: command.ordinal, outcome: command.outcome })]
+      const sequence = current.calls.reduce((next, entry) => {
+        if (entry.settlementSequence === null) return next
+        return Math.max(next, entry.settlementSequence + 1)
+      }, 0)
+      return [CodeCallSettled.make({ ordinal: command.ordinal, outcome: command.outcome, sequence })]
     },
     CompleteCode: (state, command, { now }) => {
       if (state._tag === "Open" && state.outcome !== null) {
@@ -108,7 +113,7 @@ export class CodeExecution extends Domain.Aggregate("CodeExecution", {
       if (current.calls.some(call => call.outcome === null)) return new CodeRejected({ reason: "CallsPending" })
       if (resultSize(command.outcome) > current.request.limits.maxResultChars) return new CodeRejected({ reason: "ResultBudgetExceeded" })
       if (command.logs.length > current.request.limits.maxLogs || command.logs.reduce((total, line) => total + line.length, 0) > current.request.limits.maxLogChars) return new CodeRejected({ reason: "LogBudgetExceeded" })
-      return [new CodeFinished({ outcome: command.outcome, logs: command.logs })]
+      return [CodeFinished.make({ outcome: command.outcome, logs: command.logs })]
     },
     CancelCode: Effect.fn("Code.Cancel")(function* (state, command) {
       const current = yield* owned(state)
@@ -135,7 +140,7 @@ export class CodeExecution extends Domain.Aggregate("CodeExecution", {
       const call = current.calls.find(entry => entry.request.ordinal === command.ordinal)
       if (current.status !== "unknown" || call?.status !== "unknown") return yield* new CodeRejected({ reason: "NoUncertainCall" })
       if (resultSize(command.outcome) > current.request.limits.maxResultChars) return yield* new CodeRejected({ reason: "ResultBudgetExceeded" })
-      return [new CodeCallReconciled({ ordinal: command.ordinal, outcome: command.outcome, evidence: command.evidence, remainingUnknown: current.calls.some(entry => entry.request.ordinal !== command.ordinal && entry.status === "unknown") })]
+      return [CodeCallReconciled.make({ ordinal: command.ordinal, outcome: command.outcome, evidence: command.evidence, remainingUnknown: current.calls.some(entry => entry.request.ordinal !== command.ordinal && entry.status === "unknown") })]
     }),
     ExpireCode: (state, _command, { now }) => {
       if (state._tag !== "Open" || state.status !== "running" || DateTime.toEpochMillis(now) < state.deadlineAt) return []
@@ -170,8 +175,8 @@ export class CodeExecution extends Domain.Aggregate("CodeExecution", {
       if (state._tag !== "Open") return state
       return { ...state, calls: state.calls.map(call => {
         if (call.request.ordinal !== event.ordinal) return call
-        if (event.outcome._tag === "Returned") return { ...call, outcome: event.outcome, status: "returned" as const }
-        return { ...call, outcome: event.outcome, status: "failed" as const }
+        if (event.outcome._tag === "Returned") return { ...call, outcome: event.outcome, settlementSequence: event.sequence, status: "returned" as const }
+        return { ...call, outcome: event.outcome, settlementSequence: event.sequence, status: "failed" as const }
       }) }
     },
     CodeInterrupted: (state, event) => {

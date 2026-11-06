@@ -9,13 +9,19 @@ export const CodeLimits = Schema.Struct({
   maxLogChars: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   maxLogs: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   maxDurationMs: Schema.Int.check(Schema.isGreaterThan(0)),
+  maxMemoryBytes: Schema.Int.check(Schema.isGreaterThan(0)),
+  maxStackBytes: Schema.Int.check(Schema.isGreaterThan(0)),
+  maxSegmentMs: Schema.Int.check(Schema.isGreaterThan(0)),
+  maxJobs: Schema.Int.check(Schema.isGreaterThan(0)),
 })
-export const DEFAULT_CODE_LIMITS = { maxCalls: 64, maxCodeChars: 100_000, maxCallInputChars: 64_000, maxResultChars: 64_000, maxLogChars: 8192, maxLogs: 256, maxDurationMs: 300_000 } as const
+export const DEFAULT_CODE_LIMITS = { maxCalls: 64, maxCodeChars: 100_000, maxCallInputChars: 64_000, maxResultChars: 64_000, maxLogChars: 8192, maxLogs: 256, maxDurationMs: 300_000, maxMemoryBytes: 16 * 1024 * 1024, maxStackBytes: 512 * 1024, maxSegmentMs: 1000, maxJobs: 10_000 } as const
+export const PackageCatalog = Schema.Record(Schema.String, Schema.Array(Schema.NonEmptyString))
 export const CodeInput = Schema.Struct({
   threadId: Schema.NonEmptyString,
   runId: Schema.NonEmptyString,
   digest: Schema.NonEmptyString,
   code: Schema.String,
+  catalog: PackageCatalog,
   ambient: Schema.Struct({ at: Schema.Number, seed: Schema.NonEmptyString }),
   limits: CodeLimits,
 })
@@ -31,12 +37,14 @@ export const CodeOutcome = Schema.Union([
   Schema.TaggedStruct("Returned", { value: Schema.optionalKey(Schema.Json) }),
   Schema.TaggedStruct("Failed", { reason: Schema.String }),
 ])
+export const CodeSettlementSequence = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
 export const CodeCall = Schema.Struct({
   callId: Schema.NonEmptyString,
   request: HostCallInput,
   status: Schema.Literals(["prepared", "dispatched", "returned", "failed", "cancelled", "unknown"]),
   approved: Schema.Boolean,
   outcome: Schema.NullOr(CodeOutcome),
+  settlementSequence: Schema.NullOr(CodeSettlementSequence),
   reason: Schema.NullOr(Schema.String),
 })
 export const OpenCode = Schema.TaggedStruct("Open", {

@@ -13,6 +13,12 @@
     "suspicious": "error"
   },
   "rules": {
-    "react/react-in-jsx-scope": "error"
+    "react/react-in-jsx-scope": "error",
+    "eslint/no-underscore-dangle": [
+      "error",
+      {
+        "allow": []
+      }
+    ]
   }
 }

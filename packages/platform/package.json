@@ -12,11 +12,14 @@
     "./cluster": "./src/cluster/workflow.ts"
   },
   "dependencies": {
+    "@alchemy.run/cloudflare": "2.0.0-beta.85",
     "@clavia/tardigrade-bun": "workspace:*",
     "@clavia/tardigrade-cloudflare": "workspace:*",
     "@clavia/tardigrade-code": "workspace:*",
     "@clavia/tardigrade-core": "workspace:*",
+    "@clavia/tardigrade-domain": "workspace:*",
     "@clavia/tardigrade-libraries": "workspace:*",
+    "@clavia/tardigrade-store": "workspace:*",
     "@clavia/tardigrade-worker-loader": "workspace:*",
     "@cloudflare/sandbox": "1.0.3",
     "@effect/platform-bun": "4.1.2",
@@ -24,9 +27,7 @@
     "@effect/sql-sqlite-do": "4.1.2",
     "effect": "4.1.2",
     "just-bash": "3.6.0",
-    "@clavia/tardigrade-store": "workspace:*",
-    "@clavia/tardigrade-domain": "workspace:*",
-    "@alchemy.run/cloudflare": "2.0.0-beta.85"
+    "quickjs-emscripten": "0.32.0"
   },
   "devDependencies": {
     "@cfworker/json-schema": "^4.1.1",

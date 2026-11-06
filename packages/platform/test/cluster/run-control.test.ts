@@ -9,7 +9,7 @@ import { Digest } from "effect/crypto"
 import { RpcTest } from "effect/rpc"
 import { SqlClient } from "effect/sql"
 import { Activity, DurableDeferred } from "effect/workflow"
-import { ExecuteRun, approval, runKey } from "@clavia/tardigrade-domain/Execution/Run.workflow"
+import { ExecuteRun, approval, executionKey } from "@clavia/tardigrade-domain/Execution/Run.workflow"
 import { RunRpcHandlers, RunRpcs } from "../../src/cluster/run-control"
 
 test("native run RPC authenticates, signals, replays and interrupts without persisting credentials", async () => {
@@ -36,12 +36,20 @@ test("native run RPC authenticates, signals, replays and interrupts without pers
       const sql = yield* SqlClient.SqlClient
       yield* sql`CREATE TABLE proof_calls (id INTEGER PRIMARY KEY)`
       const client = yield* RpcTest.makeClient(RunRpcs)
-      const payload = { key: runKey("thread-a", "run-a"), threadId: "thread-a", runId: "run-a", owner: "alice" }
+      const scope = { threadId: "thread-a", runId: "run-a", owner: "alice" }
+      const payload = { ...scope, key: executionKey(scope) }
       const options = { headers: { authorization: "Bearer run-control-fixture-token" } }
       const denied = yield* client["Tardigrade/ExecuteRunDiscard"](payload).pipe(Effect.exit)
       expect(Exit.isFailure(denied)).toBe(true)
       const executionId = yield* client["Tardigrade/ExecuteRunDiscard"](payload, options)
       expect(executionId).toBe(yield* ExecuteRun.workflow.executionId(payload))
+      for (const conflicting of [{ ...payload, owner: "bob" }, { ...payload, threadId: "other" }, { ...payload, runId: "other" }]) {
+        expect(Exit.isFailure(yield* client["Tardigrade/ExecuteRunDiscard"](conflicting, options).pipe(Effect.exit))).toBe(true)
+        expect(Exit.isFailure(yield* client.SignalRunApproval({ ...conflicting, stepId: "step-1" }, options).pipe(Effect.exit))).toBe(true)
+        expect(Exit.isFailure(yield* client.InterruptRun(conflicting, options).pipe(Effect.exit))).toBe(true)
+        expect(Exit.isFailure(yield* client.PollRun(conflicting, options).pipe(Effect.exit))).toBe(true)
+        expect(Exit.isFailure(yield* client.ResumeRun(conflicting, options).pipe(Effect.exit))).toBe(true)
+      }
       yield* client.SignalRunApproval({ ...payload, stepId: "step-1" }, options)
       yield* client["Tardigrade/ExecuteRun"](payload, options)
       yield* client["Tardigrade/ExecuteRun"](payload, options)
@@ -49,7 +57,7 @@ test("native run RPC authenticates, signals, replays and interrupts without pers
       expect(Option.isSome(poll) && poll.value._tag === "Complete" && Exit.isSuccess(poll.value.exit)).toBe(true)
       const counts = yield* sql`SELECT count(*) AS count FROM proof_calls`.pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ count: Schema.Int })))))
       expect(counts[0]?.count).toBe(1)
-      const cancelledPayload = { ...payload, key: runKey("thread-a", "run-b"), runId: "run-b" }
+      const cancelledPayload = { ...payload, key: executionKey({ ...scope, runId: "run-b" }), runId: "run-b" }
       yield* client["Tardigrade/ExecuteRunDiscard"](cancelledPayload, options)
       yield* client.InterruptRun(cancelledPayload, options)
       const cancelled = yield* Effect.repeat(client.PollRun(cancelledPayload, options), {

@@ -9,12 +9,12 @@ export class CurrentCaller extends Domain.RequestContext<CurrentCaller>()(
   "Tardigrade/CurrentCaller", Schema.Struct({ subject: Schema.NonEmptyString }),
 ) {}
 
-export class Unauthorized extends Schema.TaggedError<Unauthorized>()("Unauthorized", {}, { httpApiStatus: 401 }) {}
+export class Unauthorized extends Schema.TaggedError<Unauthorized, { readonly brand: unique symbol }>()("Unauthorized", {}, { httpApiStatus: 401 }) {}
 export class Session extends RpcMiddleware.Service<Session, { provides: CurrentCaller }>()(
   "Tardigrade/Session", { error: Unauthorized },
 ) {}
 
-export class ReceiptForbidden extends Schema.TaggedError<ReceiptForbidden>()("ReceiptForbidden", {}, { httpApiStatus: 403 }) {}
+export class ReceiptForbidden extends Schema.TaggedError<ReceiptForbidden, { readonly brand: unique symbol }>()("ReceiptForbidden", {}, { httpApiStatus: 403 }) {}
 export class ReceiptOwnerGuard extends RpcMiddleware.Service<ReceiptOwnerGuard, { requires: CurrentCaller | Internals }>()(
   "Tardigrade/ReceiptOwnerGuard", { error: ReceiptForbidden },
 ) {}

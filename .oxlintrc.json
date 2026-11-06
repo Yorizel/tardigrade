@@ -169,7 +169,15 @@
     "alchemy/no-disposable-in-instance-scope": "error",
     "alchemy/worker-env-secret-literal": "error",
     "alchemy/workflow-io-outside-task": "error",
-    "react/react-in-jsx-scope": "off"
+    "react/react-in-jsx-scope": "off",
+    "eslint/no-underscore-dangle": [
+      "error",
+      {
+        "allow": [
+          "_tag"
+        ]
+      }
+    ]
   },
   "overrides": [
     {

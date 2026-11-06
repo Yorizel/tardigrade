@@ -1,7 +1,7 @@
 import * as Domain from "@alchemy.run/domain"
 import { Schema } from "effect"
 import { ReceiptOwnerGuard, Session } from "../Actor.context"
-import { CodeCall, CodeInput, CodeOutcome, HostCallInput } from "./Code.schemas"
+import { CodeCall, CodeInput, CodeOutcome, HostCallInput, CodeSettlementSequence } from "./Code.schemas"
 
 export class CodeRejected extends Domain.Rejection("CodeRejected", { reason: Schema.NonEmptyString }, { httpApiStatus: 409 }) {}
 export class CodeNotOwner extends Domain.Rejection("CodeNotOwner", {}, { httpApiStatus: 403 }) {}
@@ -10,7 +10,7 @@ export class CodeCallPrepared extends Domain.Event("CodeCallPrepared", { call: C
 export class CodeCallReplayed extends Domain.Event("CodeCallReplayed", { ordinal: Schema.Int }) {}
 export class CodeCallApproved extends Domain.Event("CodeCallApproved", { ordinal: Schema.Int }) {}
 export class CodeCallDispatched extends Domain.Event("CodeCallDispatched", { ordinal: Schema.Int }) {}
-export class CodeCallSettled extends Domain.Event("CodeCallSettled", { ordinal: Schema.Int, outcome: CodeOutcome }) {}
+export class CodeCallSettled extends Domain.Event("CodeCallSettled", { ordinal: Schema.Int, outcome: CodeOutcome, sequence: CodeSettlementSequence }) {}
 export class CodeInterrupted extends Domain.Event("CodeInterrupted", { status: Schema.Literals(["failed", "cancelled", "unknown"]), reason: Schema.String, calls: Schema.Array(CodeCall) }) {}
 export class CodeCallReconciled extends Domain.Event("CodeCallReconciled", { ordinal: Schema.Int, outcome: CodeOutcome, evidence: Schema.NonEmptyString, remainingUnknown: Schema.Boolean }) {}
 export class CodeFinished extends Domain.Event("CodeFinished", { outcome: CodeOutcome, logs: Schema.Array(Schema.String) }) {}

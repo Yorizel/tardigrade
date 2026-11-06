@@ -35,7 +35,8 @@
     "alchemy": "2.0.0-beta.85",
     "@alchemy.run/cloudflare": "2.0.0-beta.85",
     "@alchemy.run/domain": "2.0.0-beta.85",
-    "@effect/ai-openai": "4.1.2"
+    "@effect/ai-openai": "4.1.2",
+    "@effect/sql-sqlite-bun": "4.1.2"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

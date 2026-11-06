@@ -9,7 +9,7 @@ export interface ActorTemplateOptions {
   readonly template?: Exclude<InitTemplate, "alchemy">
 }
 
-export const ALCHEMY_TEMPLATE_FILES = ["AgentExecution.ts", "alchemy.run.ts", "worker.ts", "server.ts", "client.ts", ".env.example", "SKILL.md"] as const
+export const ALCHEMY_TEMPLATE_FILES = ["AgentExecution.ts", "alchemy.run.ts", "worker.ts", "server.ts", "runner.ts", "client.ts", ".env.example", "SKILL.md"] as const
 
 export const INIT_TEMPLATES = ["alchemy", "quickstart", "agent", "rlm"] as const
 export type InitTemplate = typeof INIT_TEMPLATES[number]

@@ -30,13 +30,13 @@ export class Delegation extends Domain.Aggregate("Delegation", {
       if (command.lineage.length === 0 || command.lineage.at(-1) !== command.parentThreadId || Array.dedupe(command.lineage).length !== command.lineage.length || command.lineage.includes(id)) return yield* new DelegationRejected({ reason: "InvalidLineage" })
       if (command.lineage.length > command.limits.maxDepth) return yield* new DelegationRejected({ reason: "DepthBudgetExceeded" })
       if (command.toolCalls > command.limits.maxToolCalls) return yield* new DelegationRejected({ reason: "ToolBudgetExceeded" })
-      return [new DelegationReserved({ delegationId: id, childThreadId: id, childRunId: command.requestId, owner: caller.subject, reservation: command })]
+      return [DelegationReserved.make({ delegationId: id, childThreadId: id, childRunId: command.requestId, owner: caller.subject, reservation: command })]
     }),
     MarkDelegationStarted: state => {
       if (state._tag !== "Reserved") return new DelegationRejected({ reason: "UnknownDelegation" })
       if (state.status === "running") return []
       if (state.status !== "reserved") return new DelegationRejected({ reason: "DelegationNotStartable" })
-      return [new DelegationStarted()]
+      return [DelegationStarted.make()]
     },
     RequestDelegationCancellation: Effect.fn("Delegation.cancel")(function* (state, command) {
       const current = yield* owned(state)
@@ -45,14 +45,14 @@ export class Delegation extends Domain.Aggregate("Delegation", {
         return []
       }
       if (current.status !== "reserved" && current.status !== "running") return yield* new DelegationRejected({ reason: "DelegationTerminal" })
-      return [new DelegationCancellationRequested({ reason: command.reason })]
+      return [DelegationCancellationRequested.make({ reason: command.reason })]
     }),
     ConfirmDelegationNotStarted: state => {
       if (state._tag !== "Reserved") return new DelegationRejected({ reason: "UnknownDelegation" })
       if (state.status === "cancelled" && !state.started) return []
       if (state.status !== "cancel_requested" || state.started) return new DelegationRejected({ reason: "ChildMayHaveStarted" })
       const outcome = { status: "cancelled" as const, receipt: null, reason: "CancelledBeforeStart" }
-      return [new ChildOutcomeRecorded({ entry: { sequence: state.inbox.length + 1, messageId: state.childRunId, content: { _tag: "Result", outcome } } })]
+      return [ChildOutcomeRecorded.make({ entry: { sequence: state.inbox.length + 1, messageId: state.childRunId, content: { _tag: "Result", outcome } } })]
     },
     RecordChildMessage: (state, command) => {
       if (state._tag !== "Reserved") return new DelegationRejected({ reason: "UnknownDelegation" })
@@ -66,7 +66,7 @@ export class Delegation extends Domain.Aggregate("Delegation", {
       if (state.inbox.length >= state.reservation.limits.maxInboxMessages - 2) return new DelegationRejected({ reason: "InboxBudgetExceeded" })
       const content = command.content
       if (content._tag === "Request" && state.inbox.some(entry => entry.content._tag === "Request" && entry.content.requestId === content.requestId)) return new DelegationRejected({ reason: "ChildRequestIdentityConflict" })
-      return [new ChildMessageRecorded({ entry: { sequence: state.inbox.length + 1, messageId: command.messageId, content: command.content } })]
+      return [ChildMessageRecorded.make({ entry: { sequence: state.inbox.length + 1, messageId: command.messageId, content: command.content } })]
     },
     RecordChildOutcome: (state, command) => {
       if (state._tag !== "Reserved") return new DelegationRejected({ reason: "UnknownDelegation" })
@@ -82,11 +82,11 @@ export class Delegation extends Domain.Aggregate("Delegation", {
       if (!["completed", "failed", "cancelled", "unknown"].includes(command.receipt.status)) return new DelegationRejected({ reason: "ChildNotTerminal" })
       if (state.status === "cancel_requested" && command.receipt.status === "completed") {
         const outcome = { status: "unknown" as const, receipt: command.receipt, reason: "CompletedAfterCancellation" }
-        return [new ChildOutcomeRecorded({ entry: { sequence: state.inbox.length + 1, messageId: state.childRunId, content: { _tag: "Result", outcome } } })]
+        return [ChildOutcomeRecorded.make({ entry: { sequence: state.inbox.length + 1, messageId: state.childRunId, content: { _tag: "Result", outcome } } })]
       }
       if (command.receipt.status === "completed" || command.receipt.status === "failed" || command.receipt.status === "cancelled" || command.receipt.status === "unknown") {
         const outcome = { status: command.receipt.status, receipt: command.receipt, reason: command.receipt.reason }
-        return [new ChildOutcomeRecorded({ entry: { sequence: state.inbox.length + 1, messageId: state.childRunId, content: { _tag: "Result", outcome } } })]
+        return [ChildOutcomeRecorded.make({ entry: { sequence: state.inbox.length + 1, messageId: state.childRunId, content: { _tag: "Result", outcome } } })]
       }
       return new DelegationRejected({ reason: "ChildNotTerminal" })
     },
@@ -98,7 +98,7 @@ export class Delegation extends Domain.Aggregate("Delegation", {
         return yield* new DelegationRejected({ reason: "ResolutionConflict" })
       }
       if (current.status !== "unknown") return yield* new DelegationRejected({ reason: "NoUncertainChild" })
-      return [new DelegationReconciled({ entry: { sequence: current.inbox.length + 1, messageId: current.childRunId, content: { _tag: "Reconciled", resolution: command.resolution, evidence: command.evidence } } })]
+      return [DelegationReconciled.make({ entry: { sequence: current.inbox.length + 1, messageId: current.childRunId, content: { _tag: "Reconciled", resolution: command.resolution, evidence: command.evidence } } })]
     }),
     ReplyToChild: Effect.fn("Delegation.reply")(function* (state, command) {
       const current = yield* owned(state)
@@ -109,13 +109,13 @@ export class Delegation extends Domain.Aggregate("Delegation", {
       }
       if (current.status !== "running") return yield* new DelegationRejected({ reason: "ChildNotRunning" })
       if (!current.inbox.some(entry => entry.content._tag === "Request" && entry.content.requestId === command.requestId)) return yield* new DelegationRejected({ reason: "UnknownChildRequest" })
-      return [new ChildReplyRecorded({ reply: command })]
+      return [ChildReplyRecorded.make({ reply: command })]
     }),
     AcknowledgeDelegationInbox: Effect.fn("Delegation.acknowledge")(function* (state, command) {
       const current = yield* owned(state)
       if (command.through > current.inbox.length) return yield* new DelegationRejected({ reason: "UnknownInboxPosition" })
       if (command.through <= current.acknowledgedThrough) return []
-      return [new InboxAcknowledged({ through: command.through })]
+      return [InboxAcknowledged.make({ through: command.through })]
     }),
   },
   evolve: {

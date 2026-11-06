@@ -11,7 +11,7 @@ type EffectPolicy = {
 
 type EffectSchema = {
   readonly definitions?: Readonly<Record<string, {
-    readonly properties?: Readonly<Record<string, unknown>>
+    readonly properties?: Readonly<Record<string, { readonly description?: string }>>
   }>>
 }
 
@@ -32,7 +32,7 @@ if (shippedRules === undefined) {
 }
 
 const configured = Object.keys(configuredRules).sort()
-const shipped = Object.keys(shippedRules).sort()
+const shipped = Object.entries(shippedRules).filter(([, metadata]) => !metadata.description?.startsWith("Deprecated:")).map(([rule]) => rule).sort()
 const configuredSet = new Set(configured)
 const shippedSet = new Set(shipped)
 const missing = shipped.filter((rule) => !configuredSet.has(rule))

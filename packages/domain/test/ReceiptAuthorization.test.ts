@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test"
 import * as Domain from "@alchemy.run/domain"
-import { ConfigProvider, Effect, Layer, Result } from "effect"
+import { ConfigProvider, Deferred, Effect, Fiber, Layer, Result } from "effect"
 import { Prompt } from "effect/ai"
 import { SessionLive } from "../../platform/src/alchemy/session"
+import { ReceiptOwnerGuard } from "../src/Actor.context"
+import { ReceiptOwnerGuardLive } from "../src/Actor.model"
 import { Thread } from "../src/Thread/Thread.aggregate"
 import { DEFAULT_RUN_LIMITS } from "../src/Thread/Thread.schemas"
 
@@ -60,3 +62,31 @@ test("authentication runs before the receipt owner guard and requires per-call c
   const stillAuthorized = yield* alice.RequestRun("private", request, { commandId: "known-receipt", headers: aliceHeaders })
   expect(stillAuthorized.reply.receipt?.runId).toBe("private-run")
 })).pipe(Effect.provide(platform))))
+
+
+for (const commandId of ["creation-race", ""]) {
+  test(`receipt ownership remains private across concurrent target creation ${JSON.stringify(commandId)}`, () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+    const admitted = yield* Deferred.make<void>()
+    const release = yield* Deferred.make<void>()
+    const guard = yield* ReceiptOwnerGuard.pipe(Effect.provide(ReceiptOwnerGuardLive))
+    const alice = yield* ReceiptApi.clientInProcess.pipe(
+      Effect.provideService(ReceiptOwnerGuard, (effect, options) => guard(Effect.gen(function* () {
+        yield* Deferred.succeed(admitted, undefined)
+        yield* Deferred.await(release)
+        return yield* effect
+      }), options)),
+      Effect.provide(AliceSession),
+    )
+    const bob = yield* ReceiptApi.clientInProcess.pipe(Effect.provide(BobSession))
+    const pending = yield* alice.OpenThread("race", config, { commandId, headers: aliceHeaders }).pipe(Effect.result, Effect.forkChild)
+    yield* Deferred.await(admitted)
+    yield* bob.OpenThread("race", config, { commandId, headers: bobHeaders })
+    yield* Deferred.succeed(release, undefined)
+    const result = yield* Fiber.join(pending)
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) expect(result.failure._tag).toBe("ReceiptForbidden")
+    const state = yield* bob.Thread.get("race", { headers: bobHeaders })
+    if (state?._tag !== "Open") return yield* Effect.die("Expected Bob's target")
+    expect(state.owner).toBe("bob")
+  })).pipe(Effect.provide(platform))))
+}

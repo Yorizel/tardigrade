@@ -1,4 +1,3 @@
-export { ActorHandlers } from "./Actor.handlers"
 export { ActorModel, ReceiptOwnerGuardLive } from "./Actor.model"
 export { ActorApi } from "./Actor.api"
 export { Thread } from "./Thread/Thread.aggregate"
@@ -7,9 +6,15 @@ export { CurrentCaller, Session, Unauthorized, ReceiptOwnerGuard, ReceiptForbidd
 export { OpenThread, RequestRun, ApproveRun, CancelRun, BeginStep, ConfirmDispatch, RecordStep, MarkUnknown, ResolveUnknown, CompleteRun, FailRun, RunRejected, NotOwner } from "./Thread/Thread.commands"
 
 export { AgentExecution, ModelTurn, PlannedTool, ExecutionRejected } from "./Execution/AgentExecution.external"
-export { ExecuteRun } from "./Execution/Run.workflow"
+export { ExecuteRun, RunScope, executionKey } from "./Execution/Run.workflow"
+export { ExecuteRunLive } from "./Execution/ExecuteRun.saga"
+export { ActorInternalApi } from "./ActorInternal.api"
 
 export { CodeExecution } from "./Code/Code.aggregate"
 export { CodeLimits, DEFAULT_CODE_LIMITS } from "./Code/Code.schemas"
 export { Delegation } from "./Delegation/Delegation.aggregate"
 export { DelegationLimits, DEFAULT_DELEGATION_LIMITS } from "./Delegation/Delegation.schemas"
+
+export { CodeRuntime, CodeAttempt, CodeRuntimeRejected } from "./Code/CodeRuntime.external"
+export { CodeMethods } from "./Code/CodeMethods.external"
+export { ExecuteCode, ExecuteCodeLive, CodeExecutionScope, codeExecutionKey, codeApproval } from "./Code/ExecuteCode.saga"

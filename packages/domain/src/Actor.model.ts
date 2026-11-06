@@ -5,12 +5,10 @@ import { CurrentCaller, Ownership, ReceiptForbidden, ReceiptOwnerGuard } from ".
 import { CodeExecution } from "./Code/Code.aggregate"
 import { Delegation } from "./Delegation/Delegation.aggregate"
 import { Thread } from "./Thread/Thread.aggregate"
-import { ExecuteRun } from "./Execution/Run.workflow"
 import { RunExecution } from "./Execution/RunExecution.policy"
 
 export class ActorModel extends Domain.Model("Tardigrade", {
   aggregates: [Thread, CodeExecution, Delegation],
-  sagas: [ExecuteRun],
   policies: [RunExecution],
 }) {}
 
@@ -22,12 +20,17 @@ export const ReceiptOwnerGuardLive = Layer.succeed(ReceiptOwnerGuard, (effect, {
   const aggregate = ActorModel.aggregates.find(entry => entry.definition.commands.some(command => command.tag === rpc._tag))
   const client = internals.commands.get(rpc._tag)
   if (aggregate === undefined || client === undefined) return yield* Effect.die("Command authority is unavailable")
-  const state = yield* client.state(request.target)
-  if (!Schema.is(Ownership)(state)) {
-    if (Schema.toEquivalence(Schema.Unknown)(state, aggregate.definition.initial)) return yield* effect
-    return yield* new ReceiptForbidden()
-  }
-  const caller = yield* CurrentCaller
-  if (state.owner !== caller.subject) return yield* new ReceiptForbidden()
-  return yield* effect
+  const authorize = Effect.gen(function* () {
+    const state = yield* client.state(request.target)
+    if (!Schema.is(Ownership)(state)) {
+      if (Schema.toEquivalence(Schema.Unknown)(state, aggregate.definition.initial)) return
+      return yield* ReceiptForbidden.make()
+    }
+    const caller = yield* CurrentCaller
+    if (state.owner !== caller.subject) return yield* ReceiptForbidden.make()
+  })
+  yield* authorize
+  const receipt = yield* effect
+  yield* authorize
+  return receipt
 }))

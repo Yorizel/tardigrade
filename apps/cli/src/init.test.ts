@@ -26,13 +26,16 @@ describe("initActor", () => {
     expect(initialized.modelLock).toBeUndefined()
     const worker = await readFile(initialized.worker, "utf8")
     expect(worker).toContain("DomainCloudflare.layerDurableObjects()")
-    expect(worker).toContain("ActorModel.layer(ActorHandlers)")
+    expect(worker).toContain("ActorModel.layer(RunExecutionLive)")
     expect(worker).not.toContain("createActorWorker")
     expect(await readFile(initialized.entry, "utf8")).toContain("disableToolCallResolution: true")
     expect(await readFile(initialized.manifest, "utf8")).toContain("TARDIGRADE_ACTOR=native-agent")
     const packageManifest = JSON.parse(await readFile(initialized.packageManifest, "utf8"))
     expect(packageManifest.scripts.dev).toBe("alchemy dev")
     expect(packageManifest.dependencies["@alchemy.run/domain"]).toBe("2.0.0-beta.85")
+    expect(packageManifest.scripts["dev:runner"]).toBe("bun --env-file=.env runner.ts")
+    expect(packageManifest.dependencies["@effect/sql-sqlite-bun"]).toBe("4.1.2")
+    expect(await readFile(join(initialized.directory, "runner.ts"), "utf8")).toContain("LocalClusterWorkflowLive")
     await expect(readFile(join(initialized.directory, "wrangler.jsonc"), "utf8")).rejects.toThrow()
   })
 
@@ -108,7 +111,7 @@ describe("initActor", () => {
     expect(built.manifest.name).toBe("reviewer")
   })
 
-  for (const template of ["quickstart", "agent", "rlm"] as const) {
+  for (const template of ["alchemy", "quickstart", "agent", "rlm"] as const) {
     test(`typechecks the generated ${template} Alchemy stack`, async () => {
       const cwd = await temporaryRoot()
       const initialized = await initActor("native-host", { cwd, template })
