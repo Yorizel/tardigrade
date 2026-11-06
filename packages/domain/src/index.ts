@@ -42,3 +42,6 @@ export { OutputDeclaration, OutputSchema, ChildOutputCatalog } from "./Output/Ou
 export { ModelChoice, ModelGrant, ModelCatalog } from "./Execution/Model.schemas"
 export { ModelAccess, ModelUnavailable } from "./Execution/ModelAccess.external"
 export { ListModels } from "./Execution/ListModels"
+
+export { ForkSnapshot, ForkOrigin } from "./Thread/Thread.schemas"
+export { ForkRequest, ForkResult, ForkPolicy, DEFAULT_FORK_POLICY, ForkRejected } from "./Fork/Fork.schemas"

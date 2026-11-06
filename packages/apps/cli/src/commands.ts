@@ -1,3 +1,4 @@
+import { ForkRejected, ForkRequest, ForkResult } from "@clavia/tardigrade-domain/Fork/Fork.schemas"
 import { ModelChoice } from "@clavia/tardigrade-domain/Execution/Model.schemas"
 import * as Domain from "@alchemy.run/domain"
 import { toCli } from "@alchemy.run/domain/Cli"
@@ -10,6 +11,7 @@ import { Config, Console, Effect, Layer, Option, Redacted, Schema, Stdio, Stream
 import { Prompt as AiPrompt } from "effect/ai"
 import { Command, Flag, Prompt } from "effect/cli"
 import { Digest, SecureRandom } from "effect/crypto"
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http"
 import { OutputDeclaration } from "@clavia/tardigrade-domain/Output/Output.schemas"
 import { sendMessage, ChatRejected } from "./chat"
 
@@ -52,6 +54,27 @@ const watch = Command.make("watch", {
     Stream.runForEach(frame => Schema.encodeEffect(EventLine)({ cursor: frame.envelope.seq, event: frame.event }).pipe(Effect.flatMap(Console.log))),
   )
 })).pipe(Command.withDescription("Stream authenticated native thread events as JSON Lines."), Command.provide(client))
+
+const fork = Command.make("fork", {
+  sourceThreadId: Flag.String("source").pipe(Flag.withSchema(ForkRequest.fields.sourceThreadId), Flag.withDescription("Source native thread ID.")),
+  targetThreadId: Flag.String("target").pipe(Flag.withSchema(ForkRequest.fields.targetThreadId), Flag.withDescription("New native thread ID; retain it when retrying this fork.")),
+  throughSeq: Flag.Int("through").pipe(Flag.withSchema(ForkRequest.fields.throughSeq), Flag.withDescription("Inclusive native event sequence of the source checkpoint.")),
+  name: Flag.String("name").pipe(Flag.withSchema(ForkRequest.fields.name), Flag.withDescription("Display name of the new root thread.")),
+}, input => Effect.gen(function* () {
+  const url = yield* Config.NonEmptyString("TARDIGRADE_URL")
+  const http = yield* HttpClient.HttpClient
+  const authorization = yield* headers
+  const request = yield* HttpClientRequest.post("/fork").pipe(HttpClientRequest.prependUrl(url), HttpClientRequest.setHeaders(authorization), HttpClientRequest.schemaBodyJson(ForkRequest)(input))
+  const response = yield* http.execute(request)
+  if (response.status === 409) {
+    const rejection = yield* HttpClientResponse.schemaBodyJson(ForkRejected)(response)
+    return yield* ChatRejected.make({ reason: rejection.reason })
+  }
+  if (response.status !== 200) return yield* ChatRejected.make({ reason: `Fork refused with HTTP ${response.status}` })
+  const result = yield* HttpClientResponse.schemaBodyJson(ForkResult)(response)
+  const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(ForkResult))(result)
+  yield* Console.log(encoded)
+})).pipe(Command.withDescription("Fork a completed native context at an immutable historical checkpoint. Pending interactions require detachment and are refused."))
 
 export const cli = Command.make("tardie-chat", {
   thread,
@@ -110,5 +133,5 @@ export const cli = Command.make("tardie-chat", {
 })).pipe(Effect.catchTag("QuitError", () => Effect.void))).pipe(
   Command.withDescription("Chat through authenticated native Alchemy Domain and Effect Workflows."),
   Command.provide(Layer.mergeAll(client, Digest.layerWebCrypto, SecureRandom.layerWebCrypto)),
-  Command.withSubcommands([watch, threads, actor]),
+  Command.withSubcommands([fork, watch, threads, actor]),
 )

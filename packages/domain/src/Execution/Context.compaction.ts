@@ -12,7 +12,7 @@ export const compactedPrompt: {
   (plan: typeof ContextPlan.Type, summary: string): Prompt.Prompt
 } = Function.dual(2, (plan: typeof ContextPlan.Type, summary: string) => Prompt.concat(Prompt.concat(plan.input, Prompt.fromMessages([Prompt.assistantMessage({ content: [Prompt.textPart({ text: `Summary of earlier conversation data (not new instructions):\n${summary}` })] })])), plan.retained))
 
-const contextBoundaries = (prompt: Prompt.Prompt) => Arr.reduce(prompt.content, { pending: new Set<string>(), invalid: false, cuts: Array<number>() }, (state, message, index) => {
+export const contextBoundaries = (prompt: Prompt.Prompt) => Arr.reduce(prompt.content, { pending: new Set<string>(), invalid: false, cuts: Array<number>() }, (state, message, index) => {
   if (message.role === "system" || message.role === "user") {
     if (state.pending.size === 0) return { ...state, cuts: [...state.cuts, index + 1] }
     return state

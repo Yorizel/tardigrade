@@ -1,15 +1,18 @@
+import { ForkRejected } from "../Fork/Fork.schemas"
 import { ModelGrant } from "../Execution/Model.schemas"
 import { ContextPlan } from "../Execution/Context.schemas"
 import * as Domain from "@alchemy.run/domain"
 import { Schema } from "effect"
 import { RunReceiptGuard, ReceiptOwnerGuard, Session } from "../Actor.context"
-import { ThreadId, RunLimits, Run, Step, Prompt, Response, Receipt, ChildBinding, RunRequest } from "./Thread.schemas"
+import { ThreadId, RunLimits, Run, Step, Prompt, Response, Receipt, ChildBinding, RunRequest, ForkSnapshot, ForkOrigin, BackgroundReservation, BackgroundChild, BackgroundResolution } from "./Thread.schemas"
 
 export class RunRejected extends Schema.TaggedError<RunRejected, { readonly brand: unique symbol }>()("RunRejected", { reason: Schema.String }, { httpApiStatus: 409 }) {}
 export class NotOwner extends Schema.TaggedError<NotOwner, { readonly brand: unique symbol }>()("NotOwner", {}, { httpApiStatus: 403 }) {}
 export class ThreadOpened extends Domain.Event("ThreadOpened", { actor: Schema.NonEmptyString, instance: Schema.NonEmptyString, name: Schema.NonEmptyString, owner: Schema.NonEmptyString, limits: RunLimits }) {}
 export class RunModelSelected extends Domain.Event("RunModelSelected", { runId: Schema.NonEmptyString, model: ModelGrant }) {}
 export class SelectRunModel extends Domain.Command("SelectRunModel", { target: ThreadId, middleware: [ReceiptOwnerGuard, Session], input: { runId: Schema.NonEmptyString, model: ModelGrant }, events: [RunModelSelected], rejects: [NotOwner, RunRejected] }) {}
+export class ThreadForkInitialized extends Domain.Event("ThreadForkInitialized", { snapshot: ForkSnapshot }) {}
+export class InitializeFork extends Domain.Command("InitializeFork", { target: ThreadId, middleware: [ReceiptOwnerGuard, Session], input: { snapshot: ForkSnapshot }, events: [ThreadForkInitialized], rejects: [NotOwner, ForkRejected], reply: { origin: Schema.NullOr(ForkOrigin) } }) {}
 export class RunRequested extends Domain.Event("RunRequested", { run: Run }) {}
 export class RunAcknowledged extends Domain.Event("RunAcknowledged", { receipt: Receipt }) {}
 export class StepOutputRejected extends Domain.Event("StepOutputRejected", { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString, prompt: Prompt.Prompt, usage: Response.Usage }) {}
@@ -52,3 +55,14 @@ export class ContextCompacted extends Domain.Event("ContextCompacted", { runId: 
 export class ContextCompactionDiscarded extends Domain.Event("ContextCompactionDiscarded", { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString, summary: Schema.String, usage: Response.Usage, tokensAfter: Schema.Int, reason: Schema.String }) {}
 export class BeginCompaction extends Domain.Command("BeginCompaction", { target: ThreadId, input: { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString }, events: [ContextCompactionPlanned, StepPrepared], reply: { plan: Schema.NullOr(ContextPlan) }, rejects: [RunRejected] }) {}
 export class RecordCompaction extends Domain.Command("RecordCompaction", { target: ThreadId, input: { runId: Schema.NonEmptyString, stepId: Schema.NonEmptyString, summary: Schema.String, usage: Response.Usage }, events: [ContextCompacted, ContextCompactionDiscarded, RunFailed], rejects: [RunRejected] }) {}
+
+export class BackgroundChildReserved extends Domain.Event("BackgroundChildReserved", { child: BackgroundChild, tokensAfter: Schema.Int, toolCallsAfter: Schema.Int }) {}
+export class BackgroundChildStarted extends Domain.Event("BackgroundChildStarted", { delegationId: Schema.NonEmptyString }) {}
+export class BackgroundChildCancellationRequested extends Domain.Event("BackgroundChildCancellationRequested", { delegationId: Schema.NonEmptyString, reason: Schema.NonEmptyString }) {}
+export class BackgroundChildSettled extends Domain.Event("BackgroundChildSettled", { delegationId: Schema.NonEmptyString, receipt: Receipt, status: BackgroundChild.fields.status }) {}
+export class BackgroundChildReconciled extends Domain.Event("BackgroundChildReconciled", { delegationId: Schema.NonEmptyString, resolution: BackgroundResolution }) {}
+export class ReserveBackgroundChild extends Domain.Command("ReserveBackgroundChild", { target: ThreadId, middleware: [ReceiptOwnerGuard, Session], input: BackgroundReservation.fields, events: [BackgroundChildReserved], rejects: [NotOwner, RunRejected] }) {}
+export class StartBackgroundChild extends Domain.Command("StartBackgroundChild", { target: ThreadId, middleware: [ReceiptOwnerGuard, Session], input: { delegationId: Schema.NonEmptyString }, events: [BackgroundChildStarted], rejects: [NotOwner, RunRejected] }) {}
+export class CancelBackgroundChild extends Domain.Command("CancelBackgroundChild", { target: ThreadId, middleware: [ReceiptOwnerGuard, Session], input: { delegationId: Schema.NonEmptyString, reason: Schema.NonEmptyString }, events: [BackgroundChildCancellationRequested], rejects: [NotOwner, RunRejected] }) {}
+export class SettleBackgroundChild extends Domain.Command("SettleBackgroundChild", { target: ThreadId, middleware: [ReceiptOwnerGuard, Session], input: { delegationId: Schema.NonEmptyString, childThreadId: ThreadId, receipt: Receipt }, events: [BackgroundChildSettled], rejects: [NotOwner, RunRejected] }) {}
+export class ReconcileBackgroundChild extends Domain.Command("ReconcileBackgroundChild", { target: ThreadId, middleware: [ReceiptOwnerGuard, Session], input: { delegationId: Schema.NonEmptyString, resolution: BackgroundResolution }, events: [BackgroundChildReconciled], rejects: [NotOwner, RunRejected] }) {}

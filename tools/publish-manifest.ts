@@ -19,6 +19,7 @@ import agent from "../packages/agent/package.json"
 import libraries from "../packages/libraries/package.json"
 import store from "../packages/store/package.json"
 import domain from "../packages/domain/package.json"
+import nativeCli from "../packages/apps/cli/package.json"
 
 interface DependencyManifest {
   readonly name: string
@@ -28,6 +29,7 @@ interface DependencyManifest {
 }
 
 export const publishSources = [
+  { dir: "packages/apps/cli", namespace: "cli", pkg: nativeCli },
   { dir: "packages/domain", namespace: "domain", pkg: domain },
   { dir: "packages/store", namespace: "store", pkg: store },
   { dir: "packages/agent", namespace: "agent", pkg: agent },

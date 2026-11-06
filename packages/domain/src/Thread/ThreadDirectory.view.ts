@@ -22,10 +22,12 @@ export class ThreadDirectory extends Domain.View("ThreadDirectory", {
   rejects: [NotOwner],
   events: [ThreadRegistered],
   keyOf: {
+    ThreadForkInitialized: ({ event }) => event.snapshot.owner,
     ThreadOpened: ({ event }) => event.owner,
     ChildThreadOpened: ({ event }) => event.owner,
   },
   emit: {
+    ThreadForkInitialized: (event, { source }) => ThreadRegistered.make({ threadId: source.id, actor: event.snapshot.actor, instance: event.snapshot.instance, name: event.snapshot.name, child: false }),
     ThreadOpened: (event, { source }) => ThreadRegistered.make({ threadId: source.id, actor: event.actor, instance: event.instance, name: event.name, child: false }),
     ChildThreadOpened: (event, { source }) => ThreadRegistered.make({ threadId: source.id, actor: event.actor, instance: event.instance, name: event.name, child: true }),
   },

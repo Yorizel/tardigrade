@@ -1,28 +1,11 @@
+export { DelegationLimits, DEFAULT_DELEGATION_LIMITS, Reservation } from "../Thread/Thread.schemas"
 import { ModelGrant } from "../Execution/Model.schemas"
 import { OutputDeclaration } from "../Output/Output.schemas"
 import { Ownership } from "../Actor.context"
 import { Function, Schema } from "effect"
 import { Prompt } from "effect/ai"
-import { Receipt, ChildBinding, ChildReservedState, OpenState, ChildAdmission } from "../Thread/Thread.schemas"
+import { Receipt, ChildBinding, ChildReservedState, OpenState, ChildAdmission, Reservation } from "../Thread/Thread.schemas"
 
-export const DelegationLimits = Schema.Struct({
-  maxDepth: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-  maxToolCalls: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-  maxInboxMessages: Schema.Int.check(Schema.isGreaterThanOrEqualTo(2)),
-})
-export const DEFAULT_DELEGATION_LIMITS = { maxDepth: 4, maxToolCalls: 20, maxInboxMessages: 64 } as const
-export const Reservation = Schema.Struct({
-  requestId: Schema.NonEmptyString,
-  parentThreadId: Schema.NonEmptyString,
-  parentRunId: Schema.NonEmptyString,
-  targetActor: Schema.NonEmptyString,
-  lineage: Schema.Array(Schema.NonEmptyString),
-  toolCalls: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-  limits: DelegationLimits,
-  prompt: Prompt.Prompt,
-  output: Schema.optionalKey(OutputDeclaration),
-  model: Schema.optionalKey(ModelGrant),
-})
 export const DelegationStatus = Schema.Literals(["reserved", "running", "cancel_requested", "completed", "failed", "cancelled", "unknown"])
 export const Outcome = Schema.Struct({
   status: Schema.Literals(["completed", "failed", "cancelled", "unknown"]),

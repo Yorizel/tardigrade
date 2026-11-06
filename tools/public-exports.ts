@@ -43,6 +43,7 @@ export async function syncPublicExports(check = false) {
     if (source === undefined) throw new Error(`No publication source for ${target}`)
     const file = join(root, "packages/tardie", workspaceExports[key] ?? `./src/generated/${key.slice(2)}.ts`)
     const module = target.slice(`./src/${source.namespace}/`.length)
+    if (!("exports" in source.pkg)) throw new Error(`Publication source ${source.pkg.name} has no exports for ${target}`)
     const exports: Readonly<Record<string, string | null>> = source.pkg.exports
     const sourceTarget = `./src/${module}`
     let subpath = Object.keys(exports).find(key => exports[key] === sourceTarget)

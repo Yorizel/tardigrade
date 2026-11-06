@@ -1,5 +1,6 @@
 import { RunReceiptGuardLive } from "@clavia/tardigrade-domain/RunReceiptGuard.middleware"
 import { expect, test } from "bun:test"
+import { fileURLToPath } from "node:url"
 import * as Domain from "@alchemy.run/domain"
 import { BunHttpServer, BunServices } from "@effect/platform-bun"
 import { ActorApi } from "@clavia/tardigrade-domain/Actor.api"
@@ -55,6 +56,19 @@ const fixture = Effect.gen(function* () {
 })
 const input = { runId: "run", digest: "digest", prompt: Prompt.make("Literal /message") }
 const open = { actor: "default", instance: "cli", name: "chat", limits: DEFAULT_RUN_LIMITS }
+
+test("CLI process reports the HTTP status when a fork token is rejected", () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+  const server = yield* Effect.acquireRelease(
+    Effect.sync(() => Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("Unauthorized", { status: 401 }) })),
+    (server) => Effect.promise(() => server.stop(true)),
+  )
+  const child = yield* Effect.sync(() => Bun.spawn([process.execPath, "run", fileURLToPath(new URL("./main.ts", import.meta.url)), "fork", "--source", "source", "--target", "target", "--through", "1", "--name", "branch"], {
+      env: { ...process.env, TARDIGRADE_URL: `http://127.0.0.1:${server.port}`, TARDIGRADE_TOKEN: "invalid" }, stdout: "pipe", stderr: "pipe",
+  }))
+  const [stdout, stderr, code] = yield* Effect.promise(() => Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]))
+  expect(code).not.toBe(0)
+  expect(stdout + stderr).toContain("HTTP 401")
+}))))
 
 test("native CLI client admits, observes and retries a run over authenticated HTTP", () => Effect.runPromise(withWorld(Effect.gen(function* () {
   const setup = yield* fixture

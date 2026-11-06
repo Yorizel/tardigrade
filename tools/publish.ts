@@ -120,6 +120,7 @@ const rewriteSources = async (dir: string, sourceRoot = dir): Promise<void> => {
       for (const source of publishSources) {
         if (specifier !== source.pkg.name && !specifier.startsWith(`${source.pkg.name}/`)) continue
         const key = specifier === source.pkg.name ? "." : `.${specifier.slice(source.pkg.name.length)}`
+        if (!("exports" in source.pkg)) throw new Error(`No workspace export for ${specifier} in ${path}`)
         const exports: Readonly<Record<string, string | null>> = source.pkg.exports
         let target = exports[key]
         if (target === undefined) {
@@ -218,7 +219,7 @@ try {
     files: ["src", STAGED_EXAMPLES, "patches", "THIRD_PARTY_NOTICES.md"],
     engines: publicSource.pkg.engines,
     type: "module",
-    bin: { [BIN_NAME]: BIN_ENTRY },
+    bin: { [BIN_NAME]: BIN_ENTRY, "tardie-chat": "./src/cli/main.ts" },
     exports: publicExports,
     ...dependencies,
     patchedDependencies

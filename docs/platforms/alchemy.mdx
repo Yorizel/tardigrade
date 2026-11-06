@@ -26,6 +26,12 @@ Supply the model ID, provider credential, public bearer token and subject, and s
 
 `bun run dev` runs Cloudflare locally through Alchemy. `bun run dev:memory` runs the state model in a Bun process with `Domain.InMemory`; its data ends with the process. Both state servers use the same separate Cluster runner. `bun run plan:cloudflare --stage prod` previews the stack and `bun run deploy:cloudflare --stage prod` deploys it. Keep the stack's `.alchemy` state between deployments. Generating this template does not transfer data from an existing Tardigrade deployment.
 
+## Fork a native thread
+
+The native chat CLI accepts `fork --source SOURCE_ID --target TARGET_ID --through SEQUENCE --name LABEL`. Retain the explicit target ID when retrying. Thread IDs are immutable coordinates; names are repeatable labels. The authenticated `/fork` endpoint captures the selected open or completed, settled context. Pending, failed, cancelled and unknown checkpoints require detachment and are refused with `CheckpointNeedsDetachment`.
+
+The receipt records the source ID, inclusive event cursor, SHA-256 prefix digest and format version 1. `DEFAULT_FORK_POLICY` exports the event, prefix byte, snapshot byte and read-time limits. Set `TARDIGRADE_FORK_POLICY` to a complete JSON `ForkPolicy` to override them; the receipt reports the applied policy. Workspace text, spilled values and raw legacy journals are not cloned or imported. This operation does not provide arbitrary legacy fork parity. The generated `client.ts` exposes Domain commands; the separate native chat CLI supplies the fork command.
+
 ## Execution and recovery
 
 Each thread has one active run. Native commands persist admission, step preparation, approval, dispatch, usage, and terminal outcomes. Every model/tool boundary has a native Activity result. The workflow reads snapshots through the private native Domain API and reuses recorded Activity results on replay. The policy schedules a native Domain expiry command and sends authenticated native Workflow control RPCs after approval, cancellation, failure, or an uncertain outcome. The Worker declares no agent sagas and registers no duplicate agent workflow engine.

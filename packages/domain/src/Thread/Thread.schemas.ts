@@ -1,7 +1,7 @@
 import { ContextPolicy, CompactionSettlement } from "../Execution/Context.schemas"
 import { Ownership } from "../Actor.context"
 import { ModelChoice, ModelGrant } from "../Execution/Model.schemas"
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { Prompt, Response } from "effect/ai"
 import { OutputDeclaration } from "../Output/Output.schemas"
 
@@ -50,6 +50,24 @@ export const Run = Schema.Struct({
 })
 export const Receipt = Schema.Struct({ requestedModel: Schema.optionalKey(ModelChoice), model: Schema.optionalKey(ModelGrant), runId: Schema.NonEmptyString, digest: Schema.NonEmptyString, input: Prompt.Prompt, output: Schema.NullOr(OutputDeclaration), status: RunStatus, tokens: Schema.Int, compactions: Schema.Array(CompactionSettlement), step: Schema.NullOr(Step), text: Schema.String, result: Schema.NullOr(Schema.Json), reason: Schema.NullOr(Schema.String) })
 export const RunRequest = Schema.Struct({ model: Schema.optionalKey(ModelChoice), runId: Schema.NonEmptyString, digest: Schema.NonEmptyString, prompt: Prompt.Prompt, output: Schema.optionalKey(OutputDeclaration) })
+export const DelegationLimits = Schema.Struct({
+  maxDepth: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  maxToolCalls: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  maxInboxMessages: Schema.Int.check(Schema.isGreaterThanOrEqualTo(2)),
+})
+export const DEFAULT_DELEGATION_LIMITS = { maxDepth: 4, maxToolCalls: 20, maxInboxMessages: 64 } as const
+export const Reservation = Schema.Struct({
+  requestId: Schema.NonEmptyString,
+  parentThreadId: Schema.NonEmptyString,
+  parentRunId: Schema.NonEmptyString,
+  targetActor: Schema.NonEmptyString,
+  lineage: Schema.Array(Schema.NonEmptyString),
+  toolCalls: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  limits: DelegationLimits,
+  prompt: Prompt.Prompt,
+  output: Schema.optionalKey(OutputDeclaration),
+  model: Schema.optionalKey(ModelGrant),
+})
 export const ChildBinding = Schema.Struct({
   delegationId: Schema.NonEmptyString,
   parentThreadId: ThreadId,
@@ -59,7 +77,34 @@ export const ChildBinding = Schema.Struct({
 })
 export const ChildAdmission = Schema.Struct({ binding: ChildBinding, closed: Schema.Boolean, reason: Schema.NullOr(Schema.NonEmptyString) })
 export const ChildReservedState = Schema.TaggedStruct("ChildReserved", { ...Ownership.fields, ...ChildAdmission.fields })
+export const ForkOrigin = Schema.Struct({ sourceThreadId: ThreadId, throughSeq: Schema.Int.check(Schema.isGreaterThan(0)), prefixDigest: Schema.NonEmptyString, version: Schema.Literal(1) })
+export const ForkSnapshot = Schema.Struct({
+  origin: ForkOrigin,
+  actor: Schema.NonEmptyString,
+  instance: Schema.NonEmptyString,
+  name: Schema.NonEmptyString,
+  ...Ownership.fields,
+  limits: RunLimits,
+  history: Prompt.Prompt,
+})
+export const BackgroundReservation = Schema.Struct({
+  binding: ChildBinding,
+  childThreadId: ThreadId,
+  reservation: Reservation,
+  maxChildren: Schema.Int.check(Schema.isGreaterThan(0)),
+  tokens: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  mutation: Schema.Boolean,
+})
+export const BackgroundResolution = Schema.Struct({ resolution: Schema.Literals(["succeeded", "failed", "cancelled"]), evidence: Schema.NonEmptyString })
+export const BackgroundChild = Schema.Struct({
+  request: BackgroundReservation,
+  status: Schema.Literals(["reserved", "running", "cancel_requested", "completed", "failed", "cancelled", "unknown", "reconciled"]),
+  cancelReason: Schema.NullOr(Schema.NonEmptyString),
+  receipt: Schema.NullOr(Receipt),
+  resolution: Schema.NullOr(BackgroundResolution),
+})
 export const OpenState = Schema.TaggedStruct("Open", {
+  fork: Schema.optionalKey(ForkSnapshot),
   actor: Schema.NonEmptyString,
   instance: Schema.NonEmptyString,
   name: Schema.NonEmptyString,
@@ -70,6 +115,7 @@ export const OpenState = Schema.TaggedStruct("Open", {
   receipts: Schema.Array(Receipt),
   lastReceipt: Schema.NullOr(Receipt),
   child: Schema.NullOr(ChildAdmission),
+  background: Schema.Array(BackgroundChild).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
 })
 export const ThreadState = Schema.Union([Schema.TaggedStruct("Unopened", {}), ChildReservedState, OpenState])
 export { Prompt, Response }
