@@ -1,13 +1,10 @@
 import { SpillCatalog } from "@clavia/tardigrade-domain/Spill/Spill.aggregate"
 import { Workspace } from "@clavia/tardigrade-domain/Workspace/Workspace.aggregate"
 import { expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
 import * as Domain from "@alchemy.run/domain"
-import { BunHttpServer } from "@effect/platform-bun"
+import { BunHttpServer, BunServices } from "@effect/platform-bun"
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient"
-import { Cause, ConfigProvider, Context, Deferred, Duration, Effect, Exit, Layer, Ref, Schedule } from "effect"
+import { Cause, ConfigProvider, Context, Deferred, Duration, Effect, Exit, FileSystem, Layer, Path, Ref, Schedule } from "effect"
 import { Prompt } from "effect/ai"
 import { ClusterWorkflowEngine, SingleRunner } from "effect/cluster"
 import { Digest } from "effect/crypto"
@@ -39,15 +36,16 @@ const ParentExecutionLive = ParentExecution.toLayer(Effect.fn("Fixture.codeParen
 const StateModel = Domain.Model("CodeAdmissionStateTest", { aggregates: [Thread, CodeExecution, Delegation, Workspace, SpillCatalog] })
 
 test("native code admission preserves uncertainty on parent cancellation and rejects conflicting proposals", () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
-  const directory = yield* Effect.acquireRelease(
-    Effect.promise(() => mkdtemp(join(tmpdir(), "tardigrade-code-admission-"))),
-    path => Effect.promise(() => rm(path, { recursive: true, force: true })),
-  )
+  const services = yield* Layer.build(BunServices.layer)
+  const fs = Context.get(services, FileSystem.FileSystem)
+  const path = Context.get(services, Path.Path)
+  const directory = yield* fs.makeTempDirectoryScoped({ prefix: "tardigrade-code-admission-" })
   const stateContext = yield* Layer.build(StateModel.layer(Layer.empty).pipe(Layer.provide(Domain.InMemory)))
   const threads = Context.get(stateContext, Thread)
   const codes = Context.get(stateContext, CodeExecution)
   const tokenConfig = Layer.succeed(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown({ RUNNER_TO_DOMAIN_TOKEN: "admission-fixture-token" }))
-  const endpoint = yield* internalApi.pipe(Effect.provide(Layer.succeedContext(stateContext)), Effect.provide(tokenConfig))
+  const configContext = yield* Layer.build(tokenConfig)
+  const endpoint = yield* internalApi.pipe(Effect.provide(Context.merge(stateContext, configContext)))
   const serverContext = yield* Layer.build(HttpServer.serve()(endpoint).pipe(Layer.provideMerge(BunHttpServer.layer({ hostname: "127.0.0.1", port: 0 }))))
   const server = Context.get(serverContext, HttpServer.HttpServer)
   if (server.address._tag === "UnixPathAddress") return yield* Effect.die("Expected TCP server")
@@ -72,19 +70,20 @@ test("native code admission preserves uncertainty on parent cancellation and rej
   const runner = Layer.mergeAll(ExecuteCodeLive, RunCodeLive, ParentExecutionLive).pipe(
     Layer.provide(DomainClientLive), Layer.provide(CodeRuntimeLive), Layer.provide(methods),
     Layer.provideMerge(ClusterWorkflowEngine.layer.pipe(Layer.provideMerge(SingleRunner.layer({ shardingConfig: { entityMessagePollInterval: Duration.millis(20) } })))),
-    Layer.provide(SqliteClient.layer({ filename: join(directory, "runner.sqlite") })),
+    Layer.provide(SqliteClient.layer({ filename: path.join(directory, "runner.sqlite") })),
     Layer.provide(Digest.layerWebCrypto), Layer.provide(config),
   )
+  const runnerContext = yield* Layer.build(runner)
   yield* Effect.gen(function* () {
-    yield* threads.send("parent", new OpenThread({ actor: "agent", instance: "instance", name: "main", limits: DEFAULT_RUN_LIMITS }))
-    yield* threads.send("parent", new RequestRun({ runId: "run", digest: "run", prompt: Prompt.make("Run code") }))
+    yield* threads.send("parent", OpenThread.make({ actor: "agent", instance: "instance", name: "main", limits: DEFAULT_RUN_LIMITS }))
+    yield* threads.send("parent", RequestRun.make({ runId: "run", digest: "run", prompt: Prompt.make("Run code") }))
     const request = CodeInput.make({ threadId: "parent", runId: "run", digest: "live", code: "return await tools.mutate();", catalog: { tools: ["mutate"] }, ambient: { at: 123, seed: "live" }, limits: DEFAULT_CODE_LIMITS })
     const payload = { key: codeExecutionKey("alice", "live"), executionId: "live", owner: "alice", request }
     const parentId = yield* ParentExecution.execute(payload, { discard: true })
     yield* Deferred.await(entered).pipe(Effect.timeout("5 seconds"))
     const dispatched = yield* codes.state("live")
     expect(dispatched._tag === "Open" && dispatched.calls[0]?.status).toBe("dispatched")
-    yield* threads.send("parent", new CancelRun({ runId: "run", reason: "User cancelled parent" }))
+    yield* threads.send("parent", CancelRun.make({ runId: "run", reason: "User cancelled parent" }))
     const engine = yield* WorkflowEngine.WorkflowEngine
     yield* engine.interruptUnsafe(ParentExecution, parentId).pipe(Effect.timeout("3 seconds"))
 
@@ -94,35 +93,41 @@ test("native code admission preserves uncertainty on parent cancellation and rej
     }).pipe(Effect.timeout("5 seconds"))
 
     expect(cancelled._tag === "Open" && cancelled.calls[0]?.status).toBe("unknown")
-    expect(yield* Ref.get(calls)).toBe(1)
+    const observed1 = yield* Ref.get(calls)
+    expect(observed1).toBe(1)
     yield* Deferred.succeed(blocked, undefined)
-    expect((yield* codes.state("live"))).toEqual(cancelled)
+    const liveAfterRelease = yield* codes.state("live")
+    expect(liveAfterRelease).toEqual(cancelled)
 
-    yield* threads.send("admission", new OpenThread({ actor: "agent", instance: "instance", name: "admission", limits: DEFAULT_RUN_LIMITS }))
-    yield* threads.send("admission", new RequestRun({ runId: "run", digest: "admission", prompt: Prompt.make("Validate proposals") }))
+    yield* threads.send("admission", OpenThread.make({ actor: "agent", instance: "instance", name: "admission", limits: DEFAULT_RUN_LIMITS }))
+    yield* threads.send("admission", RequestRun.make({ runId: "run", digest: "admission", prompt: Prompt.make("Validate proposals") }))
     const successRequest = { ...request, threadId: "admission", digest: "success", code: "return 42;" }
     const success = yield* RunCode.execute({ key: codeExecutionKey("alice", "success"), executionId: "success", owner: "alice", request: successRequest }).pipe(Effect.timeout("5 seconds"))
     expect(success.outcome).toEqual({ _tag: "Returned", value: 42 })
     const admitted = yield* codes.state("success")
     expect(admitted._tag === "Open" && admitted.status).toBe("completed")
     const conflictingRequest = { ...request, threadId: "admission", digest: "existing", code: "return 1;" }
-    yield* codes.send("conflict", new RequestCode(conflictingRequest))
+    yield* codes.send("conflict", RequestCode.make(conflictingRequest))
     const existing = yield* codes.state("conflict")
 
     const conflict = yield* RunCode.execute({ key: codeExecutionKey("alice", "conflict"), executionId: "conflict", owner: "alice", request: { ...conflictingRequest, code: "return 2;" } }).pipe(Effect.timeout("5 seconds"), Effect.exit)
     if (Exit.isFailure(conflict)) expect(Cause.hasDies(conflict.cause)).toBe(true)
     expect(Exit.isFailure(conflict)).toBe(true)
-    expect(yield* codes.state("conflict")).toEqual(existing)
+    const observed2 = yield* codes.state("conflict")
+    expect(observed2).toEqual(existing)
     const wrongOwner = yield* RunCode.execute({ key: codeExecutionKey("bob", "conflict"), executionId: "conflict", owner: "bob", request: conflictingRequest }).pipe(Effect.timeout("5 seconds"), Effect.exit)
     if (Exit.isFailure(wrongOwner)) expect(Cause.hasDies(wrongOwner.cause)).toBe(true)
     expect(Exit.isFailure(wrongOwner)).toBe(true)
-    expect(yield* codes.state("conflict")).toEqual(existing)
-    yield* codes.send("foreign", new RequestCode(conflictingRequest)).pipe(Effect.provideService(CurrentCaller, { subject: "bob" }))
+    const observed3 = yield* codes.state("conflict")
+    expect(observed3).toEqual(existing)
+    yield* codes.send("foreign", RequestCode.make(conflictingRequest)).pipe(Effect.provideService(CurrentCaller, { subject: "bob" }))
     const foreign = yield* codes.state("foreign")
     const foreignAdmission = yield* RunCode.execute({ key: codeExecutionKey("alice", "foreign"), executionId: "foreign", owner: "alice", request: conflictingRequest }).pipe(Effect.timeout("5 seconds"), Effect.exit)
     if (Exit.isFailure(foreignAdmission)) expect(Cause.hasDies(foreignAdmission.cause)).toBe(true)
     expect(Exit.isFailure(foreignAdmission)).toBe(true)
-    expect(yield* codes.state("foreign")).toEqual(foreign)
-    expect(yield* Ref.get(calls)).toBe(1)
-  }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(runner))
+    const observed4 = yield* codes.state("foreign")
+    expect(observed4).toEqual(foreign)
+    const observed5 = yield* Ref.get(calls)
+    expect(observed5).toBe(1)
+  }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(runnerContext))
 }))), 20_000)

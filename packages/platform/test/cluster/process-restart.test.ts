@@ -1,12 +1,9 @@
 import { expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import * as Domain from "@alchemy.run/domain"
 import { BunHttpServer, BunServices } from "@effect/platform-bun"
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient"
-import { Cause, ConfigProvider, Context, Effect, Exit, Layer, Option, Result, Schedule, Schema, Scope } from "effect"
+import { Array as Arr, Cause, ConfigProvider, Context, Effect, Exit, FileSystem, Layer, Path, Option, Result, Schedule, Schema, Scope, String as Str } from "effect"
 import { Prompt } from "effect/ai"
 import { FetchHttpClient, HttpServer } from "effect/http"
 import { RpcClient, RpcSerialization } from "effect/rpc"
@@ -31,37 +28,37 @@ const Counts = Schema.Array(Schema.Struct({ kind: Schema.String, count: Schema.I
 
 for (const mode of ["approval", "unknown"] as const) {
   test(`actual SIGKILL runner recovery preserves ${mode} execution evidence`, () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
-    const directory = yield* Effect.acquireRelease(
-      Effect.promise(() => mkdtemp(join(tmpdir(), "tardigrade-process-restart-"))),
-      path => Effect.promise(() => rm(path, { recursive: true, force: true })),
-    )
+    const services = yield* Layer.build(BunServices.layer)
+    const fs = Context.get(services, FileSystem.FileSystem)
+    const path = Context.get(services, Path.Path)
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "tardigrade-process-restart-" })
     const children = yield* Effect.acquireRelease(Scope.make(), scope => Scope.close(scope, Exit.void))
-    const databasePath = join(directory, "runner.sqlite")
+    const databasePath = path.join(directory, "runner.sqlite")
     const domainServerContext = yield* Layer.build(BunHttpServer.layer({ hostname: "127.0.0.1", port: 0 }))
     const domainServer = Context.get(domainServerContext, HttpServer.HttpServer)
     if (domainServer.address._tag === "UnixPathAddress") return yield* Effect.die("Expected TCP Domain listener")
     const domainUrl = `http://127.0.0.1:${domainServer.address.port}`
     const launch = Effect.fn("ProcessRestart.launch")(function* (attempt: number, port: number) {
-      const readyFile = join(directory, `ready-${attempt}.json`)
+      const readyFile = path.join(directory, `ready-${attempt}.json`)
       const child = yield* ChildProcess.make(process.execPath, ["--no-env-file", fixture], {
         cwd: repository,
         env: {
           FIXTURE_MODE: mode,
           FIXTURE_READY_FILE: readyFile,
           TARDIGRADE_RUNNER_DB: databasePath,
-          TARDIGRADE_ARTIFACT_DB: join(directory, "artifacts.sqlite"),
+          TARDIGRADE_ARTIFACT_DB: path.join(directory, "artifacts.sqlite"),
           TARDIGRADE_RUNNER_PORT: String(port),
           TARDIGRADE_DOMAIN_URL: domainUrl,
           RUNNER_TO_DOMAIN_TOKEN: domainToken,
           WORKER_TO_RUNNER_TOKEN: runnerToken,
         },
         stdout: "ignore", stderr: "inherit", killSignal: "SIGKILL",
-      }).pipe(Effect.provideService(Scope.Scope, children))
+      }).pipe(Effect.provideService(Scope.Scope, children), Effect.provide(services))
       yield* Effect.repeat(Effect.gen(function* () {
         if (!(yield* child.isRunning)) return yield* Effect.die("Runner stopped before readiness")
-        return yield* Effect.promise(() => Bun.file(readyFile).exists())
+        return yield* fs.exists(readyFile)
       }), { until: exists => exists, schedule: Schedule.spaced("10 millis") }).pipe(Effect.timeout("10 seconds"))
-      const ready = yield* Effect.promise(() => Bun.file(readyFile).text()).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(RunnerReady))))
+      const ready = yield* fs.readFileString(readyFile).pipe(Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(RunnerReady))))
       expect(ready.modelHosted).toBe(false)
       expect(ready.pid).toBe(Number(child.pid))
       return { child, ready }
@@ -74,7 +71,8 @@ for (const mode of ["approval", "unknown"] as const) {
     }))
     const stateContext = yield* Layer.build(ActorModel.layer(ActorPoliciesLive).pipe(Layer.provide(Domain.InMemory), Layer.provide(config)))
     const threads = Context.get(stateContext, Thread)
-    const endpoint = yield* internalApi.pipe(Effect.provide(stateContext), Effect.provide(config))
+    const configContext = yield* Layer.build(config)
+    const endpoint = yield* internalApi.pipe(Effect.provide(Context.merge(stateContext, configContext)))
     yield* Layer.build(HttpServer.serve()(endpoint).pipe(Layer.provide(Layer.succeedContext(domainServerContext))))
     const database = yield* Layer.build(SqliteClient.layer({ filename: databasePath }))
     const sql = Context.get(database, SqlClient.SqlClient)
@@ -87,10 +85,11 @@ for (const mode of ["approval", "unknown"] as const) {
           until: state => state._tag === "Open" && state.active?.status === "awaiting_approval",
           schedule: Schedule.spaced("10 millis"),
         }).pipe(Effect.timeout("10 seconds"))
-        expect(yield* counts).toEqual([{ kind: "infer", count: 1 }])
+        const observed1 = yield* counts
+        expect(observed1).toEqual([{ kind: "infer", count: 1 }])
       } else {
         yield* Effect.repeat(counts, {
-          until: values => values.some(value => value.kind === "invoke" && value.count === 1),
+          until: values => Arr.some(values, value => value.kind === "invoke" && value.count === 1),
           schedule: Schedule.spaced("10 millis"),
         }).pipe(Effect.timeout("10 seconds"))
         const state = yield* threads.state(mode)
@@ -100,7 +99,8 @@ for (const mode of ["approval", "unknown"] as const) {
       const killed = yield* first.child.exitCode.pipe(Effect.exit)
       expect(Exit.isFailure(killed)).toBe(true)
       if (Exit.isFailure(killed)) expect(Cause.pretty(killed.cause)).toContain("SIGKILL")
-      expect(yield* first.child.isRunning).toBe(false)
+      const observed2 = yield* first.child.isRunning
+      expect(observed2).toBe(false)
       const restarted = yield* launch(2, first.ready.port)
       expect(restarted.child.pid).not.toBe(first.child.pid)
       if (mode === "approval") {
@@ -110,7 +110,8 @@ for (const mode of ["approval", "unknown"] as const) {
           schedule: Schedule.spaced("10 millis"),
         }).pipe(Effect.timeout("10 seconds"))
         expect(completed._tag === "Open" && completed.active?.text).toBe("Stored 42 after restart.")
-        expect(yield* counts).toEqual([{ kind: "infer", count: 2 }, { kind: "invoke", count: 1 }])
+        const observed3 = yield* counts
+        expect(observed3).toEqual([{ kind: "infer", count: 2 }, { kind: "invoke", count: 1 }])
       } else {
         const unknown = yield* Effect.repeat(threads.state(mode), {
           until: state => state._tag === "Open" && state.active?.status === "unknown",
@@ -118,27 +119,30 @@ for (const mode of ["approval", "unknown"] as const) {
         }).pipe(Effect.timeout("10 seconds"))
         expect(unknown._tag === "Open" && unknown.active?.step?.stepId).toBe("run:2")
         const scope = { threadId: mode, runId: "run", owner: "alice" }
+        const protocol = RpcClient.layerProtocolHttp({ url: `http://127.0.0.1:${restarted.ready.port}` }).pipe(
+          Layer.provide(Layer.mergeAll(FetchHttpClient.layer, RpcSerialization.layerNdjson)),
+        )
+        const protocolContext = yield* Layer.build(protocol)
         const complete = yield* Effect.scoped(Effect.gen(function* () {
           const client = yield* RpcClient.make(RunRpcs)
           return yield* Effect.repeat(client.PollRun({ ...scope, key: executionKey(scope) }, { headers: { authorization: `Bearer ${runnerToken}` } }), {
             until: result => Option.isSome(result) && result.value._tag === "Complete",
             schedule: Schedule.spaced("10 millis"),
           }).pipe(Effect.timeout("10 seconds"))
-        })).pipe(Effect.provide(RpcClient.layerProtocolHttp({ url: `http://127.0.0.1:${restarted.ready.port}` }).pipe(
-          Layer.provide(Layer.mergeAll(FetchHttpClient.layer, RpcSerialization.layerNdjson)),
-        )))
+        })).pipe(Effect.provide(protocolContext))
         expect(Option.isSome(complete) && complete.value._tag === "Complete").toBe(true)
         const blocked = yield* threads.send(mode, RequestRun.make({ runId: "later", digest: "later", prompt: Prompt.make("Another mutation") })).pipe(Effect.result)
         expect(Result.isFailure(blocked)).toBe(true)
         if (Result.isFailure(blocked) && blocked.failure._tag === "RunRejected") expect(blocked.failure.reason).toBe("RunBusy")
-        expect(yield* counts).toEqual([{ kind: "infer", count: 1 }, { kind: "invoke", count: 1 }])
+        const observed4 = yield* counts
+        expect(observed4).toEqual([{ kind: "infer", count: 1 }, { kind: "invoke", count: 1 }])
       }
       const messages = yield* sql`SELECT payload, headers FROM cluster_messages`.pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ payload: Schema.NullOr(Schema.String), headers: Schema.NullOr(Schema.String) })))))
       const replies = yield* sql`SELECT payload FROM cluster_replies`.pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ payload: Schema.NullOr(Schema.String) })))))
       for (const token of [domainToken, runnerToken]) {
-        expect(messages.some(row => row.payload?.includes(token) || row.headers?.includes(token))).toBe(false)
-        expect(replies.some(row => row.payload?.includes(token))).toBe(false)
+        expect(Arr.some(messages, row => row.payload !== null && Str.includes(token)(row.payload) || row.headers !== null && Str.includes(token)(row.headers))).toBe(false)
+        expect(Arr.some(replies, row => row.payload !== null && Str.includes(token)(row.payload))).toBe(false)
       }
     }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
-  })).pipe(Effect.provide(BunServices.layer))), 30_000)
+  }))), 30_000)
 }

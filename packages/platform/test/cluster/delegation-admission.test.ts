@@ -1,13 +1,10 @@
 import { SpillCatalog } from "@clavia/tardigrade-domain/Spill/Spill.aggregate"
 import { Workspace } from "@clavia/tardigrade-domain/Workspace/Workspace.aggregate"
 import { expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
 import * as Domain from "@alchemy.run/domain"
-import { BunHttpServer } from "@effect/platform-bun"
+import { BunHttpServer, BunServices } from "@effect/platform-bun"
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient"
-import { Cause, ConfigProvider, Context, Duration, Effect, Exit, Layer, Schedule } from "effect"
+import { Array as Arr, Cause, ConfigProvider, Context, Duration, Effect, Exit, FileSystem, Layer, Path, Schedule } from "effect"
 import { Prompt } from "effect/ai"
 import { ClusterWorkflowEngine, SingleRunner } from "effect/cluster"
 import { Digest } from "effect/crypto"
@@ -49,15 +46,16 @@ const ParentLive = Parent.toLayer(Effect.fn("Fixture.delegationParent")(function
 }))
 
 test("delegation admission returns actual child state and fences cancellation without accepting drift", () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
-  const directory = yield* Effect.acquireRelease(
-    Effect.promise(() => mkdtemp(join(tmpdir(), "tardigrade-delegation-admission-"))),
-    path => Effect.promise(() => rm(path, { recursive: true, force: true })),
-  )
+  const services = yield* Layer.build(BunServices.layer)
+  const fs = Context.get(services, FileSystem.FileSystem)
+  const path = Context.get(services, Path.Path)
+  const directory = yield* fs.makeTempDirectoryScoped({ prefix: "tardigrade-delegation-admission-" })
   const stateContext = yield* Layer.build(StateModel.layer(Layer.empty).pipe(Layer.provide(Domain.InMemory)))
   const threads = Context.get(stateContext, Thread)
   const delegations = Context.get(stateContext, Delegation)
   const tokenConfig = Layer.succeed(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown({ RUNNER_TO_DOMAIN_TOKEN: "delegation-admission-token" }))
-  const endpoint = yield* internalApi.pipe(Effect.provide(Layer.succeedContext(stateContext)), Effect.provide(tokenConfig))
+  const configContext = yield* Layer.build(tokenConfig)
+  const endpoint = yield* internalApi.pipe(Effect.provide(Context.merge(stateContext, configContext)))
   const serverContext = yield* Layer.build(HttpServer.serve()(endpoint).pipe(Layer.provideMerge(BunHttpServer.layer({ hostname: "127.0.0.1", port: 0 }))))
   const server = Context.get(serverContext, HttpServer.HttpServer)
   if (server.address._tag === "UnixPathAddress") return yield* Effect.die("Expected TCP server")
@@ -67,12 +65,13 @@ test("delegation admission returns actual child state and fences cancellation wi
   const runner = Layer.mergeAll(RunDelegationLive, ExecuteDelegationLive, ChildLive, ParentLive).pipe(
     Layer.provide(DomainClientLive),
     Layer.provideMerge(ClusterWorkflowEngine.layer.pipe(Layer.provideMerge(SingleRunner.layer({ shardingConfig: { entityMessagePollInterval: Duration.millis(20) } })))),
-    Layer.provide(SqliteClient.layer({ filename: join(directory, "runner.sqlite") })),
+    Layer.provide(SqliteClient.layer({ filename: path.join(directory, "runner.sqlite") })),
     Layer.provide(Digest.layerWebCrypto), Layer.provide(config),
   )
+  const runnerContext = yield* Layer.build(runner)
   yield* Effect.gen(function* () {
-    yield* threads.send("parent", new OpenThread({ actor: "agent", instance: "instance", name: "main", limits: DEFAULT_RUN_LIMITS }))
-    yield* threads.send("parent", new RequestRun({ runId: "run", digest: "run", prompt: Prompt.make("Delegate") }))
+    yield* threads.send("parent", OpenThread.make({ actor: "agent", instance: "instance", name: "main", limits: DEFAULT_RUN_LIMITS }))
+    yield* threads.send("parent", RequestRun.make({ runId: "run", digest: "run", prompt: Prompt.make("Delegate") }))
     const reservation = Reservation.make({ requestId: "child", parentThreadId: "parent", parentRunId: "run", targetActor: "child-agent", lineage: ["parent"], toolCalls: 1, limits: DEFAULT_DELEGATION_LIMITS, prompt: Prompt.make("Complete work") })
     const id = delegationKey("parent", "run", "child")
     const payload = { key: delegationExecutionKey("alice", id), delegationId: id, owner: "alice", reservation }
@@ -88,19 +87,21 @@ test("delegation admission returns actual child state and fences cancellation wi
     const actual = yield* delegations.state(id)
     if (actual._tag !== "Reserved") return yield* Effect.die("Expected admitted delegation")
     expect(completed).toEqual(actual)
-    expect(completed.inbox.some(entry => entry.content._tag === "Result" && entry.content.outcome.receipt?.text === "Child completed")).toBe(true)
+    expect(Arr.some(completed.inbox, entry => entry.content._tag === "Result" && entry.content.outcome.receipt?.text === "Child completed")).toBe(true)
     const conflictReservation = { ...reservation, requestId: "conflict" }
     const conflictId = delegationKey("parent", "run", "conflict")
-    yield* delegations.send(conflictId, new ReserveDelegation(conflictReservation))
+    yield* delegations.send(conflictId, ReserveDelegation.make(conflictReservation))
     const before = yield* delegations.state(conflictId)
     const conflict = yield* RunDelegation.execute({ key: delegationExecutionKey("alice", conflictId), delegationId: conflictId, owner: "alice", reservation: { ...conflictReservation, targetActor: "another-child" } }).pipe(Effect.timeout("5 seconds"), Effect.exit)
     expect(Exit.isFailure(conflict)).toBe(true)
     if (Exit.isFailure(conflict)) expect(Cause.hasDies(conflict.cause)).toBe(true)
-    expect(yield* delegations.state(conflictId)).toEqual(before)
+    const observed1 = yield* delegations.state(conflictId)
+    expect(observed1).toEqual(before)
     const wrongOwner = yield* RunDelegation.execute({ key: delegationExecutionKey("bob", conflictId), delegationId: conflictId, owner: "bob", reservation: conflictReservation }).pipe(Effect.timeout("5 seconds"), Effect.exit)
     expect(Exit.isFailure(wrongOwner)).toBe(true)
     if (Exit.isFailure(wrongOwner)) expect(Cause.hasDies(wrongOwner.cause)).toBe(true)
-    expect(yield* delegations.state(conflictId)).toEqual(before)
+    const observed2 = yield* delegations.state(conflictId)
+    expect(observed2).toEqual(before)
     const cancelReservation = { ...reservation, requestId: "cancel" }
     const cancelId = delegationKey("parent", "run", "cancel")
     const cancelPayload = { key: delegationExecutionKey("alice", cancelId), delegationId: cancelId, owner: "alice", reservation: cancelReservation }
@@ -109,7 +110,7 @@ test("delegation admission returns actual child state and fences cancellation wi
       until: state => state._tag === "Open" && state.active?.runId === "cancel",
       schedule: Schedule.spaced("10 millis"),
     }).pipe(Effect.timeout("5 seconds"))
-    yield* threads.send("parent", new CancelRun({ runId: "run", reason: "User cancelled delegation parent" }))
+    yield* threads.send("parent", CancelRun.make({ runId: "run", reason: "User cancelled delegation parent" }))
     const engine = yield* WorkflowEngine.WorkflowEngine
     yield* engine.interruptUnsafe(Parent, parentId)
     const fenced = yield* Effect.repeat(threads.state(cancelId), {
@@ -121,6 +122,6 @@ test("delegation admission returns actual child state and fences cancellation wi
       until: state => state._tag === "Reserved" && state.status === "cancelled",
       schedule: Schedule.spaced("10 millis"),
     }).pipe(Effect.timeout("5 seconds"))
-    expect(cancelled._tag === "Reserved" && cancelled.inbox.some(entry => entry.content._tag === "Result")).toBe(true)
-  }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(runner))
+    expect(cancelled._tag === "Reserved" && Arr.some(cancelled.inbox, entry => entry.content._tag === "Result")).toBe(true)
+  }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(runnerContext))
 }))), 20_000)
