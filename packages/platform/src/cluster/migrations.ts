@@ -62,5 +62,9 @@ export const DomainSchemaLive = SqliteMigrator.layer({
         PRIMARY KEY (model, block, instance, source)
       )`
     }),
+    "0002_receipt_identity": Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient
+      yield* sql`ALTER TABLE tardigrade_domain_receipts ADD COLUMN command TEXT`
+    }),
   }),
 })

@@ -1,10 +1,12 @@
 import type { AggregateKit } from "@alchemy.run/domain/Platform"
 import { EnvelopeJson } from "@alchemy.run/domain/Platform"
 import { TraceJson } from "@alchemy.run/domain/Telemetry"
-import { Clock, Effect, Layer, Schema, SubscriptionRef } from "effect"
+import { Clock, Effect, Layer, Schema, Semaphore, SubscriptionRef } from "effect"
 import { ClusterSchema, Entity, Sharding } from "effect/cluster"
 import { Rpc } from "effect/rpc"
 import { SqlClient } from "effect/sql"
+
+export class ReceiptAccessDenied extends Schema.TaggedError<ReceiptAccessDenied>()("ReceiptAccessDenied", {}) {}
 
 const Snapshot = Schema.Struct({ state: Schema.Unknown, version: Schema.Int })
 const Entry = Schema.Struct({ event: Schema.Unknown, envelope: EnvelopeJson })
@@ -25,7 +27,7 @@ export const aggregateEntity = Effect.fn("DomainCluster.aggregate")(function* (m
   const sql = yield* SqlClient.SqlClient
   const sharding = yield* Sharding.Sharding
   const entity = Entity.make(`${model.length}:${model}aggregate:${kit.name}`, [
-    Rpc.make("Send", { payload: { command: Schema.Unknown, meta: SendMeta }, success: SendResult }).annotate(ClusterSchema.Persisted, true),
+    Rpc.make("Send", { payload: { command: Schema.Unknown, meta: SendMeta }, success: SendResult, error: ReceiptAccessDenied }).annotate(ClusterSchema.Persisted, true),
     Rpc.make("State", { success: Snapshot }),
     Rpc.make("Events", { success: Schema.Array(Entry) }),
     Rpc.make("Changes", { success: Snapshot, stream: true }),
@@ -47,23 +49,24 @@ export const aggregateEntity = Effect.fn("DomainCluster.aggregate")(function* (m
     const address = yield* Entity.CurrentAddress
     const instance = address.entityId
     const snapshot = yield* SubscriptionRef.make(yield* readState(instance))
+    const writes = yield* Semaphore.make(1)
     return {
       State: () => readState(instance),
       Events: () => readEvents(instance),
       Changes: () => SubscriptionRef.changes(snapshot),
       Send: ({ payload }) => Effect.gen(function* () {
         const result = yield* sql.withTransaction(Effect.gen(function* () {
-          const duplicates = yield* sql`SELECT receipt, context FROM tardigrade_domain_receipts WHERE model = ${model} AND block = ${kit.name} AND instance = ${instance} AND command_id = ${payload.meta.commandId}`
-          const receipts = yield* Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ receipt: Schema.String, context: Schema.String })))(duplicates).pipe(Effect.orDie)
+          const duplicates = yield* sql`SELECT receipt, context, command FROM tardigrade_domain_receipts WHERE model = ${model} AND block = ${kit.name} AND instance = ${instance} AND command_id = ${payload.meta.commandId}`
+          const receipts = yield* Schema.decodeUnknownEffect(Schema.Array(Schema.Struct({ receipt: Schema.String, context: Schema.String, command: Schema.NullOr(Schema.String) })))(duplicates).pipe(Effect.orDie)
           const receipt = receipts[0]
           if (receipt !== undefined) {
+            if (receipt.command === null) return yield* new ReceiptAccessDenied()
             const context = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)))(receipt.context).pipe(Effect.orDie)
-            if (!Schema.toEquivalence(Schema.Record(Schema.String, Schema.Unknown))(context, payload.meta.context)) {
-              const current = yield* readState(instance)
-              const now = yield* Clock.currentTimeMillis
-              const authorized = yield* kit.handle({ id: instance, state: current.state, version: current.version, command: payload.command, now, ...payload.meta })
-              if (authorized._tag === "Rejected") return authorized
-            }
+            const command = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(receipt.command).pipe(Effect.orDie)
+            if (!Schema.toEquivalence(Schema.Record(Schema.String, Schema.Unknown))(context, payload.meta.context) || !Schema.toEquivalence(Schema.Unknown)(command, payload.command)) return yield* new ReceiptAccessDenied()
+            const current = yield* readState(instance)
+            const access = yield* kit.push(instance, { requestId: "receipt", mode: "watch", context: payload.meta.context, cursor: -1 }, current, [])
+            if (access.done) return yield* new ReceiptAccessDenied()
             return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(SendResult))(receipt.receipt).pipe(Effect.orDie)
           }
           const current = yield* readState(instance)
@@ -83,13 +86,14 @@ export const aggregateEntity = Effect.fn("DomainCluster.aggregate")(function* (m
           const accepted = { _tag: "Accepted" as const, receipt: { stream: `${kit.name}/${instance}`, version: decided.version, events: decided.events.map(event => event.event), reply: decided.reply } }
           const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(SendResult))(accepted).pipe(Effect.orDie)
           const context = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)))(payload.meta.context).pipe(Effect.orDie)
-          yield* sql`INSERT INTO tardigrade_domain_receipts (model, block, instance, command_id, receipt, context) VALUES (${model}, ${kit.name}, ${instance}, ${payload.meta.commandId}, ${encoded}, ${context})`
+          const command = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(payload.command).pipe(Effect.orDie)
+          yield* sql`INSERT INTO tardigrade_domain_receipts (model, block, instance, command_id, receipt, context, command) VALUES (${model}, ${kit.name}, ${instance}, ${payload.meta.commandId}, ${encoded}, ${context}, ${command})`
           return accepted
-        })).pipe(Effect.orDie)
+        })).pipe(Effect.catchTag("SqlError", Effect.die))
         yield* SubscriptionRef.set(snapshot, yield* readState(instance))
         return result
-      }),
+      }).pipe(writes.withPermits(1)),
     }
-  }), { concurrency: 1 }).pipe(Layer.provide(Layer.succeed(Sharding.Sharding, sharding))))
+  }), { concurrency: "unbounded" }).pipe(Layer.provide(Layer.succeed(Sharding.Sharding, sharding))))
   return yield* entity.client
 })
