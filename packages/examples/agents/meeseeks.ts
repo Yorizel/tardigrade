@@ -14,7 +14,6 @@ export const MeeseeksRequest = Schema.Struct({
   actor: Schema.NonEmptyString,
   instance: Schema.NonEmptyString,
   name: Schema.NonEmptyString,
-  instructions: Schema.NonEmptyString,
   text: Schema.NonEmptyString,
   limits: RunLimits,
 })
@@ -23,7 +22,7 @@ export class MeeseeksInterrupted extends Schema.TaggedError<MeeseeksInterrupted,
 export const meeseeks = Effect.fn("ExampleMeeseeks.message")(function* (request: typeof MeeseeksRequest.Type, headers: Headers.Input) {
   const api = yield* ActorApi.Client
   yield* api.OpenThread(request.threadId, { actor: request.actor, instance: request.instance, name: request.name, limits: request.limits }, { headers })
-  const prompt = Prompt.make([{ role: "system", content: request.instructions }, { role: "user", content: request.text }])
+  const prompt = Prompt.make(request.text)
   const digest = yield* Digest.Digest
   const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Prompt.Prompt))(prompt)
   const runRequest = {

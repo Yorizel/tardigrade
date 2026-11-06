@@ -29,6 +29,7 @@ import { RunCodeLive } from "@clavia/tardigrade-domain/Code/RunCode.saga"
 import { ExecuteRunLive } from "@clavia/tardigrade-domain/Execution/ExecuteRun.saga"
 import { runKey, ExecuteRun, executionKey } from "@clavia/tardigrade-domain/Execution/Run.workflow"
 import { FetchGet, FetchResponse } from "../../src/cluster/fetch-tool"
+import { AgentExecution } from "@clavia/tardigrade-domain/Execution/AgentExecution.external"
 import { AgentExecutionLive, CodeMethodsLive } from "../../../../examples/alchemy/AgentExecution"
 import { internalApi } from "../../src/alchemy/internal"
 import { ActorPoliciesLive } from "../../src/alchemy/policies"
@@ -52,7 +53,7 @@ import { GrepSpills, ReadSpill } from "../../src/cluster/spill-tools"
 
 const ToolCodeResult = Schema.Struct({ outcome: CodeOutcome, logs: Schema.Array(Schema.String) })
 
-test.each(["output-valid", "output-invalid", "output-malformed", "code", "code-agents", "delegation", "fetch-direct", "fetch-code", "workspace-direct", "workspace-code", "spill", "spill-rejected"] as const)("default Alchemy agent executes %s through the real OpenAI HTTP provider and native policies", scenario => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+test.each(["meeseeks-multiturn", "output-valid", "output-invalid", "output-malformed", "code", "code-agents", "delegation", "fetch-direct", "fetch-code", "workspace-direct", "workspace-code", "spill", "spill-rejected"] as const)("default Alchemy agent executes %s through the real OpenAI HTTP provider and native policies", scenario => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
   const spillTarget = yield* workspaceKey("alice", "default-code")
   const directory = yield* Effect.acquireRelease(Effect.promise(() => mkdtemp(join(tmpdir(), "tardigrade-default-code-agent-"))), path => Effect.promise(() => rm(path, { recursive: true, force: true })))
   const requests = yield* Ref.make<ReadonlyArray<typeof OpenAiSchema.CreateResponse.Type>>([])
@@ -72,11 +73,15 @@ test.each(["output-valid", "output-invalid", "output-malformed", "code", "code-a
     expect(httpRequest.url).toBe("/v1/responses")
     const body = yield* Schema.decodeUnknownEffect(OpenAiSchema.CreateResponse)(yield* httpRequest.json).pipe(Effect.orDie)
     const previous = yield* Ref.getAndUpdate(requests, values => [...values, body])
-    if (scenario === "fetch-direct" || scenario === "workspace-direct") {
+    if (scenario === "meeseeks-multiturn" || scenario === "fetch-direct" || scenario === "workspace-direct") {
       const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(OpenAiSchema.CreateResponse))(body)
-      expect(encoded).toContain(DEFAULT_MEESEEKS_INSTRUCTIONS)
+      if (scenario !== "meeseeks-multiturn" || previous.length < 2) expect(encoded).toContain(DEFAULT_MEESEEKS_INSTRUCTIONS)
     }
     const usage = { input_tokens: 20, output_tokens: 10, total_tokens: 30 }
+    if (scenario === "meeseeks-multiturn") return yield* HttpServerResponse.schemaJson(OpenAiSchema.Response)({
+      id: `turn-${previous.length}`, object: "response", model: "gpt-4.1-mini", created_at: 1700000000, usage,
+      output: [{ type: "message", id: `message-${previous.length}`, role: "assistant", status: "completed", content: [{ type: "output_text", text: "A concise answer.", annotations: [] }] }],
+    }).pipe(Effect.orDie)
     if (scenario.startsWith("output-")) {
       expect(body.text?.format).toEqual({ type: "json_schema", name: "research", schema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"], additionalProperties: false }, strict: true })
       expect(body.tools?.some(tool => tool.type === "function" && tool.name === CodeTool.name)).toBe(true)
@@ -330,7 +335,7 @@ test.each(["output-valid", "output-invalid", "output-malformed", "code", "code-a
     TARDIGRADE_DOMAIN_URL: `http://127.0.0.1:${domainServer.address.port}`, TARDIGRADE_RUNNER_URL: `http://127.0.0.1:${runnerServer.address.port}`,
     TARDIGRADE_TOKEN: "meeseeks-fixture-token", TARDIGRADE_SUBJECT: "alice",
     RUNNER_TO_DOMAIN_TOKEN: "default-code-domain-fixture", WORKER_TO_RUNNER_TOKEN: "default-code-runner-fixture",
-    TARDIGRADE_ACTOR: "default", TARDIGRADE_MODEL: "gpt-4.1-mini", TARDIGRADE_INSTRUCTIONS: "Use execute for the granted native tools.", OPENAI_API_KEY: "provider-fixture-token",
+    TARDIGRADE_ACTOR: "default", TARDIGRADE_MODEL: "gpt-4.1-mini", TARDIGRADE_INSTRUCTIONS: DEFAULT_MEESEEKS_INSTRUCTIONS, OPENAI_API_KEY: "provider-fixture-token",
     TARDIGRADE_WORKSPACE_POLICY: Schema.encodeSync(Schema.fromJsonString(WorkspacePolicy))(workspacePolicy),
     TARDIGRADE_SPILL_POLICY: Schema.encodeSync(Schema.fromJsonString(SpillPolicy))(spillPolicy),
     TARDIGRADE_ARTIFACT_DB: join(directory, "artifacts.sqlite"),
@@ -352,11 +357,49 @@ test.each(["output-valid", "output-invalid", "output-malformed", "code", "code-a
   const runnerContext = yield* Layer.build(runner)
   const runnerEndpoint = yield* RpcServer.toHttpEffect(RunRpcs.merge(CodeRpcs).merge(DelegationRpcs)).pipe(Effect.provide(Layer.succeedContext(runnerContext)), Effect.provide(RpcSerialization.layerNdjson))
   yield* Layer.build(HttpServer.serve()(runnerEndpoint).pipe(Layer.provide(Layer.succeedContext(runnerServerContext))))
-  if (scenario !== "fetch-direct" && scenario !== "workspace-direct") yield* threads.send("default-code", OpenThread.make({ actor: "default", instance: "instance", name: "default", limits: DEFAULT_RUN_LIMITS })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
-  const request = { runId: "run", digest: "default-code", prompt: Prompt.make({ "output-valid": "Return the declared research object.", "output-invalid": "Return invalid shape to verify terminal validation.", "output-malformed": "Return malformed JSON to verify terminal validation.", "code-agents": "Use agents.run inside Code to research a primary source.", code: "Read the current time using Code Mode.", delegation: "Delegate a child task and report its completed result.", "fetch-direct": "Read the granted URL with fetch_get.", "fetch-code": "Read the granted URL using Code Mode.", "workspace-direct": "Write text, read a bounded slice, and list the durable workspace.", "workspace-code": "Use Code Mode to write, read and list the durable workspace.", spill: "Return a large Code result then read and grep its complete persisted value.", "spill-rejected": "Report a known archive allowance refusal without retrying the completed Code." }[scenario]) }
+  if (scenario !== "meeseeks-multiturn" && scenario !== "fetch-direct" && scenario !== "workspace-direct") yield* threads.send("default-code", OpenThread.make({ actor: "default", instance: "instance", name: "default", limits: DEFAULT_RUN_LIMITS })).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }))
+  const request = { runId: "run", digest: "default-code", prompt: Prompt.make({ "meeseeks-multiturn": "Answer two turns.", "output-valid": "Return the declared research object.", "output-invalid": "Return invalid shape to verify terminal validation.", "output-malformed": "Return malformed JSON to verify terminal validation.", "code-agents": "Use agents.run inside Code to research a primary source.", code: "Read the current time using Code Mode.", delegation: "Delegate a child task and report its completed result.", "fetch-direct": "Read the granted URL with fetch_get.", "fetch-code": "Read the granted URL using Code Mode.", "workspace-direct": "Write text, read a bounded slice, and list the durable workspace.", "workspace-code": "Use Code Mode to write, read and list the durable workspace.", spill: "Return a large Code result then read and grep its complete persisted value.", "spill-rejected": "Report a known archive allowance refusal without retrying the completed Code." }[scenario]) }
+  if (scenario === "meeseeks-multiturn") {
+    const client = yield* ActorApi.clientInProcess.pipe(Effect.provide(SessionLive), Effect.provide(Layer.succeedContext(state)), Effect.provide(config))
+    const message = { threadId: "default-code", runId: "turn-1", actor: "default", instance: "instance", name: "default", text: "First question.", limits: { ...DEFAULT_MEESEEKS_LIMITS, maxMessages: 4 } }
+    const first = yield* meeseeks(message, { authorization: "Bearer meeseeks-fixture-token" }).pipe(Effect.provideService(ActorApi.Client, client), Effect.provide(Digest.layerWebCrypto), Effect.timeout("10 seconds"))
+    const second = yield* meeseeks({ ...message, runId: "turn-2", text: "Second question." }, { authorization: "Bearer meeseeks-fixture-token" }).pipe(Effect.provideService(ActorApi.Client, client), Effect.provide(Digest.layerWebCrypto), Effect.timeout("10 seconds"))
+    expect(first.status).toBe("completed")
+    expect(second.status).toBe("completed")
+    const snapshot = yield* threads.state("default-code")
+    if (snapshot._tag !== "Open") return yield* Effect.die("Expected native Meeseeks history")
+    expect(snapshot.history.content.length).toBe(4)
+    expect(snapshot.history.content.some(message => message.role === "system")).toBe(false)
+    const initialRequests = yield* Ref.get(requests)
+    expect(initialRequests.length).toBe(2)
+    for (const request of initialRequests) {
+      if (typeof request.input === "string" || request.input === undefined) return yield* Effect.die("Expected native provider message input")
+      expect(request.input.filter(message => "role" in message && message.role === "system").length).toBe(1)
+    }
+    const changedInstructions = "Answer in Portuguese using the updated instructions."
+    const changedConfig = Layer.succeed(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown({ ...settings, TARDIGRADE_INSTRUCTIONS: changedInstructions }))
+    const changedAdapter = Layer.fresh(AgentExecutionLive).pipe(
+      Layer.provide(CodeMethodsLive), Layer.provide(SpillStorageLive), Layer.provide(DomainClientLive), Layer.provide(ArtifactKeyValueStoreLive), Layer.provide(provider), Layer.provide(Digest.layerWebCrypto), Layer.provide(FetchHttpClient.layer), Layer.provide(changedConfig),
+    )
+    yield* Effect.gen(function* () {
+      const execution = yield* AgentExecution
+      yield* execution.infer({ actor: "default", operationId: "updated-instructions", prompt: snapshot.history, remainingTokens: 100 })
+    }).pipe(Effect.provide(changedAdapter))
+    const updatedRequests = yield* Ref.get(requests)
+    expect(updatedRequests.length).toBe(3)
+    const updated = updatedRequests[2]
+    if (updated === undefined) return yield* Effect.die("Expected updated adapter request")
+    const updatedJson = yield* Schema.encodeEffect(Schema.fromJsonString(OpenAiSchema.CreateResponse))(updated)
+    expect(updatedJson).toContain(changedInstructions)
+    expect(updatedJson).not.toContain(DEFAULT_MEESEEKS_INSTRUCTIONS)
+    const exhausted = yield* meeseeks({ ...message, runId: "turn-3", text: "Third question." }, { authorization: "Bearer meeseeks-fixture-token" }).pipe(Effect.provideService(ActorApi.Client, client), Effect.provide(Digest.layerWebCrypto), Effect.result)
+    expect(Result.isFailure(exhausted)).toBe(true)
+    expect((yield* Ref.get(requests)).length).toBe(3)
+    return
+  }
   if (scenario === "fetch-direct" || scenario === "workspace-direct") {
     const client = yield* ActorApi.clientInProcess.pipe(Effect.provide(SessionLive), Effect.provide(Layer.succeedContext(state)), Effect.provide(config))
-    const exampleRequest = { threadId: "default-code", runId: "run", actor: "default", instance: "instance", name: "default", instructions: DEFAULT_MEESEEKS_INSTRUCTIONS, text: "Use the granted native tools.", limits: DEFAULT_MEESEEKS_LIMITS }
+    const exampleRequest = { threadId: "default-code", runId: "run", actor: "default", instance: "instance", name: "default", text: "Use the granted native tools.", limits: DEFAULT_MEESEEKS_LIMITS }
     const receipt = yield* meeseeks(exampleRequest, { authorization: "Bearer meeseeks-fixture-token" }).pipe(Effect.provideService(ActorApi.Client, client), Effect.provide(Digest.layerWebCrypto), Effect.timeout("10 seconds"))
     const replay = yield* meeseeks(exampleRequest, { authorization: "Bearer meeseeks-fixture-token" }).pipe(Effect.provideService(ActorApi.Client, client), Effect.provide(Digest.layerWebCrypto))
     expect(receipt.status).toBe("completed")
