@@ -16,7 +16,7 @@ Tools marked as requiring approval wait for it before dispatch. The registry der
 The original atom DSL remains available for pure declarations. This native template uses the Domain agent protocol and does not run the legacy Tardigrade journal, scheduler, watchdog, or deferred callback runtime.
 
 
-`execute` runs JavaScript in a bounded QuickJS VM with a frozen method catalog and ambient time/random seed. Its host calls are admitted and settled in Domain. `delegate` starts a child run of the configured actor with inherited cancellation and a bounded tool allowance. Native Workflow child links and compensations own admission cleanup; Domain receipts and fences determine success, cancellation or uncertainty.
+`execute` runs JavaScript in the bounded CodeMode interpreter with a frozen method catalog and ambient time/random seed. Its host calls are admitted and settled in Domain. `delegate` starts a child run of the configured actor with inherited cancellation and a bounded tool allowance. Native Workflow child links and compensations own admission cleanup; Domain receipts and fences determine success, cancellation or uncertainty.
 
 The optional JSON settings `TARDIGRADE_CODE_LIMITS`, `TARDIGRADE_DELEGATION_LIMITS` and `TARDIGRADE_FETCH_POLICY` override the exported complete default policies. Fetch accepts HTTP/HTTPS and bounds request bodies, response bytes, returned text and elapsed time; results report the applied limits and truncation. A run stores its accepted policy; configuration changes do not rewrite a running execution.
 

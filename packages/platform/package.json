@@ -27,8 +27,7 @@
     "@effect/sql-sqlite-do": "4.1.2",
     "@opencode/codemode": "2.2.5",
     "effect": "4.1.2",
-    "just-bash": "3.6.0",
-    "quickjs-emscripten": "0.32.0"
+    "just-bash": "3.6.0"
   },
   "devDependencies": {
     "@cfworker/json-schema": "^4.1.1",

@@ -8,7 +8,7 @@ sectionOrder: 1
 order: 1
 ---
 
-The native fork uses Alchemy Domain for business state and Effect Workflows for durable execution. Aggregates decide commands and record facts; policies react to committed events. Domain APIs enforce caller ownership and expose native receipts and reads. The AI runtime uses a separate Effect Cluster runner for provider calls, tools and QuickJS. See the [native runtime guide](/docs/platforms/alchemy) for the migration boundaries.
+The native fork uses Alchemy Domain for business state and Effect Workflows for durable execution. Aggregates decide commands and record facts; policies react to committed events. Domain APIs enforce caller ownership and expose native receipts and reads. The AI runtime uses a separate Effect Cluster runner for provider calls, tools and the OpenCode CodeMode interpreter. Code executions use the granted tool catalog and replay recorded host outcomes in settlement order. See the [native runtime guide](/docs/platforms/alchemy) for the migration boundaries.
 
 ## Run Tardigrade
 

@@ -22,7 +22,7 @@ Use `bun run cli --help` for the generated native Domain command interface. `Ope
 
 ## Research inside code
 
-The model can call `execute` to inspect data in an isolated QuickJS guest. The trusted host publishes its actual tool catalog and validates each host call before dispatch. Large results become durable spill references. Inside code, `workspace.read` and `workspace.grep` retrieve bounded excerpts from those spills. Workspace text tools persist authored research notes separately. SQL is not advertised by the default research workspace.
+The model can call `execute` to inspect data in the bounded CodeMode interpreter. The trusted host publishes its actual tool catalog and validates each host call before dispatch. Large results become durable spill references. Inside code, `workspace.read` and `workspace.grep` retrieve bounded excerpts from those spills. Workspace text tools persist authored research notes separately. SQL is not advertised by the default research workspace.
 
 ```js
 const report = await agents.run({

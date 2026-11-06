@@ -4,7 +4,7 @@ import { KeyValueStore } from "effect/persistence"
 import { SpillCatalog } from "@clavia/tardigrade-domain/Spill/Spill.aggregate"
 import { expect, test } from "bun:test"
 import * as Domain from "@alchemy.run/domain"
-import { Effect, Layer, Option, Ref, Schema } from "effect"
+import { Array as Arr, Effect, Layer, Option, Ref, Schema } from "effect"
 import { Prompt, Response } from "effect/ai"
 import { Digest } from "effect/crypto"
 import { WorkflowEngine } from "effect/workflow"
@@ -37,7 +37,7 @@ const otherModelOutput = [Prompt.textPart({ text: "A different captured page" })
 const session = Layer.succeed(Session, (effect, { headers }) => {
   const owner = Headers.get(headers, "x-tardigrade-owner")
   if (Option.isNone(owner)) return Effect.fail(Unauthorized.make())
-  return Schema.decodeUnknownEffect(CurrentCaller.schema)({ subject: owner.value }).pipe(
+  return Schema.decodeEffect(CurrentCaller.schema)({ subject: owner.value }).pipe(
     Effect.mapError(() => Unauthorized.make()),
     Effect.flatMap(caller => Effect.provideService(effect, CurrentCaller, caller)),
   )
@@ -90,7 +90,7 @@ test.each([
   expect(stored.calls[0]?.outcome).toEqual({ _tag: "Returned", value, modelOutput })
   expect(stored.outcome).toEqual(result.outcome)
   const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(CodeOutcome))(result.outcome)
-  const decoded = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(CodeOutcome))(encoded)
+  const decoded = yield* Schema.decodeEffect(Schema.fromJsonString(CodeOutcome))(encoded)
   expect(decoded).toEqual(result.outcome)
   expect((yield* ExecuteCode.execute(payload)).outcome).toEqual(result.outcome)
   if (content) {
@@ -102,7 +102,11 @@ test.each([
     expect(result.outcome._tag === "Returned" && result.outcome.modelOutput !== undefined).toBe(false)
   }
   if (id === "guest-inspection") expect(result.outcome).toEqual({ _tag: "Returned", value: "undefined" })
-  if (id === "equal-copy" || id === "independent-value" || id === "private-callback" || id === "absent-metadata") expect(result.outcome).toEqual({ _tag: "Returned", value })
+  if (id === "equal-copy" || id === "independent-value" || id === "absent-metadata") expect(result.outcome).toEqual({ _tag: "Returned", value })
+  if (id === "private-callback") {
+    expect(result.outcome._tag).toBe("Failed")
+    if (result.outcome._tag === "Failed") expect(result.outcome.reason).toContain("globalThis")
+  }
   if (id === "guest-failure") expect(result.outcome._tag).toBe("Failed")
   if (id === "returned") expect(stored.logs).toEqual(["capture"])
 }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(world))))
@@ -144,23 +148,24 @@ test("native content bytes and metadata consume the persisted Code result budget
   expect(stored.outcome).toBeNull()
 }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(world))))
 
-test("the parent workflow receives native Code file bytes and logs through the owning Prompt codec", () => Effect.runPromise(Effect.gen(function* () {
+test("the parent workflow receives native Code file bytes and logs through the owning Prompt codec", () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {
   const inferred = yield* Ref.make(0)
   const usage = Response.Usage.make({ inputTokens: { total: 1 }, outputTokens: { total: 1 } })
   const agent = AgentExecution.toLayer(Effect.succeed({
     compact: () => Effect.die("Unexpected compaction"),
     infer: Effect.fn("CodeContent.infer")(function* ({ prompt }) {
       yield* Ref.update(inferred, count => count + 1)
-      const result = prompt.content.flatMap(message => {
+      const result = Arr.findFirst(Arr.flatMap(prompt.content, message => {
         if (message.role === "tool") return message.content
         return []
-      }).find(part => part.type === "tool-result")
-      if (result !== undefined) {
-        expect(result.name).toBe(CodeTool.name)
-        expect(result.result).toEqual({ outcome: { _tag: "Returned", value }, logs: ["capture"] })
-        expect(result.modelOutput).toEqual([...modelOutput, Prompt.textPart({ text: "capture" })])
+      }), part => part.type === "tool-result")
+      if (Option.isSome(result)) {
+        const part = result.value
+        expect(part.name).toBe(CodeTool.name)
+        expect(part.result).toEqual({ outcome: { _tag: "Returned", value }, logs: ["capture"] })
+        expect(part.modelOutput).toEqual([...modelOutput, Prompt.textPart({ text: "capture" })])
         const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Prompt.Prompt))(prompt).pipe(Effect.orDie)
-        const decoded = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Prompt.Prompt))(encoded).pipe(Effect.orDie)
+        const decoded = yield* Schema.decodeEffect(Schema.fromJsonString(Prompt.Prompt))(encoded).pipe(Effect.orDie)
         expect(decoded).toEqual(prompt)
         return { prompt: Prompt.make([{ role: "assistant", content: "Screenshot received" }]), usage, text: "Screenshot received", tools: [] }
       }
@@ -174,6 +179,7 @@ test("the parent workflow receives native Code file bytes and logs through the o
     Layer.provideMerge(client), Layer.provide(agent), Layer.provide(methods), Layer.provide(CodeRuntimeLive),
     Layer.provideMerge(WorkflowEngine.layerMemory), Layer.provide(Digest.layerWebCrypto),
   )
+  const parentContext = yield* Layer.build(Layer.provide(parentWorld, ModelAccessFixture))
   yield* Effect.gen(function* () {
     const threads = yield* Thread
     const codes = yield* CodeExecution
@@ -183,17 +189,19 @@ test("the parent workflow receives native Code file bytes and logs through the o
     const payload = { ...scope, key: executionKey(scope) }
     yield* ExecuteRun.execute(payload)
     yield* ExecuteRun.execute(payload)
-    expect(yield* Ref.get(inferred)).toBe(2)
+    const count = yield* Ref.get(inferred)
+    expect(count).toBe(2)
     const parent = yield* threads.state("parent")
     if (parent._tag !== "Open") return yield* Effect.die("Expected open parent")
     expect(parent.active?.status).toBe("completed")
     expect(parent.active?.text).toBe("Screenshot received")
     const history = yield* Schema.encodeEffect(Schema.fromJsonString(Prompt.Prompt))(parent.history).pipe(Effect.orDie)
-    expect(yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Prompt.Prompt))(history).pipe(Effect.orDie)).toEqual(parent.history)
+    const decodedHistory = yield* Schema.decodeEffect(Schema.fromJsonString(Prompt.Prompt))(history).pipe(Effect.orDie)
+    expect(decodedHistory).toEqual(parent.history)
     const code = yield* codes.state(runKey("parent", "run:2"))
     if (code._tag !== "Open") return yield* Effect.die("Expected admitted native Code child")
     expect(code.status).toBe("completed")
     expect(code.outcome).toEqual({ _tag: "Returned", value, modelOutput })
     expect(code.logs).toEqual(["capture"])
-  }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(parentWorld))
-}).pipe(Effect.provide(ModelAccessFixture))))
+  }).pipe(Effect.provideService(CurrentCaller, { subject: "alice" }), Effect.provide(parentContext))
+}))))

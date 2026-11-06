@@ -59,13 +59,13 @@ test("code identity is immutable and protected by the owner", () => run(Effect.g
   expect(state.request.limits).toEqual(DEFAULT_CODE_LIMITS)
 })))
 
-test("VM resource bounds are positive persisted execution inputs", () => run(Effect.gen(function* () {
-  for (const key of ["maxMemoryBytes", "maxStackBytes", "maxSegmentMs", "maxJobs"] as const) {
+test("supported execution limits persist and legacy VM limits are rejected", () => run(Effect.gen(function* () {
+  for (const key of ["maxMemoryBytes", "maxStackBytes", "maxJobs"] as const) {
     const invalid = yield* Schema.decodeEffect(CodeInput)({ ...request, limits: { ...DEFAULT_CODE_LIMITS, [key]: 0 } }).pipe(Effect.result)
     expect(Result.isFailure(invalid)).toBe(true)
   }
   const executions = yield* CodeExecution
-  const limits = { ...DEFAULT_CODE_LIMITS, maxMemoryBytes: 32 * 1024 * 1024, maxStackBytes: 256 * 1024, maxSegmentMs: 50, maxJobs: 256 }
+  const limits = { ...DEFAULT_CODE_LIMITS, maxSegmentMs: 50 }
   yield* executions.send("bounded", RequestCode.make({ ...request, limits }))
   const state = yield* executions.state("bounded")
   if (state._tag !== "Open") return yield* Effect.die("Expected open execution")

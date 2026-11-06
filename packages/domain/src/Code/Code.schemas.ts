@@ -14,12 +14,12 @@ export const CodeLimits = Schema.Struct({
   maxLogChars: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   maxLogs: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   maxDurationMs: Schema.Int.check(Schema.isGreaterThan(0)),
-  maxMemoryBytes: Schema.Int.check(Schema.isGreaterThan(0)),
-  maxStackBytes: Schema.Int.check(Schema.isGreaterThan(0)),
+  maxMemoryBytes: Schema.optionalKey(Schema.Never),
+  maxStackBytes: Schema.optionalKey(Schema.Never),
   maxSegmentMs: Schema.Int.check(Schema.isGreaterThan(0)),
-  maxJobs: Schema.Int.check(Schema.isGreaterThan(0)),
+  maxJobs: Schema.optionalKey(Schema.Never),
 })
-export const DEFAULT_CODE_LIMITS = { maxCalls: 64, maxCodeChars: 100_000, maxCallInputChars: 64_000, maxResultChars: 64_000, maxLogChars: 8192, maxLogs: 256, maxDurationMs: 300_000, maxMemoryBytes: 16 * 1024 * 1024, maxStackBytes: 512 * 1024, maxSegmentMs: 1000, maxJobs: 10_000 } as const
+export const DEFAULT_CODE_LIMITS = { maxCalls: 64, maxCodeChars: 100_000, maxCallInputChars: 64_000, maxResultChars: 64_000, maxLogChars: 8192, maxLogs: 256, maxDurationMs: 300_000, maxSegmentMs: 1000 } as const
 export const PackageCatalog = Schema.Record(Schema.String, Schema.Array(Schema.NonEmptyString))
 export const CodeInput = Schema.Struct({
   model: Schema.optionalKey(ModelGrant),

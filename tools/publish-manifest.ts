@@ -72,7 +72,6 @@ export const REQUIRED_PUBLISH_DEPENDENCIES = [
   "@tardie/ai-openrouter",
   "effect",
   "jsonc-parser",
-  "quickjs-emscripten",
 ] as const
 
 const dependencyUnion = (packages: ReadonlyArray<DependencyManifest>) => {
