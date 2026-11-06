@@ -75,7 +75,7 @@ const fixture = Effect.fn("DelegationHttp.fixture")(function* (pauseReservation 
   const reservedPolicyEntered = yield* Deferred.make<void>()
   const releaseReservedPolicy = yield* Deferred.make<void>()
   const delegationPolicy = Layer.effect(DelegationExecutionPolicy, Effect.gen(function* () {
-    const actual = yield* DelegationExecutionPolicy.pipe(Effect.provide(DelegationExecutionPolicyLive))
+    const actual = yield* DelegationExecutionPolicy
     return Effect.fn("DelegationHttp.policyGate")(function* (input: Parameters<Context.Service.Shape<typeof DelegationExecutionPolicy>>[0]) {
       if (pauseReservation && input.event._tag === "DelegationReserved") {
         yield* Deferred.succeed(reservedPolicyEntered, undefined)
@@ -83,7 +83,7 @@ const fixture = Effect.fn("DelegationHttp.fixture")(function* (pauseReservation 
       }
       yield* actual(input)
     })
-  }))
+  })).pipe(Layer.provide(DelegationExecutionPolicyLive))
   const stateContext = yield* Layer.build(StateModel.layer(Layer.mergeAll(RunExecutionLive, delegationPolicy, failure)).pipe(Layer.provide(Domain.InMemory), Layer.provide(config)))
   const threads = Context.get(stateContext, Thread)
   const delegations = Context.get(stateContext, Delegation)

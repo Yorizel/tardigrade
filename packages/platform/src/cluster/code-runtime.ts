@@ -1,20 +1,20 @@
 import { CodeRuntime, CodeRuntimeRejected, GuestCall } from "@clavia/tardigrade-domain/Code/CodeRuntime.external"
-import { CodeOutcome, PackageCatalog } from "@clavia/tardigrade-domain/Code/Code.schemas"
-import { Clock, Effect, Result, Schema } from "effect"
+import { CodeCall, CodeOutcome, PackageCatalog } from "@clavia/tardigrade-domain/Code/Code.schemas"
+import { Array as Arr, Clock, Effect, Option, Order, Record, Result, Schema } from "effect"
 import { getQuickJS, type QuickJSDeferredPromise, type QuickJSHandle } from "quickjs-emscripten"
 
 const GuestJson = Schema.fromJsonString(GuestCall)
 const OutcomeJson = Schema.fromJsonString(CodeOutcome)
-const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json))
+const JsonText = Schema.fromJsonString(Schema.Json)
 
 export const CodeRuntimeLive = CodeRuntime.toLayer(Effect.succeed({
   evaluate: Effect.fn("QuickJS.evaluate")(function* ({ request, calls }) {
     return yield* Effect.scoped(Effect.gen(function* () {
-      if (request.code.length > request.limits.maxCodeChars) return yield* Effect.fail(new CodeRuntimeRejected({ reason: "CodeBudgetExceeded" }))
+      if (request.code.length > request.limits.maxCodeChars) return yield* CodeRuntimeRejected.make({ reason: "CodeBudgetExceeded" })
       const catalog = request.catalog
       const clock = yield* Clock.clockWith(Effect.succeed)
-      const module = yield* Effect.tryPromise({ try: () => getQuickJS(), catch: cause => new CodeRuntimeRejected({ reason: "VMInitializationFailed", cause }) })
-      const runtime = yield* Effect.acquireRelease(Effect.try({ try: () => module.newRuntime(), catch: cause => new CodeRuntimeRejected({ reason: "VMRuntimeAllocationFailed", cause }) }), value => Effect.sync(() => value.dispose()))
+      const module = yield* Effect.tryPromise({ try: () => getQuickJS(), catch: cause => CodeRuntimeRejected.make({ reason: "VMInitializationFailed", cause }) })
+      const runtime = yield* Effect.acquireRelease(Effect.try({ try: () => module.newRuntime(), catch: cause => CodeRuntimeRejected.make({ reason: "VMRuntimeAllocationFailed", cause }) }), value => Effect.sync(() => value.dispose()))
       runtime.setMemoryLimit(request.limits.maxMemoryBytes)
       runtime.setMaxStackSize(request.limits.maxStackBytes)
       const startedAt = clock.currentTimeMillisUnsafe()
@@ -24,7 +24,7 @@ export const CodeRuntimeLive = CodeRuntime.toLayer(Effect.succeed({
         interrupted.push(true)
         return true
       })
-      const vm = yield* Effect.acquireRelease(Effect.try({ try: () => runtime.newContext(), catch: cause => new CodeRuntimeRejected({ reason: "VMContextAllocationFailed", cause }) }), value => Effect.sync(() => value.dispose()))
+      const vm = yield* Effect.acquireRelease(Effect.try({ try: () => runtime.newContext(), catch: cause => CodeRuntimeRejected.make({ reason: "VMContextAllocationFailed", cause }) }), value => Effect.sync(() => value.dispose()))
       const promises = yield* Effect.acquireRelease(Effect.sync(() => new Map<number, QuickJSDeferredPromise>()), value => Effect.sync(() => value.forEach(promise => promise.dispose())))
       const resolvedObjects = new Map<number, QuickJSHandle>()
       const returnedOrdinals: number[] = []
@@ -38,14 +38,18 @@ export const CodeRuntimeLive = CodeRuntime.toLayer(Effect.succeed({
         return { error }
       }
       const call = vm.newFunction("request", handle => {
-        const decoded = Schema.decodeUnknownResult(GuestJson)(vm.getString(handle))
+        const decoded = Schema.decodeResult(GuestJson)(vm.getString(handle))
         if (Result.isFailure(decoded)) return reject("InvalidCallInput")
         const next = decoded.success
         if (next.ordinal !== observed.length) return reject("CallOrdinalMismatch")
         if (observed.length >= request.limits.maxCalls) return reject("CallBudgetExceeded")
-        if (next.input !== undefined && encodeJson(next.input).length > request.limits.maxCallInputChars) return reject("CallInputBudgetExceeded")
-        if (!Object.hasOwn(catalog, next.package) || !catalog[next.package]?.includes(next.method)) return reject("UnknownMethod")
-        const recorded = calls.find(value => value.request.ordinal === next.ordinal)
+        if (next.input !== undefined) {
+          const encoded = Schema.encodeResult(JsonText)(next.input)
+          if (Result.isFailure(encoded)) return reject("InvalidCallInput")
+          if (encoded.success.length > request.limits.maxCallInputChars) return reject("CallInputBudgetExceeded")
+        }
+        if (!Record.has(catalog, next.package) || catalog[next.package]?.includes(next.method) !== true) return reject("UnknownMethod")
+        const recorded = Option.getOrUndefined(Arr.findFirst(calls, value => value.request.ordinal === next.ordinal))
         if (recorded !== undefined && !Schema.toEquivalence(GuestCall)(next, recorded.request)) return reject("ReplayIdentityMismatch")
         observed.push(next)
         const deferred = vm.newPromise()
@@ -56,7 +60,7 @@ export const CodeRuntimeLive = CodeRuntime.toLayer(Effect.succeed({
       call.dispose()
       const log = vm.newFunction("log", handle => {
         const value = vm.getString(handle)
-        if (logs.length >= request.limits.maxLogs || logs.join("").length + value.length > request.limits.maxLogChars) return reject("LogBudgetExceeded")
+        if (logs.length >= request.limits.maxLogs || Arr.join(logs, "").length + value.length > request.limits.maxLogChars) return reject("LogBudgetExceeded")
         logs.push(value)
         return vm.undefined
       })
@@ -64,7 +68,7 @@ export const CodeRuntimeLive = CodeRuntime.toLayer(Effect.succeed({
       log.dispose()
       const returned = vm.newFunction("returned", handle => {
         if (vm.typeof(handle) !== "object" || vm.eq(handle, vm.null)) return vm.undefined
-        const original = [...resolvedObjects].find(([, value]) => vm.eq(handle, value))
+        const original = Option.getOrUndefined(Arr.findFirst([...resolvedObjects], ([, value]) => vm.eq(handle, value)))
         if (original !== undefined) returnedOrdinals.push(original[0])
         return vm.undefined
       })
@@ -75,24 +79,28 @@ export const CodeRuntimeLive = CodeRuntime.toLayer(Effect.succeed({
         if (result.error !== undefined) {
           const reason = String(vm.dump(result.error))
           result.error.dispose()
-          return yield* Effect.fail(new CodeRuntimeRejected({ reason: `GuestEvaluationFailed: ${reason}` }))
+          return yield* CodeRuntimeRejected.make({ reason: `GuestEvaluationFailed: ${reason}` })
         }
         return yield* Effect.acquireRelease(Effect.succeed(result.value), value => Effect.sync(() => value.dispose()))
       })
       const drain = Effect.fn("QuickJS.drain")(function* () {
         while (runtime.hasPendingJob()) {
-          if (jobs.length >= request.limits.maxJobs) return yield* Effect.fail(new CodeRuntimeRejected({ reason: "JobBudgetExceeded" }))
+          if (jobs.length >= request.limits.maxJobs) return yield* CodeRuntimeRejected.make({ reason: "JobBudgetExceeded" })
           jobs.push(1)
           const result = runtime.executePendingJobs(1)
           if (result.error !== undefined) {
             const reason = String(vm.dump(result.error))
             result.error.dispose()
-            return yield* Effect.fail(new CodeRuntimeRejected({ reason: `GuestJobFailed: ${reason}` }))
+            return yield* CodeRuntimeRejected.make({ reason: `GuestJobFailed: ${reason}` })
           }
         }
-        if (interrupted.length > 0) return yield* Effect.fail(new CodeRuntimeRejected({ reason: "SegmentBudgetExceeded" }))
-        if (failures.length > 0) return yield* Effect.fail(new CodeRuntimeRejected({ reason: failures.join(", ") }))
+        if (interrupted.length > 0) return yield* CodeRuntimeRejected.make({ reason: "SegmentBudgetExceeded" })
+        if (failures.length > 0) return yield* CodeRuntimeRejected.make({ reason: Arr.join(failures, ", ") })
       })
+      const atJson = yield* Schema.encodeEffect(JsonText)(request.ambient.at).pipe(Effect.orDie)
+      const seedJson = yield* Schema.encodeEffect(JsonText)(request.ambient.seed).pipe(Effect.orDie)
+      const codeJson = yield* Schema.encodeEffect(JsonText)(request.code).pipe(Effect.orDie)
+      const catalogJson = yield* Schema.encodeEffect(Schema.fromJsonString(PackageCatalog))(catalog).pipe(Effect.orDie)
       const program = `(() => {
         const request = globalThis.__request;
         const log = globalThis.__log;
@@ -151,7 +159,7 @@ export const CodeRuntimeLive = CodeRuntime.toLayer(Effect.succeed({
           return { valid, value: copy };
         };
         const OriginalDate = Date;
-        const at = ${encodeJson(request.ambient.at)};
+        const at = ${atJson};
         function PinnedDate(...args) {
           if (!new.target) return new OriginalDate(at).toString();
           if (args.length === 0) return new OriginalDate(at);
@@ -164,10 +172,10 @@ export const CodeRuntimeLive = CodeRuntime.toLayer(Effect.succeed({
         PinnedDate.UTC = OriginalDate.UTC;
         globalThis.Date = PinnedDate;
         const randomState = [2166136261];
-        for (const character of ${encodeJson(request.ambient.seed)}) randomState[0] = Math.imul(randomState[0] ^ character.charCodeAt(0), 16777619) >>> 0;
+        for (const character of ${seedJson}) randomState[0] = Math.imul(randomState[0] ^ character.charCodeAt(0), 16777619) >>> 0;
         Math.random = () => { randomState[0] = (Math.imul(randomState[0], 1664525) + 1013904223) >>> 0; return randomState[0] / 4294967296; };
         const ordinal = [0];
-        const catalog = ${Schema.encodeSync(Schema.fromJsonString(PackageCatalog))(catalog)};
+        const catalog = ${catalogJson};
         for (const [name, methods] of Object.entries(catalog)) {
           const namespace = Object.create(null);
           for (const method of methods) namespace[method] = input => {
@@ -189,7 +197,7 @@ export const CodeRuntimeLive = CodeRuntime.toLayer(Effect.succeed({
         const AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
         const NativePromise = Promise;
         const then = Function.prototype.call.bind(Promise.prototype.then);
-        return new NativePromise(resolve => then(new AsyncFunction(${encodeJson(request.code)})(), value => {
+        return new NativePromise(resolve => then(new AsyncFunction(${codeJson})(), value => {
           const outcome = create(null);
           outcome._tag = 'Returned';
           if (value !== undefined) {
@@ -214,10 +222,10 @@ export const CodeRuntimeLive = CodeRuntime.toLayer(Effect.succeed({
       const parseJson = yield* evaluate("JSON.parse")
       const result = yield* evaluate(program)
       yield* drain()
-      const settled = calls.filter(value => value.settlementSequence !== null).toSorted((a, b) => Number(a.settlementSequence) - Number(b.settlementSequence))
+      const settled = Arr.sortWith(Arr.filter(calls, value => value.settlementSequence !== null), (value: typeof CodeCall.Type) => value.settlementSequence ?? 0, Order.Number)
       yield* Effect.forEach(settled, Effect.fn("QuickJS.releaseSettlement")(function* (recorded) {
         const promise = promises.get(recorded.request.ordinal)
-        if (promise === undefined || recorded.outcome === null) return yield* Effect.fail(new CodeRuntimeRejected({ reason: "ReplaySettlementNotObserved" }))
+        if (promise === undefined || recorded.outcome === null) return yield* CodeRuntimeRejected.make({ reason: "ReplaySettlementNotObserved" })
         const outcome = recorded.outcome
         if (outcome._tag === "Failed") {
           const error = vm.newError(outcome.reason)
@@ -225,12 +233,12 @@ export const CodeRuntimeLive = CodeRuntime.toLayer(Effect.succeed({
           error.dispose()
         } else if (outcome.value === undefined) promise.resolve()
         else {
-          const encoded = encodeJson(outcome.value)
+          const encoded = yield* Schema.encodeEffect(JsonText)(outcome.value).pipe(Effect.mapError(cause => CodeRuntimeRejected.make({ reason: "ReplayValueEncodeFailed", cause })))
           const json = yield* Effect.acquireRelease(Effect.sync(() => vm.newString(encoded)), value => Effect.sync(() => value.dispose()))
           const parsed = vm.callFunction(parseJson, vm.undefined, json)
           if (parsed.error !== undefined) {
             parsed.error.dispose()
-            return yield* Effect.fail(new CodeRuntimeRejected({ reason: "ReplayValueDecodeFailed" }))
+            return yield* CodeRuntimeRejected.make({ reason: "ReplayValueDecodeFailed" })
           }
           const value = yield* Effect.acquireRelease(Effect.succeed(parsed.value), handle => Effect.sync(() => handle.dispose()))
           if (vm.typeof(value) === "object" && !vm.eq(value, vm.null)) resolvedObjects.set(recorded.request.ordinal, value)
@@ -238,23 +246,23 @@ export const CodeRuntimeLive = CodeRuntime.toLayer(Effect.succeed({
         }
         yield* drain()
       }), { discard: true })
-      if (calls.some(value => !observed.some(next => next.ordinal === value.request.ordinal))) return yield* Effect.fail(new CodeRuntimeRejected({ reason: "RecordedCallOmitted" }))
+      if (Arr.some(calls, value => !Arr.some(observed, next => next.ordinal === value.request.ordinal))) return yield* CodeRuntimeRejected.make({ reason: "RecordedCallOmitted" })
       const state = vm.getPromiseState(result)
       if (state.type === "rejected") {
         const reason = String(vm.dump(state.error))
         state.error.dispose()
-        return yield* Effect.fail(new CodeRuntimeRejected({ reason: `InvalidGuestResult: ${reason}` }))
+        return yield* CodeRuntimeRejected.make({ reason: `InvalidGuestResult: ${reason}` })
       }
-      const requested = observed.filter(value => !calls.some(recorded => recorded.request.ordinal === value.ordinal))
-      const unfinished = observed.some(value => !calls.some(recorded => recorded.request.ordinal === value.ordinal && recorded.settlementSequence !== null))
+      const requested = Arr.filter(observed, value => !Arr.some(calls, recorded => recorded.request.ordinal === value.ordinal))
+      const unfinished = Arr.some(observed, value => !Arr.some(calls, recorded => recorded.request.ordinal === value.ordinal && recorded.settlementSequence !== null))
       if (state.type === "pending") {
-        if (!unfinished) return yield* Effect.fail(new CodeRuntimeRejected({ reason: "UnresolvedGuestPromise" }))
+        if (!unfinished) return yield* CodeRuntimeRejected.make({ reason: "UnresolvedGuestPromise" })
         return { _tag: "Suspended" as const, requested, observedCalls: observed.length, logs }
       }
       const text = vm.getString(state.value)
       state.value.dispose()
-      const outcome = yield* Schema.decodeUnknownEffect(OutcomeJson)(text).pipe(Effect.mapError(() => new CodeRuntimeRejected({ reason: "InvalidGuestResult" })))
-      if (text.length > request.limits.maxResultChars) return yield* Effect.fail(new CodeRuntimeRejected({ reason: "ResultBudgetExceeded" }))
+      const outcome = yield* Schema.decodeEffect(OutcomeJson)(text).pipe(Effect.mapError(() => CodeRuntimeRejected.make({ reason: "InvalidGuestResult" })))
+      if (text.length > request.limits.maxResultChars) return yield* CodeRuntimeRejected.make({ reason: "ResultBudgetExceeded" })
       if (unfinished) return { _tag: "Suspended" as const, requested, observedCalls: observed.length, logs }
       const returnedCallOrdinal = returnedOrdinals[0]
       if (returnedCallOrdinal !== undefined) return { _tag: "Completed" as const, outcome, observedCalls: observed.length, logs, returnedCallOrdinal }

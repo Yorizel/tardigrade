@@ -1,4 +1,4 @@
-import { Config, Context, Effect, Schema, Stream } from "effect"
+import { Array as Arr, Config, Context, Effect, Schema, Stream, String as Str } from "effect"
 import { Tool, Toolkit } from "effect/ai"
 import { HttpClient, HttpClientError, HttpClientRequest } from "effect/http"
 
@@ -51,7 +51,7 @@ export const FetchToolsLive = FetchTools.toLayer(Effect.gen(function* () {
   const policy = yield* Config.schema(Schema.fromJsonString(FetchPolicy), "TARDIGRADE_FETCH_POLICY").pipe(Config.withDefault(DEFAULT_FETCH_POLICY))
   const send = Effect.fn("FetchTools.send")(function* (input: typeof FetchRequestInput.Type, tool: typeof FetchGet | typeof FetchRequest) {
     const readOnly = Context.get(tool.annotations, Tool.Readonly)
-    const url = yield* Schema.decodeUnknownEffect(Schema.URLFromString)(input.url).pipe(Effect.mapError(cause => FetchRejected.make({ reason: "InvalidUrl", policy, cause })))
+    const url = yield* Schema.decodeEffect(Schema.URLFromString)(input.url).pipe(Effect.mapError(cause => FetchRejected.make({ reason: "InvalidUrl", policy, cause })))
     if (url.protocol !== "http:" && url.protocol !== "https:") return yield* FetchRejected.make({ reason: "UnsupportedProtocol", policy })
     if (input.body !== undefined && new TextEncoder().encode(input.body).byteLength > policy.maxRequestBodyBytes) return yield* FetchRejected.make({ reason: "RequestBodyTooLarge", policy })
     const base = HttpClientRequest.make(input.method)(url.toString()).pipe(HttpClientRequest.setHeaders(input.headers ?? {}))
@@ -74,15 +74,15 @@ export const FetchToolsLive = FetchTools.toLayer(Effect.gen(function* () {
         Stream.runCollect,
       )
       const decoder = new TextDecoder()
-      const text = chunks.map(chunk => decoder.decode(chunk.value, { stream: true })).join("") + decoder.decode()
-      const body = text.slice(0, policy.maxBodyChars)
+      const text = Arr.join(Arr.map(chunks, chunk => decoder.decode(chunk.value, { stream: true })), "") + decoder.decode()
+      const body = Str.slice(0, policy.maxBodyChars)(text)
       return {
         url: response.url,
         status: response.status,
         ok: response.status >= 200 && response.status < 300,
         headers: { ...response.headers },
         body,
-        truncated: chunks.some(chunk => chunk.truncated) || body.length < text.length,
+        truncated: Arr.some(chunks, chunk => chunk.truncated) || body.length < text.length,
         receivedBytes: chunks.at(-1)?.receivedBytes ?? 0,
         policy,
       }

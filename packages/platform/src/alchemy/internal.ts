@@ -12,7 +12,7 @@ const authenticate = Effect.fn("Internal.authenticate")(function* (headers: Head
   const authorization = Headers.get(headers, "authorization")
   const owner = Headers.get(headers, "x-tardigrade-owner")
   if (Option.isNone(authorization) || authorization.value !== `Bearer ${Redacted.value(token)}` || Option.isNone(owner)) return yield* Unauthorized.make()
-  return yield* Schema.decodeUnknownEffect(CurrentCaller.schema)({ subject: owner.value }).pipe(Effect.mapError(() => Unauthorized.make()))
+  return yield* Schema.decodeEffect(CurrentCaller.schema)({ subject: owner.value }).pipe(Effect.mapError(() => Unauthorized.make()))
 })
 
 export const InternalSessionLive = Layer.mergeAll(Layer.effect(Session, Effect.gen(function* () {
@@ -25,11 +25,12 @@ export const InternalSessionLive = Layer.mergeAll(Layer.effect(Session, Effect.g
 
 export const internalApi = Effect.gen(function* () {
   const token = yield* RunnerCredential
-  const api = yield* ActorInternalApi.pipe(Effect.provide(InternalSessionLive))
-  return Effect.gen(function* () {
-    const request = yield* HttpServerRequest
-    const authorization = Headers.get(request.headers, "authorization")
-    if (Option.isNone(authorization) || authorization.value !== `Bearer ${Redacted.value(token)}`) return HttpServerResponse.empty({ status: 401 })
-    return yield* api.fetch
-  })
-})
+  const services = yield* Layer.build(InternalSessionLive)
+  const api = yield* ActorInternalApi.pipe(Effect.provideContext(services))
+  return { api, token }
+}).pipe(Effect.map(({ api, token }) => Effect.gen(function* () {
+  const request = yield* HttpServerRequest
+  const authorization = Headers.get(request.headers, "authorization")
+  if (Option.isNone(authorization) || authorization.value !== `Bearer ${Redacted.value(token)}`) return HttpServerResponse.empty({ status: 401 })
+  return yield* api.fetch
+})))

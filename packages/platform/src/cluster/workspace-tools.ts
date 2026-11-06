@@ -66,24 +66,24 @@ export const invokeWorkspaceTool = Effect.fn("WorkspaceTools.invoke")(function* 
     return yield* WorkspaceToolRejected.make({ reason: "ParentRunTerminal" })
   }
   const target = yield* workspaceKey(scope.owner, scope.threadId)
-  const workspace = yield* Effect.gen(function* () {
-    const existing = yield* api.Workspace.get(target, { headers })
-    if (existing !== null && existing._tag === "Open") return existing
+  const workspace = yield* api.Workspace.get(target, { headers }).pipe(Effect.filterOrElse(existing => existing !== null && existing._tag === "Open", () => Effect.gen(function* () {
     const policy = yield* Config.schema(Schema.fromJsonString(WorkspacePolicy), "TARDIGRADE_WORKSPACE_POLICY").pipe(Config.withDefault(DEFAULT_WORKSPACE_POLICY))
     const command = OpenWorkspace.make({ threadId: scope.threadId, policy })
     const digest = yield* Digest.Digest
-    const commandId = yield* digest.digestHex(Digest.sha256, new TextEncoder().encode(Schema.encodeSync(Schema.fromJsonString(OpenWorkspace))(command)))
+    const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(OpenWorkspace))(command)
+    const commandId = yield* digest.digestHex(Digest.sha256, new TextEncoder().encode(encoded))
     yield* api.OpenWorkspace(target, command, { headers, commandId })
     const created = yield* api.Workspace.get(target, { headers })
-    if (created === null || created._tag !== "Open") return yield* new WorkspaceRejected({ reason: "WorkspaceNotOpen" })
+    if (created === null || created._tag !== "Open") return yield* WorkspaceRejected.make({ reason: "WorkspaceNotOpen" })
     return created
-  })
+  })))
   if (call.name === WriteText.name) {
     const command = WriteTextCommand.make({ ...call.params, operationId })
     const digest = yield* Digest.Digest
-    const commandId = yield* digest.digestHex(Digest.sha256, new TextEncoder().encode(Schema.encodeSync(Schema.fromJsonString(WriteTextCommand))(command)))
+    const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(WriteTextCommand))(command)
+    const commandId = yield* digest.digestHex(Digest.sha256, new TextEncoder().encode(encoded))
     const receipt = yield* api.WriteText(target, command, { headers, commandId })
-    if (receipt.reply.result === null) return yield* new WorkspaceRejected({ reason: "WorkspaceNotOpen" })
+    if (receipt.reply.result === null) return yield* WorkspaceRejected.make({ reason: "WorkspaceNotOpen" })
     return receipt.reply.result
   }
   if (call.name === ReadText.name) return yield* readText(workspace, call.params)
