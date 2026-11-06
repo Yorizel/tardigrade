@@ -166,5 +166,6 @@
   "./platform/workspace": "./src/platform/shared/workspace/index.ts",
   "./store": "./src/store/index.ts",
   "./domain": "./src/domain/index.ts",
-  "./platform/alchemy": "./src/platform/alchemy/index.ts"
+  "./platform/alchemy": "./src/platform/alchemy/index.ts",
+  "./platform/cluster": "./src/platform/cluster/workflow.ts"
 }

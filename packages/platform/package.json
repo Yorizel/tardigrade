@@ -8,7 +8,8 @@
     "./cloudflare": "./src/cloudflare/index.ts",
     "./journal": "./src/shared/sql-journal.ts",
     "./workspace": "./src/shared/workspace/index.ts",
-    "./alchemy": "./src/alchemy/index.ts"
+    "./alchemy": "./src/alchemy/index.ts",
+    "./cluster": "./src/cluster/workflow.ts"
   },
   "dependencies": {
     "@clavia/tardigrade-bun": "workspace:*",
@@ -40,7 +41,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "bun test test/bun",
+    "test": "bun test test/bun test/cluster",
     "test:workers": "vitest run --config vitest.config.ts && vitest run --config vitest.agent.config.ts",
     "test:workers:long": "TARDIGRADE_TEST_LONG=1 vitest run --config vitest.config.ts",
     "test:deployed": "bun run test/deployed.ts",

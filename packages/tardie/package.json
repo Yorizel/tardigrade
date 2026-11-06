@@ -192,7 +192,8 @@
     "./platform/workspace": "./src/generated/platform/workspace.ts",
     "./store": "./src/generated/store.ts",
     "./domain": "./src/generated/domain.ts",
-    "./platform/alchemy": "./src/generated/platform/alchemy.ts"
+    "./platform/alchemy": "./src/generated/platform/alchemy.ts",
+    "./platform/cluster": "./src/generated/platform/cluster.ts"
   },
   "dependencies": {
     "@clavia/tardigrade-deprecated-agent": "workspace:*",
