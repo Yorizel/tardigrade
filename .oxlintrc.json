@@ -1,7 +1,13 @@
 {
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "$schema": "./node_modules/@effect/tsgo/oxlint-schema.json",
   "categories": {
-    "correctness": "error"
+    "correctness": "error",
+    "nursery": "off",
+    "pedantic": "off",
+    "perf": "error",
+    "restriction": "off",
+    "style": "off",
+    "suspicious": "error"
   },
   "ignorePatterns": [
     "**/node_modules/**",
@@ -10,330 +16,189 @@
     ".claude/**"
   ],
   "rules": {
-    "eslint/require-yield": "off",
-    "typescript/no-explicit-any": "error"
-  },
-  "overrides": [
-    {
-      "files": [
-        "packages/agent/src/atoms/**/*.ts",
-        "packages/agent/src/actor/**/*.ts",
-        "packages/agent/src/contracts/**/*.ts",
-        "packages/agent/src/index.ts",
-        "packages/agent/src/agent.ts",
-        "packages/apps/*/src/actor.ts",
-        "packages/**/actors/**/*.ts",
-        "packages/core/src/services/supervisor/graph.ts",
-        "packages/**/agents/**/*.ts"
-      ],
-      "plugins": [
-        "typescript",
-        "unicorn",
-        "oxc",
-        "import"
-      ],
-      "rules": {
-        "import/no-nodejs-modules": "error",
-        "eslint/no-restricted-imports": [
-          "error",
-          {
-            "paths": [
-              {
-                "name": "@clavia/tardigrade-libraries",
-                "message": "Import data contracts from libraries/types. Configure executable packages in a service layer.",
-                "allowTypeImports": true
-              },
-              {
-                "name": "@clavia/tardigrade-core",
-                "importNames": [
-                  "EffectExecution",
-                  "runtimeAtom",
-                  "createActorStore",
-                  "createActorExecution",
-                  "createThreadHost",
-                  "localActors",
-                  "Invocation",
-                  "Supervisor",
-                  "Promises",
-                  "RemoteBackup",
-                  "createInvocation",
-                  "createSupervisor",
-                  "createThreadStore",
-                  "createSupervisorStore",
-                  "createJournalStore",
-                  "remoteBackupFromKeyValueStore"
-                ],
-                "allowTypeImports": true,
-                "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-              },
-              {
-                "name": "effect",
-                "importNames": [
-                  "Layer",
-                  "FileSystem",
-                  "ChildProcessSpawner",
-                  "Terminal"
-                ],
-                "allowTypeImports": true,
-                "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-              }
-            ],
-            "patterns": [
-              {
-                "regex": "^@clavia/tardigrade-core($|/runtime/(events|effect-request)$)|(^|/)runtime/(events|effect-request)$",
-                "importNames": [
-                  "CoreEvent",
-                  "EffectRequest",
-                  "EffectRequested",
-                  "StoredEffectRequest",
-                  "StoredEffectRequested"
-                ],
-                "message": "Actor modules observe EffectAcceptance and ObservedCoreEvent. Stored requests belong to the runtime."
-              },
-              {
-                "regex": "(^|/)(services|platform)(/|$)|^@effect/platform|^@clavia/tardigrade-platform(/|$)|^bun(:|$)|^cloudflare:|^@clavia/tardigrade-core/runtime/(execution|actors|layers|stores)(/|$)",
-                "allowTypeImports": true,
-                "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-              },
-              {
-                "group": [
-                  "@clavia/tardigrade-libraries/*",
-                  "!@clavia/tardigrade-libraries/types",
-                  "effect/Layer",
-                  "effect/Effect",
-                  "effect/FileSystem",
-                  "effect/ChildProcessSpawner",
-                  "effect/*",
-                  "!effect/reactivity",
-                  "@clavia/tardigrade-model",
-                  "@clavia/tardigrade-model/*",
-                  "!@clavia/tardigrade-model/reference",
-                  "!@clavia/tardigrade-model/object/reference"
-                ],
-                "allowTypeImports": true,
-                "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-              }
-            ]
-          }
-        ],
-        "eslint/no-restricted-globals": [
-          "error",
-          {
-            "globals": [
-              {
-                "name": "fetch",
-                "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-              },
-              {
-                "name": "WebSocket",
-                "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-              },
-              {
-                "name": "XMLHttpRequest",
-                "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-              },
-              {
-                "name": "EventSource",
-                "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-              },
-              {
-                "name": "Worker",
-                "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-              },
-              {
-                "name": "SharedWorker",
-                "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-              },
-              {
-                "name": "navigator",
-                "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-              },
-              {
-                "name": "localStorage",
-                "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-              },
-              {
-                "name": "sessionStorage",
-                "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-              },
-              {
-                "name": "indexedDB",
-                "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-              },
-              {
-                "name": "caches",
-                "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-              },
-              {
-                "name": "Bun",
-                "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-              },
-              {
-                "name": "Deno",
-                "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-              },
-              {
-                "name": "process",
-                "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-              },
-              {
-                "name": "require",
-                "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-              },
-              {
-                "name": "importScripts",
-                "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-              },
-              {
-                "name": "setTimeout",
-                "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-              },
-              {
-                "name": "setInterval",
-                "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-              },
-              {
-                "name": "setImmediate",
-                "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-              },
-              {
-                "name": "clearTimeout",
-                "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-              },
-              {
-                "name": "clearInterval",
-                "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-              },
-              {
-                "name": "clearImmediate",
-                "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-              },
-              {
-                "name": "queueMicrotask",
-                "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-              }
-            ],
-            "checkGlobalObject": true,
-            "globalObjects": [
-              "global"
-            ]
-          }
-        ],
-        "eslint/no-restricted-properties": [
-          "error",
-          {
-            "property": "layer",
-            "message": "Supply act implementation layers in platform wiring; actor modules only request acts."
-          },
-          {
-            "object": "Effect",
-            "property": "runPromise",
-            "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-          },
-          {
-            "object": "Effect",
-            "property": "runPromiseExit",
-            "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-          },
-          {
-            "object": "Effect",
-            "property": "runSync",
-            "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-          },
-          {
-            "object": "Effect",
-            "property": "runSyncExit",
-            "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-          },
-          {
-            "object": "Effect",
-            "property": "runFork",
-            "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-          },
-          {
-            "object": "Effect",
-            "property": "runCallback",
-            "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-          },
-          {
-            "object": "Effect",
-            "property": "runPromiseWith",
-            "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-          },
-          {
-            "object": "Effect",
-            "property": "runPromiseExitWith",
-            "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-          },
-          {
-            "object": "Effect",
-            "property": "runSyncWith",
-            "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-          },
-          {
-            "object": "Effect",
-            "property": "runSyncExitWith",
-            "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-          },
-          {
-            "object": "Effect",
-            "property": "runForkWith",
-            "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-          },
-          {
-            "object": "Effect",
-            "property": "runCallbackWith",
-            "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-          },
-          {
-            "object": "Effect",
-            "property": "promise",
-            "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-          },
-          {
-            "object": "Effect",
-            "property": "tryPromise",
-            "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-          },
-          {
-            "object": "Effect",
-            "property": "async",
-            "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-          },
-          {
-            "object": "Effect",
-            "property": "sleep",
-            "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-          },
-          {
-            "object": "Effect",
-            "property": "delay",
-            "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-          },
-          {
-            "object": "Effect",
-            "property": "forkChild",
-            "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-          },
-          {
-            "object": "Effect",
-            "property": "forkDetach",
-            "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-          },
-          {
-            "object": "Effect",
-            "property": "forkIn",
-            "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-          },
-          {
-            "object": "Effect",
-            "property": "forkScoped",
-            "message": "Actor modules propose acts. Move I/O and implementation wiring into a service layer."
-          }
-        ],
-        "eslint/no-eval": "error",
-        "eslint/no-new-func": "error"
+    "jsx-a11y/prefer-tag-over-role": "error",
+    "eslint/require-yield": "error",
+    "typescript/no-explicit-any": "error",
+    "effecttsgo/catch-unfailable-effect": "error",
+    "effecttsgo/effect-fn-iife": "error",
+    "effecttsgo/effect-gen-uses-adapter": "error",
+    "effecttsgo/effect-in-failure": "error",
+    "effecttsgo/effect-in-void-success": "error",
+    "effecttsgo/effect-try-without-catch": "error",
+    "effecttsgo/global-error-in-effect-catch": "error",
+    "effecttsgo/global-error-in-effect-failure": "error",
+    "effecttsgo/layer-merge-all-with-dependencies": "error",
+    "effecttsgo/lazy-effect": "error",
+    "effecttsgo/lazy-promise-in-effect-sync": "error",
+    "effecttsgo/leaking-requirements": "error",
+    "effecttsgo/multiple-effect-provide": "error",
+    "effecttsgo/prefer-unsafe-constructor": "error",
+    "effecttsgo/return-effect-in-gen": "error",
+    "effecttsgo/run-effect-inside-effect": "error",
+    "effecttsgo/schema-sync-in-effect": "error",
+    "effecttsgo/scope-in-layer-effect": "error",
+    "effecttsgo/strict-effect-provide": "error",
+    "effecttsgo/try-catch-in-effect-gen": "error",
+    "effecttsgo/unknown-in-effect-catch": "error",
+    "effecttsgo/any-unknown-in-error-context": "error",
+    "effecttsgo/class-self-mismatch": "error",
+    "effecttsgo/duplicate-package": "error",
+    "effecttsgo/effect-fn-implicit-any": "error",
+    "effecttsgo/error-payload-shadows-name": "error",
+    "effecttsgo/experimental-api-usage": "error",
+    "effecttsgo/floating-effect": "error",
+    "effecttsgo/floating-effect-in-vitest": "error",
+    "effecttsgo/generic-effect-services": "error",
+    "effecttsgo/missing-effect-context": "error",
+    "effecttsgo/missing-effect-error": "error",
+    "effecttsgo/missing-layer-context": "error",
+    "effecttsgo/missing-return-yield-star": "error",
+    "effecttsgo/missing-star-in-yield-effect-gen": "error",
+    "effecttsgo/non-object-effect-service-type": "error",
+    "effecttsgo/obsolete-match-import": "error",
+    "effecttsgo/obsolete-schema-import": "error",
+    "effecttsgo/outdated-api": "error",
+    "effecttsgo/overridden-schema-constructor": "error",
+    "effecttsgo/promise-in-effect-success": "error",
+    "effecttsgo/schema-class-missing-brand": "error",
+    "effecttsgo/schema-class-object-literal": "error",
+    "effecttsgo/schema-literal-non-finite": "error",
+    "effecttsgo/schema-opaque-instance-member": "error",
+    "effecttsgo/unsafe-effect-type-assertion": "error",
+    "effecttsgo/unstable-api-usage": "off",
+    "effecttsgo/abort-controller-in-effect": "error",
+    "effecttsgo/async-function": "error",
+    "effecttsgo/crypto-random-uuid": "error",
+    "effecttsgo/crypto-random-uuid-in-effect": "error",
+    "effecttsgo/extends-native-error": "error",
+    "effecttsgo/global-console": "error",
+    "effecttsgo/global-console-in-effect": "error",
+    "effecttsgo/global-date": "error",
+    "effecttsgo/global-date-in-effect": "error",
+    "effecttsgo/global-fetch": "error",
+    "effecttsgo/global-fetch-in-effect": "error",
+    "effecttsgo/global-json": "error",
+    "effecttsgo/global-json-in-effect": "error",
+    "effecttsgo/global-random": "error",
+    "effecttsgo/global-random-in-effect": "error",
+    "effecttsgo/global-timers": "error",
+    "effecttsgo/global-timers-in-effect": "error",
+    "effecttsgo/instance-of-schema": "error",
+    "effecttsgo/new-promise": "error",
+    "effecttsgo/node-builtin-import": "error",
+    "effecttsgo/prefer-effect-array": "error",
+    "effecttsgo/prefer-effect-record": "error",
+    "effecttsgo/prefer-effect-string": "error",
+    "effecttsgo/process-env": "error",
+    "effecttsgo/process-env-in-effect": "error",
+    "effecttsgo/schema-sync": "error",
+    "effecttsgo/api-stability-leak": "off",
+    "effecttsgo/acquire-release-disposable": "error",
+    "effecttsgo/all-of-map-to-for-each": "error",
+    "effecttsgo/catch-all-tag-dispatch-to-catch-tag": "error",
+    "effecttsgo/catch-all-to-map-error": "error",
+    "effecttsgo/catch-chain-to-first-success-of": "error",
+    "effecttsgo/catch-conditional-refail-to-catch-if": "error",
+    "effecttsgo/catch-die-to-or-die": "error",
+    "effecttsgo/catch-if-tag-to-catch-tag": "error",
+    "effecttsgo/catch-refail-to-tap-error": "error",
+    "effecttsgo/catch-tag-to-catch-reason": "error",
+    "effecttsgo/catch-to-ignore": "error",
+    "effecttsgo/catch-to-or-else-succeed": "error",
+    "effecttsgo/effect-fn-opportunity": "error",
+    "effecttsgo/effect-map-flatten": "error",
+    "effecttsgo/effect-map-void": "error",
+    "effecttsgo/effect-sleep-zero-to-yield-now": "error",
+    "effecttsgo/effect-succeed-with-undefined": "error",
+    "effecttsgo/effect-succeed-with-void": "error",
+    "effecttsgo/fail-cause-to-constructor": "error",
+    "effecttsgo/flat-map-conditional-to-filter-or-fail": "error",
+    "effecttsgo/flat-map-identity-to-flatten": "error",
+    "effecttsgo/flat-map-ignored-param-to-and-then": "error",
+    "effecttsgo/flat-map-to-map": "error",
+    "effecttsgo/flat-map-to-tap": "error",
+    "effecttsgo/manual-metric-tap-to-track": "error",
+    "effecttsgo/map-const-to-as": "error",
+    "effecttsgo/map-some-catch-no-such-element": "error",
+    "effecttsgo/map-some-to-as-some": "error",
+    "effecttsgo/match-boolean-to-is-success": "error",
+    "effecttsgo/match-effect-to-map-both": "error",
+    "effecttsgo/match-effect-to-match": "error",
+    "effecttsgo/match-to-result-or-option": "error",
+    "effecttsgo/multiple-catch-tag": "error",
+    "effecttsgo/option-match-to-from-option": "error",
+    "effecttsgo/prefer-succeed-some-or-none": "error",
+    "effecttsgo/prefer-typed-schema-decoder": "error",
+    "effecttsgo/provide-layer-succeed-to-provide-service": "error",
+    "effecttsgo/race-first-with-sleep-to-timeout": "error",
+    "effecttsgo/redundant-map-error": "error",
+    "effecttsgo/redundant-or-die": "error",
+    "effecttsgo/redundant-schema-tag-identifier": "error",
+    "effecttsgo/result-match-to-from-result": "error",
+    "effecttsgo/run-of-exit-to-run-exit": "error",
+    "effecttsgo/schema-number": "error",
+    "effecttsgo/schema-struct-with-tag": "error",
+    "effecttsgo/suspend-fail-to-fail-sync": "error",
+    "effecttsgo/sync-to-succeed": "error",
+    "effecttsgo/timeout-catch-tag-to-timeout-or-else": "error",
+    "effecttsgo/unnecessary-effect-gen": "error",
+    "effecttsgo/unnecessary-fail-yieldable-error": "error",
+    "effecttsgo/unnecessary-pipe": "error",
+    "effecttsgo/unnecessary-pipe-chain": "error",
+    "effecttsgo/unnecessary-typeof-type": "error",
+    "effecttsgo/deterministic-keys": "error",
+    "effecttsgo/effect-do-notation": "error",
+    "effecttsgo/map-map-error-to-map-both": "error",
+    "effecttsgo/missed-pipeable-opportunity": "error",
+    "effecttsgo/missing-effect-service-dependency": "error",
+    "effecttsgo/missing-pipeable-signature": "error",
+    "effecttsgo/nested-effect-gen-yield": "error",
+    "effecttsgo/new-schema-class": "error",
+    "effecttsgo/prefer-barrel-import": "error",
+    "effecttsgo/prefer-namespace-import": "error",
+    "effecttsgo/prefer-schema-tagged-error": "error",
+    "effecttsgo/prefer-schema-type-property": "error",
+    "effecttsgo/provide-merge-all-to-array": "error",
+    "effecttsgo/schema-union-of-literals": "error",
+    "effecttsgo/service-not-as-class": "error",
+    "effecttsgo/strict-boolean-expressions": "error",
+    "effecttsgo/type-union-to-schema-union": "error",
+    "effecttsgo/unnecessary-arrow-block": "error",
+    "effecttsgo/yield-in-call-argument": "error",
+    "alchemy/config-in-init": "error",
+    "alchemy/no-disposable-in-instance-scope": "error",
+    "alchemy/worker-env-secret-literal": "error",
+    "alchemy/workflow-io-outside-task": "error",
+    "react/react-in-jsx-scope": "off",
+    "eslint/no-underscore-dangle": [
+      "error",
+      {
+        "allow": [
+          "_tag"
+        ]
       }
-    }
+    ]
+  },
+  "overrides": [],
+  "options": {
+    "typeAware": true,
+    "reportUnusedDisableDirectives": "error"
+  },
+  "plugins": [
+    "typescript",
+    "unicorn",
+    "oxc",
+    "import",
+    "node",
+    "promise",
+    "react",
+    "react-perf",
+    "jsx-a11y",
+    "jsdoc",
+    "vitest",
+    "effecttsgo"
+  ],
+  "jsPlugins": [
+    "@aurelienbbn/oxlint-plugin-alchemy"
   ]
 }

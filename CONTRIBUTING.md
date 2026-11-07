@@ -23,7 +23,17 @@ bun run gate
 
 The gate runs lint (oxlint), prose lint (`tools/docs-lint.ts`), Effect lint (`@effect/tsgo`, one run per TypeScript project), typecheck (every package plus root tools), tests (`bun test` per package), and dead-code analysis (knip) in parallel. It must exit 0. Narrow it with `bun run gate --only=typecheck` while iterating. The pre-push hook runs the whole gate.
 
-The Effect lint reads rules the type checker does not carry: an effect nobody yielded, a requirement nobody provides, a wall clock read inside a replayed body, a schema that admits `NaN`. [tsconfig.effect.json](tsconfig.effect.json) names every installed rule with the severity this repository holds it to, and each rule that is off says why. The gate checks that list against the installed rule catalog, then fails on an error or warning. `bun run lint:effect` runs it alone. A source exception uses `// @effect-diagnostics-next-line <rule>:off` with its reason at the expression it covers.
+The Effect lint reads rules the type checker does not carry: an effect nobody yielded, a requirement nobody provides, a wall clock read inside a replayed body, a schema that admits `NaN`. [tsconfig.effect.json](tsconfig.effect.json) names every supported diagnostic shipped by the installed Effect plugin. All compatible diagnostics are errors in the mandatory gate. The two API stability diagnostics remain errors in the literal audit because the project permits native Effect APIs regardless of stability annotations. Unsupported alias names are omitted while their supported replacements remain errors. The gate checks the complete catalog, the exact audit-only pair and all required severities. `bun run lint:effect` runs those checks alone.
+
+`bun run lint` is the mandatory type-aware Oxlint gate through the pinned tsrs backend and Effect tsgo integration. It enables correctness, performance, and suspicious rules, every compatible Effect diagnostic and all four community Alchemy rules, with zero warnings allowed. The React import-in-scope rule stays in the audit because the apps use the automatic JSX runtime. The mandatory underscore-name rule allows the native Effect `_tag` discriminant; the literal audit retains its prohibition. `bun run lint:tsgo` runs the same gate through the native tsgo backend; `bun run typecheck:tsrs` runs the tsrs compiler. The Alchemy plugin is the community package `@aurelienbbn/oxlint-plugin-alchemy`.
+
+The built-in semantic-role rule is mandatory and remains enabled in the literal audit. Its HTML replacement policy applies to every recognized token in a literal role value, while SVG graphics can carry an explicit accessible role and name. A namespace-aware replacement must preserve the built-in HTML decisions, including configured component mappings and HTML inside SVG `foreignObject`, before it can take over the mandatory rule.
+
+Before running the gate, run `bun run tools/native-oxlint-build.ts` to prepare the pinned Effect-patched Oxlint binding with the SVG namespace and Node worker applicability corrections. On the shared host, run that command through `resource-run --wait`. The build verifies its upstream archives, Effect patches, generated rule metadata, Rust toolchain and both applicability patches; its artifact key also includes the installed Effect lint backends. Lint commands validate the artifact and its receipt without building or downloading during the gate. This development lint binding supports Linux x64 with glibc; other development hosts are not supported by this gate. The framework runtime has its own platform requirements.
+
+The native `unicorn/require-post-message-target-origin` rule retains its Window checks and recognizes Node worker receivers only when their imports and immutable bindings establish the worker API. Inferred values crossing asynchronous acquisition need a native Node worker type annotation at the binding; unknown and mutable receivers remain subject to the original rule.
+
+`bun run lint:audit` uses [.oxlintrc.audit.json](.oxlintrc.audit.json) to extend the gate with all rule categories, including conflicting export and style restrictions. It reports the literal maximum and exits nonzero on findings, but is outside the mandatory gate. `bun run lint:effect:audit` runs every supported Effect diagnostic as an error across the discovered TypeScript projects; repeat `--project <path>` to select projects. It derives the native `--lspconfig` override from the mandatory policy and does not maintain a second rule catalog. Actual native diagnostic fixtures verify that compatible failures remain errors and the audit restores both API stability checks. Existing compatible violations still fail the mandatory gate; this split adds no source exemptions or diagnostic baseline.
 
 `any` is a lint error. It defeats the checks the rest of the framework leans on, and every place it looked necessary had an honest type behind it. The one exception is annotated where it sits, with the reason it can not be written any other way.
 
@@ -31,33 +41,22 @@ The prose lint holds markdown to the rules in [AGENTS.md](AGENTS.md) that a code
 
 CI installs with `bun install --frozen-lockfile` and runs the full `bun run gate` for code changes and pushes to `main`. For PRs that change only `docs/`, the required `gate` job runs `bun run gate --only=lint:docs,build:app-web` to check prose and compile the documentation site. Commit `bun.lock` with any dependency change.
 
+
+## Test layout
+
+Keep authored tests in separate `__tests__` directories. Tool tests live in `tools/__tests__`, native CLI tests in `packages/apps/cli/__tests__`, Domain tests in `packages/domain/__tests__`, and platform tests in `packages/platform/__tests__`. Keep executable fixtures in separate files and resolve their paths from `import.meta.url`.
+
+Run focused checks on the shared host with `/home/yorizel/.local/bin/resource-run --wait bun test tools/__tests__` and `/home/yorizel/.local/bin/resource-run --wait bun run --cwd packages/apps/cli test`. Use the same wrapper for typechecks and the gate. The Story and Scene foundation lives in `packages/platform/src/testing`: Story drives the interpreter's pure transitions, and Scene exercises its scoped Effect execution. This foundation does not establish durable workflow replay or browser behavior.
+
 ## Web deployment
 
 Web deployment is manual. In GitHub Actions, select `deploy-web`, choose **Run workflow**, and use the `main` branch. The workflow checks prose, typechecks the web app, and builds it before deploying to Vercel production.
 
-## Long-running fixture
+## Native capabilities
 
-The 10k-event workerd regression is opt-in and runs outside the gate:
+Alchemy Domain aggregates own decisions, accepted facts and rejections. Policies and native Effect workflows react to those facts; external systems and platform Layers own I/O and resource lifetime. The interpreter's pure update computes requests, and its Effect execution boundary settles them. Keep authorization and durable state at their existing native owners.
 
-```sh
-bun run --cwd packages/platform test:workers:long
-```
-
-## Deployed fixture flow
-
-The platform has an opt-in flow against real Cloudflare Workers. Authenticate Wrangler, then run:
-
-```sh
-bun run --cwd packages/platform test:deployed
-```
-
-The command deploys a uniquely named fixture Worker, runs the same thread creation and messaging flow as the local workerd tests, then deletes its Durable Object namespaces and Worker in teardown. It is outside the gate. Use `--dry-run` to check the fixture bundle without deploying. Use `--url URL` to run against an existing deployment of the same fixture, including Celld; this mode leaves that deployment in place and reads its bearer token from `FIXTURE_TOKEN`.
-
-## Actor capabilities
-
-Actor modules propose acts and read data services. Act implementations and platform wiring own I/O. The overrides in [.oxlintrc.json](.oxlintrc.json) apply to agent atoms and contracts, CLI actor entrypoints, the supervisor, and `actors/` directories. Keep actor definitions in these locations and put implementation layers in `services/` modules or platform entrypoints. Import shared schemas from data contract modules.
-
-Oxlint's built-in restricted-import, restricted-global, and restricted-property rules reject service imports, Node built-ins, ambient I/O, timers, act layer wiring, and direct Effect execution in these modules. The global checks include `globalThis`, `window`, `self`, and `global`. These checks are syntactic: they do not establish transitive helper purity or prevent every computed import or aliased property access. Capability selection in the runtime remains a separate boundary.
+Code execution receives a trusted capability catalog. Guest code cannot grant itself an owner, a tool or a larger execution budget. Domain preparation, approval and dispatch enforce the accepted policy before external execution. Source lint is a development check and does not replace runtime authorization or isolation.
 
 ## PR expectations
 

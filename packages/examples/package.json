@@ -8,21 +8,21 @@
     "./agents": "./agents/index.ts"
   },
   "scripts": {
-    "cloudflare": "wrangler dev --config wrangler.cloudflare.jsonc",
-    "models:lock": "bun ../../apps/cli/src/main.ts models lock",
+    "cloudflare": "alchemy dev",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.cloudflare.json",
-    "bun": "bun bun.ts"
+    "bun": "bun bun.ts",
+    "test": "bun test"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260804.1",
-    "wrangler": "^4.119.0"
+    "@alchemy.run/cloudflare": "2.0.0-beta.85",
+    "alchemy": "2.0.0-beta.85"
   },
   "dependencies": {
-    "@clavia/tardigrade-core": "workspace:*",
-    "@clavia/tardigrade-agent": "workspace:*",
-    "@clavia/tardigrade-libraries": "workspace:*",
+    "@clavia/tardigrade-domain": "workspace:*",
     "@clavia/tardigrade-platform": "workspace:*",
-    "@clavia/tardigrade-model": "workspace:*",
-    "effect": "4.1.2"
+    "effect": "4.1.2",
+    "@alchemy.run/domain": "2.0.0-beta.85",
+    "@effect/platform-bun": "4.1.2"
   }
 }

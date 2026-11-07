@@ -1,0 +1,601 @@
+import { ReleaseBackgroundChildAdmission, BackgroundChildAdmissionReleased, ConfirmBackgroundFencedNotStarted, BackgroundChildFencedNotStarted, ReserveBackgroundChild, StartBackgroundChild, CancelBackgroundChild, SettleBackgroundChild, ReconcileBackgroundChild, BackgroundChildReserved, BackgroundChildStarted, BackgroundChildCancellationRequested, BackgroundChildSettled, BackgroundChildReconciled } from "./Thread.commands"
+import { ForkRejected } from "../Fork/Fork.schemas"
+import { ModelChoice, ModelGrant } from "../Execution/Model.schemas"
+import { CompactionSettlement } from "../Execution/Context.schemas"
+import { planCompaction, compactedPrompt, promptChars, contextBoundaries } from "../Execution/Context.compaction"
+import { BeginCompaction, RecordCompaction, ContextCompactionPlanned, ContextCompacted, ContextCompactionDiscarded } from "./Thread.commands"
+import * as Domain from "@alchemy.run/domain"
+import { Array, DateTime, Effect, Option, Schema, String, Struct } from "effect"
+import { delegationKey } from "../Delegation/Delegation.schemas"
+import { CurrentCaller, Session } from "../Actor.context"
+import { ThreadId, ThreadState, RunLimits, Prompt, StepSettlement, OpenState, Run, RunRequest, ChildBinding, ChildAdmission, ForkSnapshot, BackgroundReservation, BackgroundResolution, Receipt } from "./Thread.schemas"
+import { validateOutput } from "../Output/Output"
+import { OutputDeclaration } from "../Output/Output.schemas"
+import { InitializeFork, ThreadForkInitialized, OpenThread, RequestRun, SelectRunModel, RunModelSelected, BeginStep, ConfirmDispatch, RecordStep, ApproveRun, CompleteRun, FailRun, CancelRun, MarkUnknown, ThreadOpened, RunRequested, StepPrepared, StepDispatched, StepRecorded, RunApproved, RunCompleted, RunFailed, RunCancelled, RunBecameUnknown, RunRejected, NotOwner, RunAcknowledged, StepOutputRejected, ExpireRun, StepReconciled, ResolveUnknown, ChildAdmissionReserved, ChildAdmissionClosed, ChildThreadOpened, ReserveChildThread, OpenChildThread, RequestChildRun, FenceChildThread } from "./Thread.commands"
+
+const owned = Effect.fn("Thread.owned")(function* (state: typeof ThreadState.Type) {
+  const caller = yield* CurrentCaller
+  if (state._tag === "Unopened" || state.owner !== caller.subject) return yield* NotOwner.make()
+  return state
+})
+
+const working = (state: typeof ThreadState.Type, runId: string) => {
+  if (state._tag !== "Open" || state.active === null || state.active.runId !== runId) return RunRejected.make({ reason: "UnknownRun" })
+  if (state.child !== null && state.child.closed) return RunRejected.make({ reason: "ChildAdmissionClosed" })
+  if (["completed", "failed", "cancelled", "unknown"].includes(state.active.status)) return RunRejected.make({ reason: "RunTerminal" })
+  return { thread: state, run: state.active }
+}
+
+const receiptOf = (run: typeof Run.Type) => ({ runId: run.runId, digest: run.digest, input: run.input, output: run.output, status: run.status, tokens: run.tokens, compactions: run.compactions, step: run.step, text: run.text, result: run.result, reason: run.reason, ...Struct.pick(run, ["requestedModel", "model"]) })
+
+const admitRun = Effect.fn("Thread.admitRun")(function* (current: typeof OpenState.Type, command: typeof RunRequest.Type, now: DateTime.Utc, grantedModel?: typeof ModelGrant.Type) {
+      const previous = Array.findFirst(current.receipts, receipt => receipt.runId === command.runId)
+      if (Option.isSome(previous)) {
+        if (grantedModel !== undefined && !Schema.toEquivalence(Schema.UndefinedOr(ModelGrant))(previous.value.model, grantedModel)) return yield* RunRejected.make({ reason: "ModelSelectionConflict" })
+        if (!Schema.toEquivalence(Schema.UndefinedOr(ModelChoice))(previous.value.requestedModel, command.model) || previous.value.digest !== command.digest || !Schema.toEquivalence(Prompt.Prompt)(previous.value.input, command.prompt) || !Schema.toEquivalence(Schema.NullOr(OutputDeclaration))(previous.value.output, command.output ?? null)) return yield* RunRejected.make({ reason: "RunIdConflict" })
+        return [RunAcknowledged.make({ receipt: previous.value })]
+      }
+      if (current.active !== null && current.active.runId === command.runId) {
+        if (grantedModel !== undefined && !Schema.toEquivalence(Schema.UndefinedOr(ModelGrant))(current.active.model, grantedModel)) return yield* RunRejected.make({ reason: "ModelSelectionConflict" })
+        if (!Schema.toEquivalence(Schema.UndefinedOr(ModelChoice))(current.active.requestedModel, command.model) || current.active.digest !== command.digest || !Schema.toEquivalence(Prompt.Prompt)(current.active.input, command.prompt) || !Schema.toEquivalence(Schema.NullOr(OutputDeclaration))(current.active.output, command.output ?? null)) return yield* RunRejected.make({ reason: "RunIdConflict" })
+        return [RunAcknowledged.make({ receipt: receiptOf(current.active) })]
+      }
+      if (current.active !== null && !["completed", "failed", "cancelled"].includes(current.active.status)) return yield* RunRejected.make({ reason: "RunBusy" })
+      if (current.active !== null && current.receipts.length + 1 >= current.limits.maxRuns) return yield* RunRejected.make({ reason: "RunHistoryLimit" })
+      const prompt = Prompt.concat(current.history, command.prompt)
+      if (prompt.content.length > current.limits.maxMessages) return yield* RunRejected.make({ reason: "MessageBudgetExceeded" })
+      const startedAt = DateTime.toEpochMillis(now)
+      const pending = { ...Struct.renameKeys(Struct.pick(command, ["model"]), { model: "requestedModel" }), runId: command.runId, digest: command.digest, output: command.output ?? null, input: command.prompt, prompt, status: "pending", startedAt, deadlineAt: startedAt + current.limits.maxDurationMs, turns: 0, toolCalls: 0, tokens: 0, stepSerial: 0, settlements: [], compactions: [], step: null, text: "", result: null, reason: null } as const
+      const run = Option.match(Option.fromUndefinedOr(grantedModel), { onNone: () => pending, onSome: model => ({ ...pending, model }) })
+      return [RunRequested.make({ run })]
+})
+
+const admissionOf = (state: typeof ThreadState.Type) => {
+  if (state._tag === "ChildReserved") return state
+  if (state._tag === "Open") return state.child
+  return null
+}
+
+const initialize = (event: ThreadOpened | ChildThreadOpened | typeof ForkSnapshot.Type, child: typeof ChildAdmission.Type | null) => ({ _tag: "Open" as const, actor: event.actor, instance: event.instance, name: event.name, owner: event.owner, limits: event.limits, history: Prompt.empty, active: null, receipts: [], lastReceipt: null, child, background: [] })
+
+export class Thread extends Domain.Aggregate("Thread", {
+  id: ThreadId,
+  state: ThreadState,
+  initial: { _tag: "Unopened" },
+  commands: [ReleaseBackgroundChildAdmission, ConfirmBackgroundFencedNotStarted, ReserveBackgroundChild, StartBackgroundChild, CancelBackgroundChild, SettleBackgroundChild, ReconcileBackgroundChild, InitializeFork, BeginCompaction, RecordCompaction, OpenThread, RequestRun, SelectRunModel, BeginStep, ConfirmDispatch, RecordStep, ApproveRun, CompleteRun, FailRun, CancelRun, MarkUnknown, ExpireRun, ResolveUnknown, ReserveChildThread, OpenChildThread, RequestChildRun, FenceChildThread],
+  decide: {
+    ReserveBackgroundChild: Effect.fn("Thread.ReserveBackgroundChild")(function* (state, command, { id }) {
+      const current = yield* owned(state)
+      if (current._tag !== "Open") return yield* RunRejected.make({ reason: "UnknownRun" })
+      const existing = Option.getOrUndefined(Array.findFirst(current.background, child => child.request.binding.delegationId === command.binding.delegationId || child.request.reservation.parentRunId === command.reservation.parentRunId && child.request.reservation.requestId === command.reservation.requestId))
+      if (existing !== undefined) {
+        if (Schema.toEquivalence(BackgroundReservation)(existing.request, command)) return []
+        return yield* RunRejected.make({ reason: "RequestIdentityConflict" })
+      }
+      const binding = command.binding
+      const reservation = command.reservation
+      if (binding.parentThreadId !== id || reservation.parentThreadId !== id || binding.parentRunId !== reservation.parentRunId || binding.childRunId !== reservation.requestId || binding.actor !== reservation.targetActor || binding.delegationId !== delegationKey(id, binding.parentRunId, reservation.requestId) || command.childThreadId !== binding.delegationId) return yield* RunRejected.make({ reason: "ChildBindingIdentityConflict" })
+      const work = working(current, binding.parentRunId)
+      if ("_tag" in work) return yield* work
+      if (current.background.length > 0 && current.background[0]?.request.maxChildren !== command.maxChildren) return yield* RunRejected.make({ reason: "ChildLedgerPolicyConflict" })
+      if (current.background.length >= command.maxChildren) return yield* RunRejected.make({ reason: "ChildLedgerLimit" })
+      if (reservation.lineage.length === 0 || reservation.lineage.at(-1) !== id || Array.dedupe(reservation.lineage).length !== reservation.lineage.length || reservation.lineage.includes(binding.delegationId) || reservation.lineage.length > reservation.limits.maxDepth) return yield* RunRejected.make({ reason: "InvalidLineage" })
+      if (reservation.toolCalls > reservation.limits.maxToolCalls || work.run.toolCalls + reservation.toolCalls > current.limits.maxToolCalls) return yield* RunRejected.make({ reason: "ToolBudgetExceeded" })
+      if (work.run.tokens + command.tokens >= current.limits.maxTokens) return yield* RunRejected.make({ reason: "TokenBudgetExceeded" })
+      if (command.mutation && Array.some(current.background, child => (child.status === "unknown" || child.request.mutation && child.status === "cancel_requested"))) return yield* RunRejected.make({ reason: "UncertainChild" })
+      return [BackgroundChildReserved.make({ child: { request: command, status: "reserved", cancelReason: null, receipt: null, resolution: null }, tokensAfter: work.run.tokens + command.tokens, toolCallsAfter: work.run.toolCalls + reservation.toolCalls })]
+    }),
+    ReleaseBackgroundChildAdmission: Effect.fn("Thread.ReleaseBackgroundChildAdmission")(function* (state, command) {
+      const current = yield* owned(state)
+      if (current._tag !== "Open") return yield* RunRejected.make({ reason: "UnknownChild" })
+      const child = Option.getOrUndefined(Array.findFirst(current.background, item => item.request.binding.delegationId === command.binding.delegationId))
+      if (child === undefined) return []
+      if (!Schema.toEquivalence(BackgroundReservation)(child.request, command)) return yield* RunRejected.make({ reason: "RequestIdentityConflict" })
+      if (child.status !== "reserved") return yield* RunRejected.make({ reason: "ChildAlreadyStarted" })
+      return [BackgroundChildAdmissionReleased.make({ request: command })]
+    }),
+    StartBackgroundChild: Effect.fn("Thread.StartBackgroundChild")(function* (state, command) {
+      const current = yield* owned(state)
+      if (current._tag !== "Open") return yield* RunRejected.make({ reason: "UnknownChild" })
+      const child = Option.getOrUndefined(Array.findFirst(current.background, item => item.request.binding.delegationId === command.delegationId))
+      if (child === undefined) return yield* RunRejected.make({ reason: "UnknownChild" })
+      if (child.status === "running") return []
+      if (child.status !== "reserved") return yield* RunRejected.make({ reason: "ChildNotStartable" })
+      if (child.request.mutation && Array.some(current.background, item => item.status === "unknown" || item.request.mutation && item.status === "cancel_requested")) return yield* RunRejected.make({ reason: "UncertainChild" })
+      return [BackgroundChildStarted.make({ delegationId: command.delegationId })]
+    }),
+    CancelBackgroundChild: Effect.fn("Thread.CancelBackgroundChild")(function* (state, command) {
+      const current = yield* owned(state)
+      if (current._tag !== "Open") return yield* RunRejected.make({ reason: "UnknownChild" })
+      const child = Option.getOrUndefined(Array.findFirst(current.background, item => item.request.binding.delegationId === command.delegationId))
+      if (child === undefined) return yield* RunRejected.make({ reason: "UnknownChild" })
+      if (child.cancelReason !== null) {
+        if (child.cancelReason === command.reason) return []
+        return yield* RunRejected.make({ reason: "CancellationConflict" })
+      }
+      if (child.status !== "reserved" && child.status !== "running") return yield* RunRejected.make({ reason: "ChildTerminal" })
+      return [BackgroundChildCancellationRequested.make({ delegationId: command.delegationId, reason: command.reason })]
+    }),
+    ConfirmBackgroundFencedNotStarted: Effect.fn("Thread.ConfirmBackgroundFencedNotStarted")(function* (state, command) {
+      const current = yield* owned(state)
+      if (current._tag !== "Open") return yield* RunRejected.make({ reason: "UnknownChild" })
+      const child = Option.getOrUndefined(Array.findFirst(current.background, item => item.request.binding.delegationId === command.delegationId))
+      if (child === undefined) return yield* RunRejected.make({ reason: "UnknownChild" })
+      const proof = command.child
+      const binding = proof._tag === "ChildReserved" ? proof.binding : proof.child.binding
+      if (proof.owner !== current.owner || !Schema.toEquivalence(ChildBinding)(binding, child.request.binding)) return yield* RunRejected.make({ reason: "ChildFenceIdentityConflict" })
+      if (child.status === "cancelled" && child.receipt === null) return []
+      if (child.status !== "cancel_requested") return yield* RunRejected.make({ reason: "ChildNotCancelling" })
+      return [BackgroundChildFencedNotStarted.make({ delegationId: command.delegationId })]
+    }),
+    SettleBackgroundChild: Effect.fn("Thread.SettleBackgroundChild")(function* (state, command) {
+      const current = yield* owned(state)
+      if (current._tag !== "Open") return yield* RunRejected.make({ reason: "UnknownChild" })
+      const child = Option.getOrUndefined(Array.findFirst(current.background, item => item.request.binding.delegationId === command.delegationId))
+      if (child === undefined) return yield* RunRejected.make({ reason: "UnknownChild" })
+      if (child.receipt !== null) {
+        if (command.childThreadId === child.request.childThreadId && Schema.toEquivalence(Receipt)(child.receipt, command.receipt)) return []
+        return yield* RunRejected.make({ reason: "ChildOutcomeConflict" })
+      }
+      const reservation = child.request.reservation
+      const receipt = command.receipt
+      if (command.childThreadId !== child.request.childThreadId || receipt.runId !== child.request.binding.childRunId || !Schema.toEquivalence(Prompt.Prompt)(reservation.prompt, receipt.input) || !Schema.toEquivalence(Schema.NullOr(OutputDeclaration))(reservation.output ?? null, receipt.output) || reservation.model !== undefined && !Schema.toEquivalence(Schema.UndefinedOr(ModelGrant))(reservation.model, receipt.model)) return yield* RunRejected.make({ reason: "ChildOutcomeIdentityConflict" })
+      if (child.status !== "running" && child.status !== "cancel_requested") return yield* RunRejected.make({ reason: "ChildNotRunning" })
+      if (receipt.status !== "completed" && receipt.status !== "failed" && receipt.status !== "cancelled" && receipt.status !== "unknown") return yield* RunRejected.make({ reason: "ChildNotTerminal" })
+      const status = child.status === "cancel_requested" && (receipt.status === "completed" || child.request.mutation) ? "unknown" : receipt.status
+      const runId = child.request.binding.parentRunId
+      const origin = current.active?.runId === runId ? current.active : Option.getOrUndefined(Array.findFirst(current.receipts, item => item.runId === runId))
+      if (origin === undefined || origin === null) return yield* RunRejected.make({ reason: "UnknownRun" })
+      return [BackgroundChildSettled.make({ delegationId: command.delegationId, receipt, status, runId, tokensAfter: origin.tokens + Math.max(0, receipt.tokens - child.request.tokens) })]
+    }),
+    ReconcileBackgroundChild: Effect.fn("Thread.ReconcileBackgroundChild")(function* (state, command) {
+      const current = yield* owned(state)
+      if (current._tag !== "Open") return yield* RunRejected.make({ reason: "UnknownChild" })
+      const child = Option.getOrUndefined(Array.findFirst(current.background, item => item.request.binding.delegationId === command.delegationId))
+      if (child === undefined) return yield* RunRejected.make({ reason: "UnknownChild" })
+      if (child.resolution !== null) {
+        if (Schema.toEquivalence(BackgroundResolution)(child.resolution, command.resolution)) return []
+        return yield* RunRejected.make({ reason: "ResolutionConflict" })
+      }
+      if (child.status !== "unknown") return yield* RunRejected.make({ reason: "NoUncertainChild" })
+      return [BackgroundChildReconciled.make({ delegationId: command.delegationId, resolution: command.resolution })]
+    }),
+    InitializeFork: Effect.fn("Thread.InitializeFork")(function* (state, command, { id }) {
+      const caller = yield* CurrentCaller
+      const snapshot = command.snapshot
+      if (snapshot.owner !== caller.subject) return yield* NotOwner.make()
+      if (snapshot.origin.sourceThreadId === id) return yield* ForkRejected.make({ reason: "SameThread" })
+      if (state._tag !== "Unopened") {
+        if (state.owner !== caller.subject) return yield* NotOwner.make()
+        if (state._tag === "Open" && state.fork !== undefined && Schema.toEquivalence(ForkSnapshot)(state.fork, snapshot)) return []
+        return yield* ForkRejected.make({ reason: "TargetOccupied" })
+      }
+      const boundaries = contextBoundaries(snapshot.history)
+      if (snapshot.history.content.length > snapshot.limits.maxMessages || boundaries.invalid || boundaries.pending.size !== 0) return yield* ForkRejected.make({ reason: "InvalidSnapshot" })
+      return [ThreadForkInitialized.make({ snapshot })]
+    }),
+    OpenThread: Effect.fn("Thread.OpenThread")(function* (state, command) {
+      const caller = yield* CurrentCaller
+      if (state._tag === "ChildReserved") {
+        if (state.owner !== caller.subject) return yield* NotOwner.make()
+        if (state.closed) return yield* RunRejected.make({ reason: "ChildAdmissionClosed" })
+        return yield* RunRejected.make({ reason: "ChildAdmissionRequired" })
+      }
+      if (state._tag === "Open") {
+        if (state.owner !== caller.subject) return yield* NotOwner.make()
+        if (state.child !== null) {
+          if (state.child.closed) return yield* RunRejected.make({ reason: "ChildAdmissionClosed" })
+          return yield* RunRejected.make({ reason: "ChildAdmissionRequired" })
+        }
+        if (state.actor !== command.actor || state.instance !== command.instance || state.name !== command.name || !Schema.toEquivalence(RunLimits)(state.limits, command.limits)) return yield* RunRejected.make({ reason: "IdentityConflict" })
+        return []
+      }
+      return [ThreadOpened.make({ actor: command.actor, instance: command.instance, name: command.name, limits: command.limits, owner: caller.subject })]
+    }),
+    SelectRunModel: Effect.fn("Thread.SelectRunModel")(function* (state, command) {
+      yield* owned(state)
+      if (state._tag !== "Open" || state.active === null || state.active.runId !== command.runId) return yield* RunRejected.make({ reason: "UnknownRun" })
+      if (state.active.model !== undefined) {
+        if (Schema.toEquivalence(ModelGrant)(state.active.model, command.model)) return []
+        return yield* RunRejected.make({ reason: "ModelSelectionConflict" })
+      }
+      const current = working(state, command.runId)
+      if ("_tag" in current) return yield* current
+      if (current.run.turns !== 0 || current.run.step !== null) return yield* RunRejected.make({ reason: "ModelSelectionTooLate" })
+      if (current.run.requestedModel !== undefined && !Schema.toEquivalence(ModelChoice)(current.run.requestedModel, command.model)) return yield* RunRejected.make({ reason: "ModelSelectionConflict" })
+      return [RunModelSelected.make({ runId: command.runId, model: command.model })]
+    }),
+    RequestRun: Effect.fn("Thread.RequestRun")(function* (state, command, { now }) {
+      const current = yield* owned(state)
+      if (current._tag === "ChildReserved") {
+        if (current.closed) return yield* RunRejected.make({ reason: "ChildAdmissionClosed" })
+        return yield* RunRejected.make({ reason: "ChildAdmissionRequired" })
+      }
+      if (current.child !== null) {
+        if (current.child.closed) return yield* RunRejected.make({ reason: "ChildAdmissionClosed" })
+        return yield* RunRejected.make({ reason: "ChildAdmissionRequired" })
+      }
+      return yield* admitRun(current, command, now)
+    }),
+    ReserveChildThread: Effect.fn("Thread.ReserveChildThread")(function* (state, command, { id }) {
+      const caller = yield* CurrentCaller
+      if (id !== command.binding.delegationId || id !== delegationKey(command.binding.parentThreadId, command.binding.parentRunId, command.binding.childRunId)) return yield* RunRejected.make({ reason: "ChildBindingIdentityConflict" })
+      if (state._tag === "Unopened") return [ChildAdmissionReserved.make({ owner: caller.subject, binding: command.binding })]
+      if (state.owner !== caller.subject) return yield* NotOwner.make()
+      const admission = admissionOf(state)
+      if (admission === null) return yield* RunRejected.make({ reason: "NotChildThread" })
+      if (!Schema.toEquivalence(ChildBinding)(admission.binding, command.binding)) return yield* RunRejected.make({ reason: "ChildBindingConflict" })
+      if (admission.closed) return yield* RunRejected.make({ reason: "ChildAdmissionClosed" })
+      return []
+    }),
+    OpenChildThread: Effect.fn("Thread.OpenChildThread")(function* (state, command) {
+      if (state._tag === "Unopened") return yield* RunRejected.make({ reason: "ChildNotReserved" })
+      const current = yield* owned(state)
+      const admission = admissionOf(current)
+      if (admission === null) return yield* RunRejected.make({ reason: "NotChildThread" })
+      if (!Schema.toEquivalence(ChildBinding)(admission.binding, command.binding)) return yield* RunRejected.make({ reason: "ChildBindingConflict" })
+      if (admission.closed) return yield* RunRejected.make({ reason: "ChildAdmissionClosed" })
+      if (current._tag === "Open") {
+        if (current.name !== command.name || !Schema.toEquivalence(RunLimits)(current.limits, command.limits)) return yield* RunRejected.make({ reason: "IdentityConflict" })
+        return []
+      }
+      return [ChildThreadOpened.make({ actor: admission.binding.actor, instance: admission.binding.delegationId, name: command.name, limits: command.limits, owner: current.owner, binding: admission.binding })]
+    }),
+    RequestChildRun: Effect.fn("Thread.RequestChildRun")(function* (state, command, { now }) {
+      const current = yield* owned(state)
+      const admission = admissionOf(current)
+      if (admission === null) return yield* RunRejected.make({ reason: "NotChildThread" })
+      if (!Schema.toEquivalence(ChildBinding)(admission.binding, command.binding)) return yield* RunRejected.make({ reason: "ChildBindingConflict" })
+      if (admission.closed) return yield* RunRejected.make({ reason: "ChildAdmissionClosed" })
+      if (current._tag !== "Open") return yield* RunRejected.make({ reason: "ChildNotOpen" })
+      const request = { runId: admission.binding.childRunId, digest: command.digest, prompt: command.prompt, ...Struct.pick(command, ["output"]) }
+      if (command.model === undefined) return yield* admitRun(current, request, now)
+      return yield* admitRun(current, { ...request, model: Struct.pick(command.model, ["provider", "model"]) }, now, command.model)
+    }),
+    FenceChildThread: Effect.fn("Thread.FenceChildThread")(function* (state, command, { id }) {
+      const caller = yield* CurrentCaller
+      if (id !== command.binding.delegationId || id !== delegationKey(command.binding.parentThreadId, command.binding.parentRunId, command.binding.childRunId)) return yield* RunRejected.make({ reason: "ChildBindingIdentityConflict" })
+      const closed = ChildAdmissionClosed.make({ owner: caller.subject, binding: command.binding, reason: command.reason })
+      if (state._tag === "Unopened") return [closed]
+      if (state.owner !== caller.subject) return yield* NotOwner.make()
+      const admission = admissionOf(state)
+      if (admission === null) return yield* RunRejected.make({ reason: "NotChildThread" })
+      if (!Schema.toEquivalence(ChildBinding)(admission.binding, command.binding)) return yield* RunRejected.make({ reason: "ChildBindingConflict" })
+      if (admission.closed) return []
+      if (state._tag !== "Open" || state.active === null || ["completed", "failed", "cancelled", "unknown"].includes(state.active.status)) return [closed]
+      if (state.active.step?.dispatched === true && state.active.step.mutation) return [closed, RunBecameUnknown.make({ runId: state.active.runId, stepId: state.active.step.stepId, reason: command.reason })]
+      return [closed, RunCancelled.make({ runId: state.active.runId, reason: command.reason })]
+    }),
+    BeginCompaction: Effect.fn("Thread.BeginCompaction")(function* (state, command, { now }) {
+      const current = working(state, command.runId)
+      if ("_tag" in current) return yield* current
+      if (DateTime.toEpochMillis(now) >= current.run.deadlineAt) return yield* RunRejected.make({ reason: "DurationBudgetExceeded" })
+      const policy = current.thread.limits.context
+      if (policy === undefined) return [ContextCompactionPlanned.make({ runId: command.runId, stepId: command.stepId, plan: null })]
+      if (current.run.step !== null && (current.run.step.stepId !== command.stepId || current.run.step.kind !== "compaction")) return yield* RunRejected.make({ reason: "StepBusy" })
+      const selection = yield* planCompaction(current.run.prompt, current.run.input, policy)
+      if (selection.reason !== null) return yield* RunRejected.make({ reason: selection.reason })
+      const planned = ContextCompactionPlanned.make({ runId: command.runId, stepId: command.stepId, plan: selection.plan })
+      if (selection.plan === null || current.run.step !== null) return [planned]
+      if (command.stepId !== `${command.runId}:${current.run.stepSerial + 1}`) return yield* RunRejected.make({ reason: "StepIdentityConflict" })
+      if (current.run.turns >= current.thread.limits.maxTurns) return yield* RunRejected.make({ reason: "TurnBudgetExceeded" })
+      if (current.run.tokens >= current.thread.limits.maxTokens) return yield* RunRejected.make({ reason: "TokenBudgetExceeded" })
+      return [planned, StepPrepared.make({ runId: command.runId, step: { stepId: command.stepId, kind: "compaction", mutation: false, requiresApproval: false, approved: true, dispatched: false } })]
+    }),
+    RecordCompaction: Effect.fn("Thread.RecordCompaction")(function* (state, command, { now }) {
+      if (state._tag === "Open" && state.active?.runId !== command.runId) {
+        const archivedResult = Array.findFirst(state.receipts, receipt => receipt.runId === command.runId)
+        if (Option.isNone(archivedResult)) return yield* RunRejected.make({ reason: "UnknownRun" })
+        const archived = archivedResult.value
+        const settled = Array.findFirst(archived.compactions, entry => entry.stepId === command.stepId)
+        if (Option.isSome(settled)) {
+          if (Schema.toEquivalence(CompactionSettlement)(settled.value, { stepId: command.stepId, summary: command.summary, usage: command.usage })) return []
+          return yield* RunRejected.make({ reason: "StepResultConflict" })
+        }
+        if (archived.step === null || archived.step.kind !== "compaction" || archived.step.stepId !== command.stepId || !archived.step.dispatched) return yield* RunRejected.make({ reason: "UnknownStep" })
+        const input = command.usage.inputTokens.total
+        const output = command.usage.outputTokens.total
+        if (input === undefined || output === undefined || input < 0 || output < 0) return yield* RunRejected.make({ reason: "UsageUnavailable" })
+        return [ContextCompactionDiscarded.make({ runId: command.runId, stepId: command.stepId, summary: command.summary, usage: command.usage, tokensAfter: archived.tokens + input + output, reason: archived.reason ?? "RunTerminal" })]
+      }
+      if (state._tag === "Open" && state.active?.runId === command.runId) {
+        const settled = Array.findFirst(state.active.compactions, step => step.stepId === command.stepId)
+        if (Option.isSome(settled)) {
+          if (Schema.toEquivalence(CompactionSettlement)(settled.value, { stepId: command.stepId, summary: command.summary, usage: command.usage })) return []
+          return yield* RunRejected.make({ reason: "StepResultConflict" })
+        }
+      }
+      if (state._tag !== "Open" || state.active === null || state.active.runId !== command.runId) return yield* RunRejected.make({ reason: "UnknownRun" })
+      const current = { thread: state, run: state.active }
+      const step = current.run.step
+      if (step === null || step.stepId !== command.stepId || step.kind !== "compaction" || !step.dispatched) return yield* RunRejected.make({ reason: "UnknownStep" })
+      const policy = current.thread.limits.context
+      if (policy === undefined) return yield* RunRejected.make({ reason: "ContextDisabled" })
+      const input = command.usage.inputTokens.total
+      const output = command.usage.outputTokens.total
+      if (input === undefined || output === undefined || input < 0 || output < 0) return yield* RunRejected.make({ reason: "UsageUnavailable" })
+      const tokensAfter = current.run.tokens + input + output
+      const discarded = (reason: string) => ContextCompactionDiscarded.make({ runId: command.runId, stepId: command.stepId, summary: command.summary, usage: command.usage, tokensAfter, reason })
+      if (["completed", "failed", "cancelled", "unknown"].includes(current.run.status)) return [discarded(current.run.reason ?? "RunTerminal")]
+      const discard = (reason: string) => [discarded(reason), RunFailed.make({ runId: command.runId, reason })]
+      const selection = yield* planCompaction(current.run.prompt, current.run.input, policy)
+      if (selection.reason !== null) return discard(selection.reason)
+      if (selection.plan === null) return discard("ContextPlanMissing")
+      if (String.trim(command.summary).length === 0 || command.summary.length > policy.maxSummaryChars) return discard("SummaryBudgetExceeded")
+      if (output > policy.maxOutputTokens) return discard("SummaryOutputBudgetExceeded")
+      if (DateTime.toEpochMillis(now) >= current.run.deadlineAt) return discard("DurationBudgetExceeded")
+      const prompt = compactedPrompt(selection.plan, command.summary)
+      const compactedChars = yield* promptChars(prompt)
+      const previousChars = yield* promptChars(current.run.prompt)
+      if (prompt.content.length > current.thread.limits.maxMessages || compactedChars >= Math.min(policy.triggerChars, previousChars)) return discard("ContextCannotShrink")
+      const recorded = ContextCompacted.make({ runId: command.runId, stepId: command.stepId, plan: selection.plan, summary: command.summary, usage: command.usage, prompt, tokensAfter })
+      if (tokensAfter > current.thread.limits.maxTokens) return [recorded, RunFailed.make({ runId: command.runId, reason: "TokenBudgetExceeded" })]
+      return [recorded]
+    }),
+    BeginStep: (state, command, { now }) => {
+      if (command.kind === "compaction") return RunRejected.make({ reason: "CompactionAdmissionRequired" })
+      const current = working(state, command.runId)
+      if ("_tag" in current) return current
+      if (command.mutation && Array.some(current.thread.background, child => (child.status === "unknown" || child.request.mutation && child.status === "cancel_requested"))) return RunRejected.make({ reason: "UncertainChild" })
+      if (DateTime.toEpochMillis(now) >= current.run.deadlineAt) return RunRejected.make({ reason: "DurationBudgetExceeded" })
+      if (current.run.step !== null) {
+        if (current.run.step.stepId === command.stepId && current.run.step.kind === command.kind && current.run.step.mutation === command.mutation && current.run.step.requiresApproval === command.requiresApproval) return []
+        return RunRejected.make({ reason: "StepBusy" })
+      }
+      if (command.stepId !== `${command.runId}:${current.run.stepSerial + 1}`) return RunRejected.make({ reason: "StepIdentityConflict" })
+      if (command.kind === "model" && current.run.turns >= current.thread.limits.maxTurns) return RunRejected.make({ reason: "TurnBudgetExceeded" })
+      if (command.kind === "tool" && current.run.toolCalls >= current.thread.limits.maxToolCalls) return RunRejected.make({ reason: "ToolBudgetExceeded" })
+      if (current.run.tokens >= current.thread.limits.maxTokens) return RunRejected.make({ reason: "TokenBudgetExceeded" })
+      return [StepPrepared.make({ runId: command.runId, step: { stepId: command.stepId, kind: command.kind, mutation: command.mutation, requiresApproval: command.requiresApproval, approved: !command.requiresApproval, dispatched: false } })]
+    },
+    ConfirmDispatch: (state, command, { now }) => {
+      const current = working(state, command.runId)
+      if ("_tag" in current) return current
+      const step = current.run.step
+      if (step === null || step.stepId !== command.stepId) return RunRejected.make({ reason: "UnknownStep" })
+      if (step.dispatched) return RunRejected.make({ reason: "AlreadyDispatched" })
+      if (step.mutation && Array.some(current.thread.background, child => child.status === "unknown" || child.request.mutation && child.status === "cancel_requested")) return RunRejected.make({ reason: "UncertainChild" })
+      if (!step.approved) return RunRejected.make({ reason: "ApprovalRequired" })
+      if (DateTime.toEpochMillis(now) >= current.run.deadlineAt) return RunRejected.make({ reason: "DurationBudgetExceeded" })
+      if (step.kind === "tool" && current.run.toolCalls >= current.thread.limits.maxToolCalls) return RunRejected.make({ reason: "ToolBudgetExceeded" })
+      if (current.run.tokens >= current.thread.limits.maxTokens) return RunRejected.make({ reason: "TokenBudgetExceeded" })
+      return [StepDispatched.make({ runId: command.runId, stepId: command.stepId, turnsAfter: current.run.turns + Number(step.kind !== "tool"), toolCallsAfter: current.run.toolCalls + Number(step.kind === "tool") })]
+    },
+    RecordStep: (state, command, { now }) => {
+      if (state._tag === "Open" && state.active?.runId === command.runId) {
+        const settled = Array.findFirst(state.active.settlements, step => step.stepId === command.stepId)
+        if (Option.isSome(settled)) {
+          if (Schema.toEquivalence(StepSettlement)(settled.value, { stepId: command.stepId, prompt: command.prompt, usage: command.usage })) return []
+          return RunRejected.make({ reason: "StepResultConflict" })
+        }
+      }
+      const current = working(state, command.runId)
+      if ("_tag" in current) return current
+      const step = current.run.step
+      if (step === null || step.stepId !== command.stepId || !step.dispatched) return RunRejected.make({ reason: "UnknownStep" })
+      if (step.kind === "compaction") return RunRejected.make({ reason: "CompactionResultRequired" })
+      const input = command.usage.inputTokens.total
+      const output = command.usage.outputTokens.total
+      if (input === undefined || output === undefined || input < 0 || output < 0) return RunRejected.make({ reason: "UsageUnavailable" })
+      const prompt = Prompt.concat(current.run.prompt, command.prompt)
+      const tokensAfter = current.run.tokens + input + output
+      if (prompt.content.length > current.thread.limits.maxMessages) return [StepOutputRejected.make({ runId: command.runId, stepId: command.stepId, prompt: command.prompt, usage: command.usage }), RunFailed.make({ runId: command.runId, reason: "MessageBudgetExceeded" })]
+      const recorded = StepRecorded.make({ runId: command.runId, stepId: command.stepId, usage: command.usage, prompt, tokensAfter })
+      if (DateTime.toEpochMillis(now) >= current.run.deadlineAt) return [recorded, RunFailed.make({ runId: command.runId, reason: "DurationBudgetExceeded" })]
+      if (tokensAfter > current.thread.limits.maxTokens) return [recorded, RunFailed.make({ runId: command.runId, reason: "TokenBudgetExceeded" })]
+      return [recorded]
+    },
+    ApproveRun: Effect.fn("Thread.ApproveRun")(function* (state, command) {
+      const currentState = yield* owned(state)
+      const current = working(currentState, command.runId)
+      if ("_tag" in current) return yield* current
+      if (current.run.step === null || current.run.step.stepId !== command.stepId) return yield* RunRejected.make({ reason: "UnknownStep" })
+      if (current.run.step.dispatched) return yield* RunRejected.make({ reason: "AlreadyDispatched" })
+      if (current.run.step.approved) return []
+      return [RunApproved.make({ runId: command.runId, stepId: command.stepId })]
+    }),
+    CompleteRun: (state, command, { now }) => {
+      if (state._tag === "Open" && state.active?.runId === command.runId && state.active.status === "completed" && state.active.text === command.text) return []
+      const current = working(state, command.runId)
+      if ("_tag" in current) return current
+      if (DateTime.toEpochMillis(now) >= current.run.deadlineAt) return RunRejected.make({ reason: "DurationBudgetExceeded" })
+      if (current.run.step !== null) return RunRejected.make({ reason: "StepPending" })
+      if (current.run.output === null) return [RunCompleted.make({ runId: command.runId, text: command.text, result: null })]
+      const result = validateOutput(current.run.output, command.text)
+      if (Option.isNone(result)) return [RunFailed.make({ runId: command.runId, reason: "output_validation_failed" })]
+      return [RunCompleted.make({ runId: command.runId, text: command.text, result: result.value })]
+    },
+    FailRun: (state, command) => {
+      if (state._tag === "Open" && state.active?.runId === command.runId && state.active.status === "failed" && state.active.reason === command.reason) return []
+      const current = working(state, command.runId)
+      if ("_tag" in current) return current
+      if (current.run.step?.dispatched === true && current.run.step.mutation) return [RunBecameUnknown.make({ runId: command.runId, stepId: current.run.step.stepId, reason: command.reason })]
+      return [RunFailed.make({ runId: command.runId, reason: command.reason })]
+    },
+    CancelRun: Effect.fn("Thread.CancelRun")(function* (state, command) {
+      const current = yield* owned(state)
+      if (current._tag !== "Open") return yield* RunRejected.make({ reason: "UnknownRun" })
+      if (current.active?.runId === command.runId && current.active.status === "cancelled") return []
+      const work = working(current, command.runId)
+      if ("_tag" in work) return yield* work
+      if (work.run.step?.dispatched === true && work.run.step.mutation) return [RunBecameUnknown.make({ runId: command.runId, stepId: work.run.step.stepId, reason: command.reason })]
+      return [RunCancelled.make({ runId: command.runId, reason: command.reason })]
+    }),
+    MarkUnknown: (state, command) => {
+      if (state._tag === "Open" && state.active?.runId === command.runId && state.active.status === "unknown" && state.active.step?.stepId === command.stepId && state.active.reason === command.reason) return []
+      const current = working(state, command.runId)
+      if ("_tag" in current) return current
+      if (current.run.step === null || current.run.step.stepId !== command.stepId || !current.run.step.dispatched) return RunRejected.make({ reason: "UnknownStep" })
+      return [RunBecameUnknown.make({ runId: command.runId, stepId: command.stepId, reason: command.reason })]
+    },
+    ResolveUnknown: Effect.fn("Thread.ResolveUnknown")(function* (state, command) {
+      const current = yield* owned(state)
+      if (current._tag !== "Open" || current.active === null || current.active.runId !== command.runId || current.active.step?.stepId !== command.stepId || current.active.status !== "unknown") return yield* RunRejected.make({ reason: "NoUncertainStep" })
+      return [StepReconciled.make({ runId: command.runId, stepId: command.stepId, resolution: command.resolution, evidence: command.evidence })]
+    }),
+    ExpireRun: (state, command, { now }) => {
+      if (state._tag !== "Open" || state.active?.runId !== command.runId || ["completed", "failed", "cancelled", "unknown"].includes(state.active.status) || DateTime.toEpochMillis(now) < state.active.deadlineAt) return []
+      if (state.active.step?.dispatched === true && state.active.step.mutation) return [RunBecameUnknown.make({ runId: command.runId, stepId: state.active.step.stepId, reason: "DurationBudgetExceeded" })]
+      return [RunFailed.make({ runId: command.runId, reason: "DurationBudgetExceeded" })]
+    },
+  },
+  evolve: {
+    BackgroundChildReserved: (state, event) => {
+      if (state._tag !== "Open" || state.active === null) return state
+      return { ...state, background: [...state.background, event.child], active: { ...state.active, tokens: event.tokensAfter, toolCalls: event.toolCallsAfter } }
+    },
+    BackgroundChildAdmissionReleased: (state, event) => {
+      if (state._tag !== "Open") return state
+      const request = event.request
+      const background = Array.filter(state.background, child => child.request.binding.delegationId !== request.binding.delegationId)
+      if (state.active?.runId !== request.binding.parentRunId) return { ...state, background, receipts: Array.map(state.receipts, receipt => receipt.runId === request.binding.parentRunId ? { ...receipt, tokens: receipt.tokens - request.tokens } : receipt), lastReceipt: state.lastReceipt?.runId === request.binding.parentRunId ? { ...state.lastReceipt, tokens: state.lastReceipt.tokens - request.tokens } : state.lastReceipt }
+      const active = { ...state.active, tokens: state.active.tokens - request.tokens, toolCalls: state.active.toolCalls - request.reservation.toolCalls }
+      if (state.lastReceipt?.runId === active.runId) return { ...state, background, active, lastReceipt: receiptOf(active) }
+      return { ...state, background, active }
+    },
+    BackgroundChildStarted: (state, event) => {
+      if (state._tag !== "Open") return state
+      return { ...state, background: Array.map(state.background, child => child.request.binding.delegationId === event.delegationId ? { ...child, status: "running" as const } : child) }
+    },
+    BackgroundChildCancellationRequested: (state, event) => {
+      if (state._tag !== "Open") return state
+      return { ...state, background: Array.map(state.background, child => child.request.binding.delegationId === event.delegationId ? { ...child, status: "cancel_requested" as const, cancelReason: event.reason } : child) }
+    },
+    BackgroundChildFencedNotStarted: (state, event) => {
+      if (state._tag !== "Open") return state
+      return { ...state, background: Array.map(state.background, child => child.request.binding.delegationId === event.delegationId ? { ...child, status: "cancelled" as const } : child) }
+    },
+    BackgroundChildSettled: (state, event) => {
+      if (state._tag !== "Open") return state
+      const background = Array.map(state.background, child => child.request.binding.delegationId === event.delegationId ? { ...child, status: event.status, receipt: event.receipt } : child)
+      if (state.active?.runId !== event.runId) return { ...state, background, receipts: Array.map(state.receipts, receipt => receipt.runId === event.runId ? { ...receipt, tokens: event.tokensAfter } : receipt), lastReceipt: state.lastReceipt?.runId === event.runId ? { ...state.lastReceipt, tokens: event.tokensAfter } : state.lastReceipt }
+      const active = { ...state.active, tokens: event.tokensAfter }
+      if (state.lastReceipt?.runId === event.runId) return { ...state, background, active, lastReceipt: receiptOf(active) }
+      return { ...state, background, active }
+    },
+    BackgroundChildReconciled: (state, event) => {
+      if (state._tag !== "Open") return state
+      return { ...state, background: Array.map(state.background, child => child.request.binding.delegationId === event.delegationId ? { ...child, status: "reconciled" as const, resolution: event.resolution } : child) }
+    },
+    ThreadForkInitialized: (state, event) => {
+      if (state._tag !== "Unopened") return state
+      return { ...initialize(event.snapshot, null), history: event.snapshot.history, fork: event.snapshot }
+    },
+    RunModelSelected: (state, event) => {
+      if (state._tag !== "Open" || state.active === null || state.active.runId !== event.runId) return state
+      return { ...state, active: { ...state.active, model: event.model } }
+    },
+    ContextCompactionPlanned: state => state,
+    ContextCompactionDiscarded: (state, event) => {
+      if (state._tag !== "Open") return state
+      if (state.active?.runId !== event.runId) return { ...state, receipts: Array.map(state.receipts, receipt => {
+        if (receipt.runId !== event.runId) return receipt
+        return { ...receipt, tokens: event.tokensAfter, compactions: [...receipt.compactions, { stepId: event.stepId, summary: event.summary, usage: event.usage }], step: null }
+      }) }
+      const active = { ...state.active, tokens: event.tokensAfter, compactions: [...state.active.compactions, { stepId: event.stepId, summary: event.summary, usage: event.usage }], step: null }
+      if (state.lastReceipt?.runId === event.runId) return { ...state, active, lastReceipt: receiptOf(active) }
+      return { ...state, active }
+    },
+    ContextCompacted: (state, event) => {
+      if (state._tag !== "Open" || state.active === null) return state
+      return { ...state, active: { ...state.active, prompt: event.prompt, tokens: event.tokensAfter, compactions: [...state.active.compactions, { stepId: event.stepId, summary: event.summary, usage: event.usage }], step: null, status: "running" as const } }
+    },
+    ThreadOpened: (state, event) => {
+      if (state._tag !== "Unopened") return state
+      return initialize(event, null)
+    },
+    ChildAdmissionReserved: (state, event) => {
+      if (state._tag !== "Unopened") return state
+      return { _tag: "ChildReserved" as const, owner: event.owner, binding: event.binding, closed: false, reason: null }
+    },
+    ChildAdmissionClosed: (state, event) => {
+      if (state._tag === "Unopened") return { _tag: "ChildReserved" as const, owner: event.owner, binding: event.binding, closed: true, reason: event.reason }
+      if (state._tag === "ChildReserved") return { ...state, closed: true, reason: event.reason }
+      if (state.child === null) return state
+      return { ...state, child: { ...state.child, closed: true, reason: event.reason } }
+    },
+    ChildThreadOpened: (state, event) => {
+      if (state._tag !== "ChildReserved" || state.closed) return state
+      return initialize(event, { binding: event.binding, closed: false, reason: null })
+    },
+    RunRequested: (state, event) => {
+      if (state._tag !== "Open") return state
+      const lastReceipt = receiptOf(event.run)
+      if (state.active === null) return { ...state, active: event.run, lastReceipt }
+      return { ...state, active: event.run, lastReceipt, receipts: [...state.receipts, receiptOf(state.active)] }
+    },
+    StepReconciled: (state, event) => {
+      if (state._tag !== "Open" || state.active === null) return state
+      return { ...state, active: { ...state.active, status: "failed" as const, step: null, reason: `Reconciled:${event.resolution}` } }
+    },
+    RunAcknowledged: (state, event) => {
+      if (state._tag !== "Open") return state
+      return { ...state, lastReceipt: event.receipt }
+    },
+    StepOutputRejected: (state) => {
+      if (state._tag !== "Open" || state.active === null) return state
+      return { ...state, active: { ...state.active, step: null, prompt: state.history } }
+    },
+    StepPrepared: (state, event) => {
+      if (state._tag !== "Open" || state.active === null) return state
+      if (event.step.approved) return { ...state, active: { ...state.active, step: event.step, stepSerial: state.active.stepSerial + 1, status: "running" as const } }
+      return { ...state, active: { ...state.active, step: event.step, stepSerial: state.active.stepSerial + 1, status: "awaiting_approval" as const } }
+    },
+    StepDispatched: (state, event) => {
+      if (state._tag !== "Open" || state.active?.step === null || state.active === null) return state
+      return { ...state, active: { ...state.active, step: { ...state.active.step, dispatched: true }, turns: event.turnsAfter, toolCalls: event.toolCallsAfter } }
+    },
+    StepRecorded: (state, event) => {
+      if (state._tag !== "Open" || state.active === null) return state
+      return { ...state, active: { ...state.active, prompt: event.prompt, settlements: [...state.active.settlements, { stepId: event.stepId, prompt: Prompt.fromMessages(event.prompt.content.slice(state.active.prompt.content.length)), usage: event.usage }], tokens: event.tokensAfter, step: null, status: "running" as const } }
+    },
+    RunApproved: (state) => {
+      if (state._tag !== "Open" || state.active === null || state.active.step === null) return state
+      return { ...state, active: { ...state.active, status: "running" as const, step: { ...state.active.step, approved: true } } }
+    },
+    RunCompleted: (state, event) => {
+      if (state._tag !== "Open" || state.active === null) return state
+      const active = { ...state.active, status: "completed" as const, text: event.text, result: event.result }
+      return { ...state, history: active.prompt, active, lastReceipt: receiptOf(active) }
+    },
+    RunFailed: (state, event) => {
+      if (state._tag !== "Open" || state.active === null) return state
+      const active = { ...state.active, status: "failed" as const, reason: event.reason }
+      return { ...state, active, lastReceipt: receiptOf(active) }
+    },
+    RunCancelled: (state, event) => {
+      if (state._tag !== "Open" || state.active === null) return state
+      return { ...state, active: { ...state.active, status: "cancelled" as const, reason: event.reason } }
+    },
+    RunBecameUnknown: (state, event) => {
+      if (state._tag !== "Open" || state.active === null) return state
+      return { ...state, active: { ...state.active, status: "unknown" as const, reason: event.reason } }
+    },
+  },
+  reply: {
+    InitializeFork: state => {
+      if (state._tag !== "Open" || state.fork === undefined) return { origin: null }
+      return { origin: state.fork.origin }
+    },
+    BeginCompaction: (_state, events) => {
+      const planned = Array.findFirst(events, event => event._tag === "ContextCompactionPlanned")
+      if (Option.isNone(planned)) return { plan: null }
+      return { plan: planned.value.plan }
+    },
+    RequestRun: (state) => {
+      if (state._tag !== "Open") return { receipt: null }
+      return { receipt: state.lastReceipt }
+    },
+    RequestChildRun: state => {
+      if (state._tag !== "Open") return { receipt: null }
+      return { receipt: state.lastReceipt }
+    },
+  },
+  read: {
+    middleware: [Session],
+    rejects: [NotOwner],
+    validate: Effect.fn("Thread.read")(function* (_request, state) {
+      yield* owned(state ?? { _tag: "Unopened" })
+    }),
+  },
+}) {}

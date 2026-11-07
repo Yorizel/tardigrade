@@ -16,13 +16,10 @@ export const CheckIcon = (): ReactElement => (
 export const useCopy = (resetAfter = 1800): readonly [boolean, (value: string) => Promise<void>] => {
   const [copied, setCopied] = useState(false)
   useEffect(() => {
-    if (!copied) return
+    if (!copied) return undefined
     const reset = window.setTimeout(() => setCopied(false), resetAfter)
     return () => window.clearTimeout(reset)
   }, [copied, resetAfter])
-  const copy = useCallback(async (value: string): Promise<void> => {
-    await navigator.clipboard.writeText(value)
-    setCopied(true)
-  }, [])
+  const copy = useCallback((value: string): Promise<void> => navigator.clipboard.writeText(value).then(() => setCopied(true)), [])
   return [copied, copy]
 }

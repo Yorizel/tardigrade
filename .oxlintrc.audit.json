@@ -1,0 +1,27 @@
+{
+  "$schema": "./node_modules/@effect/tsgo/oxlint-schema.json",
+  "extends": [
+    "./.oxlintrc.json"
+  ],
+  "categories": {
+    "correctness": "error",
+    "nursery": "error",
+    "pedantic": "error",
+    "perf": "error",
+    "restriction": "error",
+    "style": "error",
+    "suspicious": "error"
+  },
+  "rules": {
+    "jsx-a11y/prefer-tag-over-role": "error",
+    "react/react-in-jsx-scope": "error",
+    "eslint/no-underscore-dangle": [
+      "error",
+      {
+        "allow": []
+      }
+    ],
+    "effecttsgo/unstable-api-usage": "error",
+    "effecttsgo/api-stability-leak": "error"
+  }
+}

@@ -1,17 +1,9 @@
-# Effect dependencies
+# Effect dependency patch
 
-The workspace uses upstream Effect and published provider packages from the [Effect fork](https://github.com/clavia-labs/effect/tree/clavia/ai-providers). It has no local dependency patches.
+`package.json` owns the patched dependency and its exact patch path. Bun applies the patch during installation. The patch adds an optional `formatChecks` map to Effect's JSON Schema importer; each provided native Schema filter composes with the imported string schema. Without a supplied map, formats keep their annotation-only behavior. The change covers runtime distribution, source and declarations.
 
-| Package | Version | Purpose |
-| --- | --- | --- |
-| `effect` | `4.1.2` | Upstream Effect runtime |
-| `@tardie/ai` | `0.2.0` | Scoped response formats and tool-result file placement |
-| `@tardie/ai-bedrock` | `4.1.2-clavia.0` | AWS Bedrock Converse streaming provider |
-| `@tardie/ai-openai` | `4.1.2-clavia.0` | OpenAI Responses provider |
-| `@tardie/ai-anthropic` | `4.1.2-clavia.0` | Anthropic provider |
-| `@tardie/ai-openai-compat` | `4.1.2-clavia.0` | OpenAI-compatible chat completions provider |
-| `@tardie/ai-openrouter` | `4.1.2-clavia.0` | OpenRouter provider |
+`Output.format.ts` supplies the nine allowlisted format assertions. Native importer tests cover nested objects, unions, format-only schemas, the unchanged default and inherited map names. Output tests compare the unchanged assertions with the existing validator and exercise nested composition. Time and date-time require a complete RFC 3339 offset, with bounded offset components and UTC-relative leap-second placement. The application rejects unknown format names at declaration decoding.
 
-[CLAVIA_PATCHES.md](https://github.com/clavia-labs/effect/blob/clavia/ai-providers/CLAVIA_PATCHES.md) records each provider change and the test that proves it. [CLAVIA_PUBLISHING.md](https://github.com/clavia-labs/effect/blob/clavia/ai-providers/CLAVIA_PUBLISHING.md) describes package publication.
+Published artifacts carry the referenced patch files. Generated native projects copy those files and declare their own `patchedDependencies`, because dependency patches do not propagate transitively. A source checkout or generated project must use its own manifest's patch metadata when installing dependencies.
 
-Run `bun run gate --only=typecheck:model,typecheck:agent,test:model,test:agent` to check the Tardigrade integration. The Effect fork contains provider source checks and package publication checks.
+Domain commands use native `Schema.TaggedError` classes as rejections, as supported by the Domain contract. No patch to `@alchemy.run/domain` is required.

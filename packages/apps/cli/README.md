@@ -1,90 +1,64 @@
-# Chat CLI
+# Native chat CLI
 
-Run interactive chat from the repository root:
+The CLI sends authenticated commands and reads to Alchemy Domain. Domain owns thread history, run identity, approvals, cancellation and receipts. The separate Effect Cluster runner owns workflows, model calls, Code Mode and delegation. Closing the CLI releases its subscriptions; execution continues on the runner.
 
-```sh
-bun run chat
-```
-
-Each launch creates a fresh thread in `.tardigrade/threads`. The CLI prints its ID. Effect CLI handles flags, help, and prompts. The actor definition is exported by `packages/apps/cli/src/actor.ts`; the Bun thread host owns its execution and journals.
-
-The CLI actor includes fetch, workspace, and agents tools. `delegate_task` delegates to a local child agent and `cancel_agent` cancels a child handle. Children use the same model configuration. `--max-child-depth` sets the maximum nesting depth, defaulting to 1; 0 disables delegation. Exceeding the limit returns an error to the caller. Child actors live within the parent runtime and are not persisted as supervisor threads.
-
-## Child tool budgets
-
-`agents()` gives each child 20 tool calls per turn, exported as `DEFAULT_AGENT_TOOL_CALLS`. Override the package configuration in the actor definition:
-
-```ts
-agents({ budget: { toolCalls: 5 } })
-```
-
-The child runtime records the limit before starting work. Executed tool calls consume the allowance, including calls that fail; permission denials do not. Tool replies and approval decisions retain the current allowance. A completed turn resets it for the next turn. When exhausted, further requested calls receive a budget error and the model sees no available tools, allowing it to answer without tools. Zero disables tool execution for the child. The remaining allowance is included in the child's model instructions.
-
-Model spend has no budget limit. The child cap does not impose a shared allowance across children or a tool cap on the root chat actor. Custom child actor definitions must compose the budget atoms to enforce recorded limits, as the CLI and default agent definitions do.
-
-## Tool permissions
-
-`--permissions` selects a mode for this CLI process. Each launch defaults to `ask`, including resumed threads.
-
-| Mode | Behavior |
-| --- | --- |
-| `ask` | Ask before each tool call. |
-| `auto` | Allow tools marked read-only; ask before other calls. |
-| `full-access` | Allow all tool calls. |
-
-Read-only tools are `fetch_url`, `read_text`, and `list_texts`. Workspace writes, delegation, and cancellation require approval in `auto`. These modes govern tool execution; model calls and child-depth limits retain their own configuration.
+Start the state server and runner described in [the Alchemy example](../../../examples/alchemy/SKILL.md), then configure this client:
 
 ```sh
-bun run chat --permissions auto
-bun run chat --permissions full-access --message "Fetch https://example.com"
+export TARDIGRADE_URL=http://localhost:4242
+export TARDIGRADE_TOKEN=your-public-api-token
+export TARDIGRADE_SUBJECT=your-server-authenticated-subject
+export TARDIGRADE_ACTOR=assistant
+bun run chat --message 'Hello'
+bun run chat --thread '<printed-thread-id>' --message 'Continue'
+bun run chat --thread '<printed-thread-id>'
 ```
 
-Use `/permissions` for a picker or `/permissions ask`, `/permissions auto`, or `/permissions full-access` to change the mode. Changes apply to every open thread and its children in this CLI process. Each actor records its policy in its journal and includes it in model instructions.
+`TARDIGRADE_SUBJECT` is the directory key, and must match the identity authenticated by the server. It grants no authority. The bearer token is required for every command, state read and subscription. Provider credentials and model selection belong to the runner; the CLI does not acquire them or run another actor runtime.
 
-Approval notices show the thread, child depth when applicable, tool name, arguments, and request ID. `/allow <id>` approves that call; `/deny <id>` rejects it. `/approvals` lists pending requests, including requests from other open threads. Changing mode leaves existing approvals pending. Approval notices preserve the chat draft. Closing the CLI interrupts pending approvals; resuming a thread denies interrupted approvals so the agent can request permission again.
+## Messages and threads
 
-Noninteractive chat denies calls that require approval and returns the reason to the model. `auto` still asks for writes and delegation, so those calls are denied without an interactive chat. Use `full-access` explicitly to allow all calls without prompts.
+Without `--thread`, a launch opens a fresh thread and prints its immutable ID to stderr. `--actor` selects a runner actor; otherwise `TARDIGRADE_ACTOR` is required and must match the runner configuration. `--instance` defaults to `cli`; `--name` sets the display name. Resume uses the immutable ID. Display names are not unique identifiers.
 
-## Noninteractive chat
+`--message` sends literal text, including a leading slash, waits for a durable result and prints its answer to stdout. Failed, cancelled and unknown outcomes exit unsuccessfully. Without an interactive terminal, `--message` is required. In interactive mode, `/exit` closes the client. A message waits for its run before the next prompt.
 
-Use `--message` to send one message and exit:
+`--run-id` requires `--thread` and makes a noninteractive send retryable. Supply the same thread, run ID and message after a disconnected client or lost reply. A run ID without a thread is refused before any thread is created. The client hashes the literal message; Domain refuses a conflicting retry and returns the recorded result for a matching completed run. Use a new run ID for a new message.
+
+New threads use the exported `DEFAULT_RUN_LIMITS` from the domain package. Set `TARDIGRADE_RUN_LIMITS` to a complete JSON object matching `RunLimits` to override them. These limits are persisted with the thread, and cannot be replaced by resuming it.
 
 ```sh
-bun run chat --message "Explain how threads work"
-bun run chat --thread research --message "Summarize our conversation"
-bun run chat --message "Write a short summary" > answer.txt
+bun run chat --actor assistant --instance personal --name research --message 'Start research'
+bun run chat --thread '<id>' --run-id request-42 --message 'Continue research'
+bun run chat threads --take 100
+bun run chat threads --after 100 --take 100
 ```
 
-Replies go to stdout and the thread ID goes to stderr. This includes follow-up replies generated by child results while the send waits for background work. A fresh thread is created unless `--thread` selects an existing one. The thread becomes active for `watch --active`. Failures exit with a nonzero status, and the host closes when the command finishes. Message text is sent literally, including text beginning with `/`. Without an interactive terminal, `--message` is required.
+`threads` reads the authenticated owner's native directory. It prints immutable ID, actor, instance, name and child status. When more results exist, stderr gives the continuation cursor. The directory also includes native delegated child threads. Listing reflects registration events and does not infer current execution status from local file modification times.
 
-## Threads
+## Approvals and control
 
-Inside chat, use `/new` to create a thread or `/new research` to name it. `/threads` lists threads from the supervisor store. `/switch` opens a thread picker, and `/switch research` resumes a named thread. `/exit` or Ctrl+C at the prompt closes the host and its actors. Opened threads stay owned by the host while switching. Chat subscribes to new replies and inbox messages. Child-agent and tool-result messages appear as labeled, indented blocks in magenta on color terminals. Incoming messages preserve the current input draft and cursor.
+The server's trusted tool registry determines approval and mutation policy. Use the generated native commands in another terminal while chat waits:
 
 ```sh
-bun run chat threads
-bun run chat --thread research
-bun run chat --thread-dir ./chats --instance personal
+bun run chat actor --help
+bun run chat actor approve-run --help
+bun run chat actor approve-code-call --help
+bun run chat actor cancel-run --help
+bun run chat actor request-delegation-cancellation --help
+bun run chat actor resolve-unknown --help
 ```
 
-`--thread-dir` selects the host storage directory for chat, listing, and watch. `--instance` selects an actor instance, defaulting to `cli`. Each instance has a supervisor journal, and each thread has an event journal and invocation ledger. Existing standalone session files are left untouched and are not listed by the supervisor.
+The generated commands derive their required inputs from the Domain declarations, including run IDs, step IDs and reconciliation evidence. Client permission modes do not override server authorization. Cancellation prevents further work; it does not imply a dispatched external mutation was undone. Resolve an unknown outcome with evidence before starting conflicting work.
 
-Completed turns reference their final model call; the model result holds the answer text. Replay also accepts completion events containing inline answers. Chat reads answers through a typed agent history projection on the thread store.
-
-The default model configuration is `packages/apps/cli/wrangler.jsonc`, with `models.lock.json` beside it. Supply the provider credentials named in that configuration. Set `TARDIGRADE_CONFIG_PATH` to use another configuration and its adjacent lockfile.
-
-## Watch the event log
-
-Open a second terminal to choose a thread from a picker, ordered by recent activity:
+## Event streams
 
 ```sh
-bun run chat watch
-bun run chat watch --thread research
-bun run chat watch --active
+bun run chat watch --thread '<id>'
+bun run chat watch --thread '<id>' --after 20 --once
+bun run chat actor thread get --help
+bun run chat actor thread-directory list --help
 ```
 
-The picker shows allocation status and local SQLite database activity times, and marks the active thread. Activity comes from database and WAL modification times; it is not an event timestamp. The selected watcher stays on that thread. `--active` follows chat as it switches threads and waits if no active thread exists yet. Select `--thread` or `--active` when stdin is not a terminal.
+`watch` emits JSON Lines containing the native cursor and typed event. Native cursors start at 1; `--after 0` reads all committed history. `--once` exits at the native caught-up frame. Save the last cursor and pass it after reconnecting to continue after that event. Authentication and owner validation apply to the event stream. This command reads remote committed state and does not start an actor.
 
-Watch uses a read-only journal store and the agent's typed activity projection. It does not start the actor or provision threads. Rows show sequence numbers, event names, and short summaries. They fit the terminal width, with an ellipsis marking clipped text. `--width` overrides the width; redirected output defaults to 120 columns. Terminal colors distinguish user messages in cyan, non-user inbox messages in magenta, completed turns in green, and failures in red. `--json` prints full recorded events as JSON Lines.
-
-Existing events print first, followed by new commits. Use `--after 20` to skip through sequence 20 or `--once` to print stored events and exit. `--poll` sets the refresh interval in milliseconds, defaulting to 250. `--batch-size` sets the maximum number of events printed per batch, defaulting to 100; all batches are printed. The store reads new committed events on each refresh and retains the observed history for projections. Press Ctrl+C to stop.
+The CLI does not open local supervisor journals or session databases. The removed local-runtime flags `--thread-dir`, `--permissions`, `--active`, `--poll`, `--batch-size`, `--json` and `--width` are rejected by the parser. Existing local journals remain untouched and require an explicit migration before they can be resumed through Domain. Fetch, workspace and provider capabilities are available only when configured on the native runner; the old CLI library adapters are not loaded.

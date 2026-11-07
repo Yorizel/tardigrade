@@ -1,0 +1,121 @@
+--- a/crates/oxc_linter/src/rules/unicorn/require_post_message_target_origin.rs
++++ b/crates/oxc_linter/src/rules/unicorn/require_post_message_target_origin.rs
+@@ -1,6 +1,6 @@
+ use oxc_ast::{
+     AstKind,
+-    ast::{Argument, Expression},
++    ast::{Argument, Expression, IdentifierReference, TSType, TSTypeName},
+ };
+ use oxc_diagnostics::OxcDiagnostic;
+ use oxc_macros::declare_oxc_lint;
+@@ -83,7 +83,9 @@
+             _ => return,
+         };
+         if member_expr.static_property_name().is_some_and(|name| name == "postMessage") {
+-            if is_message_port_expression(member_expr.object()) {
++            if is_message_port_expression(member_expr.object())
++                || is_node_worker_receiver(member_expr.object(), ctx)
++            {
+                 return;
+             }
+             let span = call_expr.arguments[0].span();
+@@ -103,6 +105,72 @@
+     }
+ }
+ 
++
++fn node_worker_import(identifier: &IdentifierReference<'_>, namespace: bool, port: bool, ctx: &LintContext<'_>) -> bool {
++    let Some(symbol) = ctx.scoping().get_reference(identifier.reference_id()).symbol_id() else {
++        return false;
++    };
++    let declaration = ctx.scoping().symbol_declaration(symbol);
++    let imported = match ctx.nodes().kind(declaration) {
++        AstKind::ImportSpecifier(specifier) if !namespace => {
++            if port { specifier.imported.name() == "parentPort" } else { matches!(specifier.imported.name().as_str(), "Worker" | "MessagePort" | "BroadcastChannel") }
++        }
++        AstKind::ImportNamespaceSpecifier(_) if namespace => true,
++        _ => false,
++    };
++    imported && matches!(ctx.nodes().parent_kind(declaration), AstKind::ImportDeclaration(import)
++        if import.source.value.as_str().is_some_and(|source| matches!(source, "node:worker_threads" | "worker_threads")))
++}
++
++fn node_worker_type(name: &TSTypeName<'_>, ctx: &LintContext<'_>) -> bool {
++    match name {
++        TSTypeName::IdentifierReference(identifier) => node_worker_import(identifier, false, false, ctx),
++        TSTypeName::QualifiedName(name) => {
++            matches!(name.right.name.as_str(), "Worker" | "MessagePort" | "BroadcastChannel")
++                && matches!(&name.left, TSTypeName::IdentifierReference(identifier) if node_worker_import(identifier, true, false, ctx))
++        }
++        _ => false,
++    }
++}
++
++fn is_node_worker_receiver(expr: &Expression<'_>, ctx: &LintContext<'_>) -> bool {
++    if let Some(member) = expr.without_parentheses().get_member_expr()
++        && !member.is_computed()
++        && member.static_property_name().is_some_and(|name| name == "parentPort")
++        && let Expression::Identifier(namespace) = member.object().without_parentheses()
++    {
++        return node_worker_import(namespace, true, false, ctx);
++    }
++    let Expression::Identifier(identifier) = expr.without_parentheses() else { return false };
++    if node_worker_import(identifier, false, true, ctx) {
++        return true;
++    }
++    let Some(symbol) = ctx.scoping().get_reference(identifier.reference_id()).symbol_id() else { return false };
++    if !ctx.scoping().symbol_flags(symbol).is_const_variable() {
++        return false;
++    }
++    let AstKind::VariableDeclarator(declaration) = ctx.nodes().kind(ctx.scoping().symbol_declaration(symbol)) else { return false };
++    if let Some(annotation) = &declaration.type_annotation
++        && let TSType::TSTypeReference(reference) = &annotation.type_annotation
++        && node_worker_type(&reference.type_name, ctx)
++    {
++        return true;
++    }
++    if let Some(Expression::NewExpression(new)) = &declaration.init {
++        if let Expression::Identifier(constructor) = &new.callee {
++            return node_worker_import(constructor, false, false, ctx);
++        }
++        if let Some(member) = new.callee.get_member_expr()
++            && !member.is_computed()
++            && member.static_property_name().is_some_and(|name| name == "Worker" || name == "MessagePort" || name == "BroadcastChannel")
++            && let Expression::Identifier(namespace) = member.object().without_parentheses()
++        {
++            return node_worker_import(namespace, true, false, ctx);
++        }
++    }
++    false
++}
++
+ fn is_message_port_expression(expr: &Expression<'_>) -> bool {
+     let mut current_expr = expr.without_parentheses();
+     loop {
+@@ -215,3 +283,26 @@
+     .expect_fix(fix)
+     .test_and_snapshot();
+ }
++
++#[test]
++fn test_node_worker_provenance() {
++    use crate::tester::Tester;
++    let pass = vec![
++        "import { Worker as NodeWorker } from 'node:worker_threads'; const worker = new NodeWorker('x'); worker.postMessage(1)",
++        "import { Worker as NodeWorker } from 'node:worker_threads'; const worker: NodeWorker = acquire(); worker.postMessage(1)",
++        "import * as node from 'node:worker_threads'; const worker: node.Worker = acquire(); worker.postMessage(1)",
++        "import * as node from 'node:worker_threads'; const worker = new node.Worker('x'); worker.postMessage(1)",
++        "import * as node from 'node:worker_threads'; node.parentPort?.postMessage(1)",
++        "import { parentPort as connection } from 'node:worker_threads'; connection?.postMessage(1)",
++    ];
++    let fail = vec![
++        "import { Worker } from 'node:worker_threads'; window.postMessage(1)",
++        "import { Worker as NodeWorker } from 'node:worker_threads'; function f(NodeWorker: Window) { NodeWorker.postMessage(1) }",
++        "import { Worker as NodeWorker } from 'fake'; const worker: NodeWorker = acquire(); worker.postMessage(1)",
++        "import { Worker as NodeWorker } from 'node:worker_threads'; let worker: NodeWorker = acquire(); worker.postMessage(1)",
++        "import { Worker as NodeWorker } from 'node:worker_threads'; const worker = getWindow(); worker.postMessage(1)",
++    ];
++    Tester::new(RequirePostMessageTargetOrigin::NAME, RequirePostMessageTargetOrigin::PLUGIN, pass, fail)
++        .expect_fix(vec![("window.postMessage(message)", "window.postMessage(message, window.location.origin)")])
++        .test();
++}

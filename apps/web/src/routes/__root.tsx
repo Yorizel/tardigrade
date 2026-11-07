@@ -2,10 +2,11 @@ import { HeadContent, Outlet, Scripts, createRootRoute, useRouterState } from "@
 import type { ReactElement, ReactNode } from "react"
 
 import { SiteShell } from "../site/SiteShell"
-import "katex/dist/katex.min.css"
-import "../styles.css"
+import katexStyles from "katex/dist/katex.min.css?url"
+import siteStyles from "../styles.css?url"
 
 const THEME_SCRIPT = `const saved=localStorage.getItem("tardigrade-theme");document.documentElement.dataset.theme=saved==="dark"||(saved===null&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light"`
+const themeScript = { __html: THEME_SCRIPT }
 
 export const Route = createRootRoute({
   head: () => ({
@@ -31,6 +32,8 @@ export const Route = createRootRoute({
     ],
     links: [
       { rel: "icon", href: "/favicon.svg", type: "image/svg+xml", sizes: "any" },
+      { rel: "stylesheet", href: katexStyles },
+      { rel: "stylesheet", href: siteStyles },
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
       { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
       { rel: "stylesheet", href: "https://fonts.googleapis.com/css2?family=Caveat:wght@500&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@500;600&family=Instrument+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600;1,700&display=swap" }
@@ -50,7 +53,7 @@ function Root(): ReactElement {
 
 const Document = ({ children }: { readonly children: ReactNode }): ReactElement => (
   <html lang="en" suppressHydrationWarning>
-    <head><HeadContent /><script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} /></head>
+    <head><HeadContent /><script dangerouslySetInnerHTML={themeScript} /></head>
     <body>{children}<Scripts /></body>
   </html>
 )

@@ -1,10 +1,8 @@
 import { renderMermaidSVG } from "beautiful-mermaid"
-import { writeFileSync } from "node:fs"
-import { fileURLToPath } from "node:url"
+import { BunRuntime, BunServices } from "@effect/platform-bun"
+import { Console, Effect, FileSystem, Path, Record as Rec, String as Str } from "effect"
 
 // DIAGRAMS renders committed light and dark SVGs so documentation keeps the house style. Re-run after editing a source here: bun run tools/render-diagrams.ts
-
-const root = fileURLToPath(new URL("../", import.meta.url))
 
 const DIAGRAMS: Record<string, string> = {
   "reconciler-loop": `flowchart TB
@@ -42,12 +40,19 @@ const DIAGRAMS: Record<string, string> = {
 const LIGHT = { bg: "#ffffff", fg: "#1f2328", accent: "#d97706", muted: "#656d76" }
 const DARK = { bg: "#0d1117", fg: "#e6edf3", accent: "#f59e0b", muted: "#8b949e" }
 
-for (const [name, source] of Object.entries(DIAGRAMS)) {
-  for (const [mode, colors] of [["light", LIGHT], ["dark", DARK]] as const) {
-    const svg = renderMermaidSVG(source, { ...colors, font: "ui-sans-serif", padding: 16 })
-      .replace(/@import url\('https:\/\/fonts\.googleapis\.com[^']*'\);?/g, "")
-      .replace(/[ \t]+$/gm, "")
-    writeFileSync(`${root}docs/assets/${name}-${mode}.svg`, svg)
-    console.log(`docs/assets/${name}-${mode}.svg`)
+const main = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const root = yield* path.fromFileUrl(new URL("../", import.meta.url))
+  for (const [name, source] of Rec.toEntries(DIAGRAMS)) {
+    for (const [mode, colors] of [["light", LIGHT], ["dark", DARK]] as const) {
+      const rendered = renderMermaidSVG(source, { ...colors, font: "ui-sans-serif", padding: 16 })
+      const svg = Str.replace(/[ \t]+$/gm, "")(Str.replace(/@import url\('https:\/\/fonts\.googleapis\.com[^']*'\);?/g, "")(rendered))
+      const destination = path.join(root, "docs", "assets", `${name}-${mode}.svg`)
+      yield* fs.writeFileString(destination, svg)
+      yield* Console.log(`docs/assets/${name}-${mode}.svg`)
+    }
   }
-}
+})
+
+main.pipe(Effect.provide(BunServices.layer), BunRuntime.runMain)

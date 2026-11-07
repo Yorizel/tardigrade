@@ -1,3 +1,4 @@
+import { Array as Arr } from "effect"
 import type { ReactElement } from "react"
 
 type PostalStampProps = {
@@ -19,27 +20,27 @@ export const PostalStamp = ({ className, height, id, width, x, y }: PostalStampP
   const horizontal = positions(x, width, 10)
   const vertical = positions(y, height, 10)
   const radius = 2.4
-  const outline = [
+  const outline = Arr.join([
     `M${x} ${y}`,
-    ...horizontal.map(position => `H${position - radius}A${radius} ${radius} 0 0 0 ${position + radius} ${y}`),
+    ...Arr.map(horizontal, position => `H${position - radius}A${radius} ${radius} 0 0 0 ${position + radius} ${y}`),
     `H${x + width}`,
-    ...vertical.map(position => `V${position - radius}A${radius} ${radius} 0 0 0 ${x + width} ${position + radius}`),
+    ...Arr.map(vertical, position => `V${position - radius}A${radius} ${radius} 0 0 0 ${x + width} ${position + radius}`),
     `V${y + height}`,
-    ...[...horizontal].reverse().map(position => `H${position + radius}A${radius} ${radius} 0 0 0 ${position - radius} ${y + height}`),
+    ...Arr.map(Arr.reverse(horizontal), position => `H${position + radius}A${radius} ${radius} 0 0 0 ${position - radius} ${y + height}`),
     `H${x}`,
-    ...[...vertical].reverse().map(position => `V${position + radius}A${radius} ${radius} 0 0 0 ${x} ${position - radius}`),
+    ...Arr.map(Arr.reverse(vertical), position => `V${position + radius}A${radius} ${radius} 0 0 0 ${x} ${position - radius}`),
     "Z"
-  ].join(" ")
+  ], " ")
 
   return (
     <g className={className} aria-hidden="true">
       <mask id={id} x={x - 4} y={y - 4} width={width + 8} height={height + 8} maskUnits="userSpaceOnUse">
         <rect x={x} y={y} width={width} height={height} fill="white" />
-        {horizontal.flatMap((position) => [
+        {Arr.flatMap(horizontal, (position) => [
           <circle cx={position} cy={y} r="2.4" fill="black" key={`top-${position}`} />,
           <circle cx={position} cy={y + height} r="2.4" fill="black" key={`bottom-${position}`} />
         ])}
-        {vertical.flatMap((position) => [
+        {Arr.flatMap(vertical, (position) => [
           <circle cx={x} cy={position} r="2.4" fill="black" key={`left-${position}`} />,
           <circle cx={x + width} cy={position} r="2.4" fill="black" key={`right-${position}`} />
         ])}

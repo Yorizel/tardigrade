@@ -11,8 +11,10 @@
   "packages": {
     ".": {
       "component": "tardigrade",
-      "changelog-path": "packages/deprecated/agent/CHANGELOG.md",
-      "exclude-paths": ["apps/web"]
+      "changelog-path": "CHANGELOG.md",
+      "exclude-paths": [
+        "apps/web"
+      ]
     }
   }
 }

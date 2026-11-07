@@ -4,20 +4,17 @@
   "private": true,
   "type": "module",
   "bin": {
-    "tardie-chat": "./src/main.ts"
+    "tdg": "./src/main.ts"
   },
   "scripts": {
     "start": "bun run src/main.ts",
     "typecheck": "tsc --noEmit",
-    "models:lock": "bun ../../../apps/cli/src/main.ts models lock"
+    "test": "bun test"
   },
   "dependencies": {
-    "@clavia/tardigrade-agent": "workspace:*",
-    "@clavia/tardigrade-core": "workspace:*",
-    "@clavia/tardigrade-platform": "workspace:*",
+    "@alchemy.run/domain": "2.0.0-beta.85",
+    "@clavia/tardigrade-domain": "workspace:*",
     "@effect/platform-bun": "4.1.2",
-    "effect": "4.1.2",
-    "@clavia/tardigrade-libraries": "workspace:*",
-    "@clavia/tardigrade-model": "workspace:*"
+    "effect": "4.1.2"
   }
 }

@@ -1,39 +1,17 @@
-import BuildAnAgent, { frontmatter as buildAnAgentFrontmatter } from "@docs/guides/build-an-agent.mdx"
-import buildAnAgentMarkdown from "@docs/guides/build-an-agent.mdx?doc-source"
-import Atoms, { frontmatter as atomsFrontmatter } from "@docs/concepts/atoms.mdx"
-import atomsMarkdown from "@docs/concepts/atoms.mdx?doc-source"
-import NotesIndex, { frontmatter as notesIndexFrontmatter } from "@docs/notes/index.mdx"
-import notesIndexMarkdown from "@docs/notes/index.mdx?doc-source"
-import Agent, { frontmatter as agentFrontmatter } from "@docs/agent.mdx"
-import FormsAndShadows, { frontmatter as formsAndShadowsNote } from "@notes/telling-forms-from-their-shadows.mdx"
-import formsAndShadowsMarkdown from "@notes/telling-forms-from-their-shadows.mdx?doc-source"
-import agentMarkdown from "@docs/agent.mdx?doc-source"
+import { Array as Arr, Option, Order, Schema, String as Str } from "effect"
 import type { ComponentType } from "react"
-
-import ActorChecking, { frontmatter as actorCheckingFrontmatter } from "@docs/references/actor-checking.mdx"
-import actorCheckingMarkdown from "@docs/references/actor-checking.mdx?doc-source"
-import Cli, { frontmatter as cliFrontmatter } from "@docs/references/cli.mdx"
-import cliMarkdown from "@docs/references/cli.mdx?doc-source"
-import Actors, { frontmatter as actorsFrontmatter } from "@docs/concepts/actors.mdx"
-import actorsMarkdown from "@docs/concepts/actors.mdx?doc-source"
-import VerifyingActors, { frontmatter as verifyingActorsFrontmatter } from "@docs/concepts/verifying-actors.mdx"
-import verifyingActorsMarkdown from "@docs/concepts/verifying-actors.mdx?doc-source"
-import Rlm, { frontmatter as rlmFrontmatter } from "@docs/examples/rlm.mdx"
-import rlmMarkdown from "@docs/examples/rlm.mdx?doc-source"
-import Bun, { frontmatter as bunFrontmatter } from "@docs/platforms/bun.mdx"
-import bunMarkdown from "@docs/platforms/bun.mdx?doc-source"
-import Celld, { frontmatter as celldFrontmatter } from "@docs/platforms/celld.mdx"
-import celldMarkdown from "@docs/platforms/celld.mdx?doc-source"
-import Cloudflare, { frontmatter as cloudflareFrontmatter } from "@docs/platforms/cloudflare.mdx"
-import cloudflareMarkdown from "@docs/platforms/cloudflare.mdx?doc-source"
-import Sdk, { frontmatter as sdkFrontmatter } from "@docs/references/sdk.mdx"
-import sdkMarkdown from "@docs/references/sdk.mdx?doc-source"
 import Welcome, { frontmatter as welcomeFrontmatter } from "@docs/introduction.mdx"
 import welcomeMarkdown from "@docs/introduction.mdx?doc-source"
+import Architecture, { frontmatter as architectureFrontmatter } from "@docs/architecture.mdx"
+import architectureMarkdown from "@docs/architecture.mdx?doc-source"
+import Alchemy, { frontmatter as alchemyFrontmatter } from "@docs/platforms/alchemy.mdx"
+import alchemyMarkdown from "@docs/platforms/alchemy.mdx?doc-source"
+import NotesIndex, { frontmatter as notesIndexFrontmatter } from "@docs/notes/index.mdx"
+import notesIndexMarkdown from "@docs/notes/index.mdx?doc-source"
 import Why, { frontmatter as whyFrontmatter } from "@docs/notes/why-tardigrade.mdx"
 import whyMarkdown from "@docs/notes/why-tardigrade.mdx?doc-source"
-import StateInitialisation, { frontmatter as stateInitialisationFrontmatter } from "@docs/migration/state-initialisation.mdx"
-import stateInitialisationMarkdown from "@docs/migration/state-initialisation.mdx?doc-source"
+import FormsAndShadows, { frontmatter as formsAndShadowsNote } from "@notes/telling-forms-from-their-shadows.mdx"
+import formsAndShadowsMarkdown from "@notes/telling-forms-from-their-shadows.mdx?doc-source"
 
 type DocFrontmatter = {
   readonly title: string
@@ -65,33 +43,19 @@ type DocModule = {
 }
 
 const modules: ReadonlyArray<DocModule> = [
-  { default: BuildAnAgent, frontmatter: buildAnAgentFrontmatter, markdown: buildAnAgentMarkdown, source: "guides/build-an-agent.mdx" },
-  { default: Atoms, frontmatter: atomsFrontmatter, markdown: atomsMarkdown, source: "concepts/atoms.mdx" },
-  { default: NotesIndex, frontmatter: notesIndexFrontmatter, markdown: notesIndexMarkdown, source: "notes/index.mdx" },
-  { default: Agent, frontmatter: agentFrontmatter, markdown: agentMarkdown, source: "agent.mdx" },
-  {
-    default: FormsAndShadows,
-    frontmatter: formsAndShadowsNote,
-    markdown: formsAndShadowsMarkdown,
-    source: "../notes/telling-forms-from-their-shadows.mdx",
-  },
-  { default: ActorChecking, frontmatter: actorCheckingFrontmatter, markdown: actorCheckingMarkdown, source: "references/actor-checking.mdx" },
   { default: Welcome, frontmatter: welcomeFrontmatter, markdown: welcomeMarkdown, source: "introduction.mdx" },
+  { default: Architecture, frontmatter: architectureFrontmatter, markdown: architectureMarkdown, source: "architecture.mdx" },
+  { default: Alchemy, frontmatter: alchemyFrontmatter, markdown: alchemyMarkdown, source: "platforms/alchemy.mdx" },
+  { default: NotesIndex, frontmatter: notesIndexFrontmatter, markdown: notesIndexMarkdown, source: "notes/index.mdx" },
   { default: Why, frontmatter: whyFrontmatter, markdown: whyMarkdown, source: "notes/why-tardigrade.mdx" },
-  { default: Actors, frontmatter: actorsFrontmatter, markdown: actorsMarkdown, source: "concepts/actors.mdx" },
-  { default: VerifyingActors, frontmatter: verifyingActorsFrontmatter, markdown: verifyingActorsMarkdown, source: "concepts/verifying-actors.mdx" },
-  { default: Bun, frontmatter: bunFrontmatter, markdown: bunMarkdown, source: "platforms/bun.mdx" },
-  { default: Cloudflare, frontmatter: cloudflareFrontmatter, markdown: cloudflareMarkdown, source: "platforms/cloudflare.mdx" },
-  { default: Celld, frontmatter: celldFrontmatter, markdown: celldMarkdown, source: "platforms/celld.mdx" },
-  { default: Cli, frontmatter: cliFrontmatter, markdown: cliMarkdown, source: "references/cli.mdx" },
-  { default: Sdk, frontmatter: sdkFrontmatter, markdown: sdkMarkdown, source: "references/sdk.mdx" },
-  { default: Rlm, frontmatter: rlmFrontmatter, markdown: rlmMarkdown, source: "examples/rlm.mdx" },
-  { default: StateInitialisation, frontmatter: stateInitialisationFrontmatter, markdown: stateInitialisationMarkdown, source: "migration/state-initialisation.mdx" }
+  { default: FormsAndShadows, frontmatter: formsAndShadowsNote, markdown: formsAndShadowsMarkdown, source: "../notes/telling-forms-from-their-shadows.mdx" },
 ]
+
+const frontmatterRecord = Schema.Record(Schema.String, Schema.Unknown)
 
 const stringField = (value: Record<string, unknown>, field: string, source: string): string => {
   const found = value[field]
-  if (typeof found !== "string" || found.trim().length === 0) throw new Error(`${source}: frontmatter.${field} must be a non-empty string`)
+  if (typeof found !== "string" || Str.trim(found).length === 0) throw new Error(`${source}: frontmatter.${field} must be a non-empty string`)
   return found
 }
 
@@ -102,10 +66,10 @@ const numberField = (value: Record<string, unknown>, field: string, source: stri
 }
 
 const readFrontmatter = (value: unknown, source: string): DocFrontmatter => {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${source}: frontmatter must be an object`)
-  const fields = value as Record<string, unknown>
+  if (Arr.isArray(value) || !Schema.is(frontmatterRecord)(value)) throw new Error(`${source}: frontmatter must be an object`)
+  const fields = value
   const route = stringField(fields, "route", source)
-  if (!route.startsWith("/") || (route.length > 1 && route.endsWith("/"))) throw new Error(`${source}: frontmatter.route must start with / and omit a trailing /`)
+  if (!Str.startsWith("/")(route) || (route.length > 1 && Str.endsWith("/")(route))) throw new Error(`${source}: frontmatter.route must start with / and omit a trailing /`)
   const articleClass = fields.articleClass
   if (articleClass !== undefined && typeof articleClass !== "string") throw new Error(`${source}: frontmatter.articleClass must be a string`)
   const draft = fields.draft
@@ -130,13 +94,11 @@ const readFrontmatter = (value: unknown, source: string): DocFrontmatter => {
   }
 }
 
-const docs: ReadonlyArray<Doc> = modules
-  .map((module) => {
+const docs: ReadonlyArray<Doc> = Arr.sort(Arr.map(modules, (module) => {
     const frontmatter = readFrontmatter(module.frontmatter, module.source)
     if (frontmatter.draft === true) throw new Error(`${module.source}: draft docs cannot enter the public registry`)
     return { Content: module.default, frontmatter, markdown: module.markdown, source: module.source }
-  })
-  .sort((left, right) => left.frontmatter.sectionOrder - right.frontmatter.sectionOrder || left.frontmatter.order - right.frontmatter.order)
+  }), (left: Doc, right: Doc) => Order.Number(left.frontmatter.sectionOrder, right.frontmatter.sectionOrder) || Order.Number(left.frontmatter.order, right.frontmatter.order))
 
 export const docPages = docs
 
@@ -146,14 +108,14 @@ for (const doc of docs) {
   routes.add(doc.frontmatter.route)
 }
 
-export const docSections: ReadonlyArray<readonly [string, ReadonlyArray<Doc>]> = [...docs.reduce<Map<string, Array<Doc>>>((grouped, doc) => {
+export const docSections: ReadonlyArray<readonly [string, ReadonlyArray<Doc>]> = [...Arr.reduce(docs, new Map<string, Array<Doc>>(), (grouped, doc) => {
   const pages = grouped.get(doc.frontmatter.section) ?? []
   pages.push(doc)
   grouped.set(doc.frontmatter.section, pages)
   return grouped
-}, new Map()).entries()]
+}).entries()]
 
 export const DEFAULT_DOC_ROUTE = "/docs/welcome"
 
 export const docAt = (pathname: string): Doc | undefined =>
-  docs.find((doc) => doc.frontmatter.route === (pathname === "/" || pathname === "/docs" ? DEFAULT_DOC_ROUTE : pathname.replace(/\/$/, "")))
+  Option.getOrUndefined(Arr.findFirst(docs, (doc) => doc.frontmatter.route === (pathname === "/" || pathname === "/docs" ? DEFAULT_DOC_ROUTE : Str.replace(/\/$/, "")(pathname))))

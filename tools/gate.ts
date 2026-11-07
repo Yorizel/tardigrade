@@ -1,170 +1,111 @@
-import { realpathSync } from "node:fs"
 import { availableParallelism } from "node:os"
-import { basename, relative } from "node:path"
 import { fileURLToPath } from "node:url"
+import { BunRuntime, BunServices } from "@effect/platform-bun"
+import { Array as Arr, Clock, Console, Effect, FileSystem, Order, Option, Path, Schema, Stream, String as Str } from "effect"
+import { ChildProcess, ChildProcessSpawner } from "effect/process"
 
-type Task = {
-  readonly id: string
-  readonly cmd: ReadonlyArray<string>
-  readonly cwd?: string
-}
-
-const root = `${realpathSync(fileURLToPath(new URL("../", import.meta.url)))}/`
-const pkg = (name: string) => `${root}packages/${name}`
-const deprecated = ["core", "agent", "host", "channels", "client", "http"].map((name) => `deprecated/${name}`)
-const packages = ["tardie", "core", "code", "agent", "libraries", "platform", "examples", "apps/cli", "model", "store", ...deprecated]
-const testedPackages = ["tardie", "code", "model", "core"]
-const packageId = (name: string) => name.replaceAll("/", "-")
-const platformPkg = (name: string) => `${root}platform/${name}`
-const platforms = ["bun", "worker-loader", "cloudflare"]
-const appPkg = (name: string) => `${root}apps/${name}`
-const apps = ["cli", "server", "voyager"]
-const typecheckedApps = [...apps, "web"]
-const examplePkg = (name: string) => `${root}examples/react-rlm-chat/${name}`
-const examplePackages = ["server", "web"]
-// Apps that ship a bundle. A typecheck proves the sources agree; only a build proves the bundler
-// can resolve and emit them.
-const bundled = ["voyager", "web"]
-
-const tsconfigsIn = (directory: string): ReadonlyArray<string> =>
-  [...new Bun.Glob("tsconfig*.json").scanSync({ cwd: directory, absolute: true, onlyFiles: true })]
-    .filter((path) => basename(path) !== "tsconfig.base.json" && basename(path) !== "tsconfig.effect.json")
-    .sort()
-
-const effectProjects = [
-  ...tsconfigsIn(root),
-  ...packages.flatMap((name) => tsconfigsIn(pkg(name))),
-  ...platforms.flatMap((name) => tsconfigsIn(platformPkg(name))),
-  ...typecheckedApps.flatMap((name) => tsconfigsIn(appPkg(name))),
-  ...examplePackages.flatMap((name) => tsconfigsIn(examplePkg(name))),
-  ...tsconfigsIn(`${root}examples/codex-provider`)
-]
-
-const effectTaskId = (project: string): string => {
-  const path = relative(root, project).replaceAll("\\", "/")
-  if (path === "tsconfig.json") return "lint:effect:tools"
-  return `lint:effect:${path
-    .replace(/\/tsconfig(?:\.([^.]+))?\.json$/, (_match, variant: string | undefined) => variant === undefined ? "" : `:${variant}`)
-    .replaceAll("/", ":")}`
-}
-
-// effectLint runs the Effect rules at the severities tsconfig.effect.json states. `--strict` makes
-// warnings fail, and one process per project lets the gate run the checks in parallel.
-const effectLint = (project: string): ReadonlyArray<string> => [
-  "bun",
-  "--bun",
-  "node_modules/.bin/effect-tsgo",
-  "diagnostics",
-  "--strict",
-  "--format",
-  "text",
-  "--project",
-  project
-]
-
-const tasks: ReadonlyArray<Task> = [
-  { id: "exports", cmd: ["bun", "run", "tools/public-exports.ts", "--check"] },
-  { id: "lint:component-purity", cmd: ["bun", "run", "tools/lint-component-purity.ts"] },
-  { id: "test:component-purity", cmd: ["bun", "test", "tools/component-purity.test.ts"] },
-  { id: "lint:boundaries", cmd: ["bun", "run", "tools/code-graph.ts", "--check"] },
-  { id: "pack:tardie", cmd: ["bun", "run", "tools/publish.ts", "--pack-only"] },
-  { id: "test:publish-paths", cmd: ["bun", "test", "tools/publish-paths.test.ts"] },
-  { id: "test:code-graph", cmd: ["bun", "test", "tools/code-graph/analyze.test.ts"] },
-  { id: "lint", cmd: ["bun", "--bun", "node_modules/.bin/oxlint"] },
-  // Prose carries house rules the code linter does not know, so it has its own check.
-  { id: "lint:docs", cmd: ["bun", "run", "tools/docs-lint.ts"] },
-  { id: "lint:effect:policy", cmd: ["bun", "run", "tools/effect-lint-policy.ts"] },
-  ...effectProjects.map((project) => ({ id: effectTaskId(project), cmd: effectLint(project) })),
-  // Root tsconfig covers tools/*.ts; each package typechecks itself against the shared base.
-  { id: "typecheck:tools", cmd: ["bun", "--bun", "node_modules/.bin/tsc", "--noEmit"] },
-  ...packages.map((name) => ({ id: `typecheck:${packageId(name)}`, cwd: pkg(name), cmd: ["bun", "run", "typecheck"] })),
-  ...platforms.map((name) => ({ id: `typecheck:platform-${name}`, cwd: platformPkg(name), cmd: ["bun", "run", "typecheck"] })),
-  { id: "typecheck:platform-cloudflare:workers", cwd: platformPkg("cloudflare"), cmd: ["bun", "x", "--no-install", "tsc", "--noEmit", "-p", "tsconfig.workers.json"] },
-  ...typecheckedApps.map((name) => ({ id: `typecheck:app-${name}`, cwd: appPkg(name), cmd: ["bun", "run", "typecheck"] })),
-  ...examplePackages.map((name) => ({ id: `typecheck:example-react-rlm-chat-${name}`, cwd: examplePkg(name), cmd: ["bun", "run", "typecheck"] })),
-  { id: "typecheck:example-codex-provider", cmd: ["bun", "--bun", "node_modules/.bin/tsc", "--noEmit", "-p", "examples/codex-provider/tsconfig.json"] },
-  ...testedPackages.map((name) => ({ id: `test:${packageId(name)}`, cwd: pkg(name), cmd: ["bun", "test"] })),
-  { id: "test:platform", cwd: pkg("platform"), cmd: ["bun", "run", "test"] },
-  { id: "test:platform:workers", cwd: pkg("platform"), cmd: ["bun", "run", "test:workers"] },
-  ...platforms.map((name) => ({ id: `test:platform-${name}`, cwd: platformPkg(name), cmd: ["bun", "test"] })),
-  { id: "test:platform-cloudflare:workers", cwd: platformPkg("cloudflare"), cmd: ["bun", "run", "test:workers"] },
-  { id: "test:platform-worker-loader:workers", cwd: platformPkg("worker-loader"), cmd: ["bun", "run", "test:workers"] },
-  ...apps.map((name) => ({ id: `test:app-${name}`, cwd: appPkg(name), cmd: ["bun", "test"] })),
-  { id: "test:app-web", cwd: appPkg("web"), cmd: ["bun", "test"] },
-  { id: "test:example-react-rlm-chat-web", cwd: examplePkg("web"), cmd: ["bun", "test"] },
-  { id: "test:example-react-rlm-chat-server", cwd: examplePkg("server"), cmd: ["bun", "test"] },
-  { id: "test:example-react-rlm-chat-workers", cwd: examplePkg("server"), cmd: ["bun", "run", "test:workers"] },
-  { id: "bundle:model-providers", cmd: ["bun", "run", "tools/model-provider-bundles.ts"] },
-  { id: "bundle:platform-cloudflare", cwd: platformPkg("cloudflare"), cmd: ["bun", "run", "bundle"] },
-  ...bundled.map((name) => ({ id: `build:app-${name}`, cwd: appPkg(name), cmd: ["bun", "run", "build"] })),
-  // Knip checks the complete graph, the shipped graph, cycles, and tsconfig discovery as separate views.
-  { id: "knip", cmd: ["bun", "run", "knip"] },
-  { id: "knip:production", cmd: ["bun", "--bun", "node_modules/.bin/knip", "--production", "--no-progress", "--treat-config-hints-as-errors", "--treat-tag-hints-as-errors"] },
-  { id: "knip:cycles", cmd: ["bun", "--bun", "node_modules/.bin/knip", "--cycles", "--no-progress"] },
-  { id: "knip:tsconfigs", cmd: ["bun", "--bun", "node_modules/.bin/knip", "--use-tsconfig-files", "--no-progress", "--treat-config-hints-as-errors", "--treat-tag-hints-as-errors"] }
-]
-
-const args = process.argv.slice(2)
-const readArg = (name: string) => {
-  const i = args.indexOf(`--${name}`)
-  if (i !== -1) return args[i + 1]
-  return args.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3)
-}
-const only = readArg("only")?.split(",").map((s) => s.trim()).filter(Boolean) ?? []
-const selected = tasks.filter((t) => only.length === 0 || only.some((p) => t.id === p || t.id.startsWith(`${p}:`)))
+type Task = { readonly id: string; readonly cmd: ReadonlyArray<string>; readonly cwd?: string }
+export class GateArgumentsRejected extends Schema.TaggedError<GateArgumentsRejected, { readonly brand: unique symbol }>()("GateArgumentsRejected", { message: Schema.String }) {}
 export const DEFAULT_GATE_JOBS = Math.min(Math.max(availableParallelism(), 2), 8)
-const jobs = Number(readArg("jobs") ?? DEFAULT_GATE_JOBS)
-if (!Number.isSafeInteger(jobs) || jobs < 1) throw new Error("gate --jobs must be a positive integer")
 
-if (args.includes("--list")) {
-  for (const task of tasks) console.log(task.id)
-  process.exit(0)
-}
+const packageId = (name: string) => Str.replaceAll("/", "-")(name)
+const effectLint = (project: string): ReadonlyArray<string> => ["bun", "--bun", "node_modules/.bin/effect-tsgo", "diagnostics", "--strict", "--format", "text", "--project", project]
+const matches = (id: string, selector: string) => id === selector || Str.startsWith(`${selector}:`)(id)
+const formatMs = (ms: number) => ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`
 
-const formatMs = (ms: number) => (ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`)
-
-// Interleaved output is unreadable without a tag, so every line carries its task id.
-const pipe = async (id: string, stream: ReadableStream<Uint8Array> | null) => {
-  if (!stream) return
-  const decoder = new TextDecoder()
-  let carry = ""
-  for await (const chunk of stream) {
-    carry += decoder.decode(chunk, { stream: true })
-    const lines = carry.split(/\r?\n/)
-    carry = lines.pop() ?? ""
-    for (const line of lines) console.log(`[${id}] ${line}`)
+const main = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  const root = `${yield* fs.realPath(fileURLToPath(new URL("../", import.meta.url)))}/`
+  const pkg = (name: string) => `${root}packages/${name}`
+  const packages = ["domain", "tardie", "platform", "apps/cli", "examples"]
+  const testedPackages = ["domain", "examples", "tardie"]
+  const projectGroups = yield* Effect.forEach([...Arr.map(packages, pkg), `${root}apps/web`], directory => fs.glob("tsconfig*.json", { root: directory }).pipe(Effect.map(names => Arr.sort(Arr.map(Arr.filter(names, name => name !== "tsconfig.base.json" && name !== "tsconfig.effect.json"), name => path.join(directory, name)), Order.String))))
+  const effectProjects = [`${root}tsconfig.json`, ...projectGroups.flat()]
+  const effectTaskId = (project: string): string => {
+    const relative = Str.replaceAll("\\", "/")(path.relative(root, project))
+    if (relative === "tsconfig.json") return "lint:effect:tools"
+    const match = /\/tsconfig(?:\.([^.]+))?\.json$/.exec(relative)
+    const variant = match?.[1]
+    const withoutConfig = Str.replace(/\/tsconfig(?:\.([^.]+))?\.json$/, variant === undefined ? "" : `:${variant}`)(relative)
+    return `lint:effect:${Str.replaceAll("/", ":")(withoutConfig)}`
   }
-  if (carry.length > 0) console.log(`[${id}] ${carry}`)
-}
+const tasks: ReadonlyArray<Task> = [
+  { id: "knip", cmd: ["bun", "run", "knip"] },
+  { id: "exports", cmd: ["bun", "run", "tools/public-exports.ts", "--check"] },
+  { id: "test:publish", cmd: ["bun", "test", "tools/__tests__/publish.test.ts"] },
+  { id: "test:publish-paths", cmd: ["bun", "test", "tools/__tests__/publish-paths.test.ts"] },
+  { id: "lint", cmd: ["bun", "run", "lint", "packages/domain", "packages/platform/src/alchemy", "packages/platform/src/cluster", "packages/platform/src/codemode", "packages/platform/src/testing", "packages/platform/__tests__", "packages/apps/cli", "packages/examples", "apps/web", "packages/tardie", "tools", "examples"] },
+  { id: "lint:docs", cmd: ["bun", "run", "tools/docs-lint.ts"] },
+  { id: "test:native-oxlint", cmd: ["bun", "test", "tools/__tests__/native-oxlint-svg.test.ts"] },
+  { id: "test:gate", cmd: ["bun", "test", "tools/__tests__/gate.test.ts"] },
+  { id: "test:docs-lint", cmd: ["bun", "test", "tools/__tests__/docs-lint.test.ts"] },
+  { id: "lint:effect:policy", cmd: ["bun", "run", "tools/effect-lint-policy.ts"] },
+  { id: "test:effect-lint-policy", cmd: ["bun", "test", "tools/__tests__/effect-lint-policy.test.ts"] },
+  ...Arr.map(effectProjects, (project) => ({ id: effectTaskId(project), cmd: effectLint(project) })),
+  { id: "typecheck:tools", cmd: ["bun", "--bun", "node_modules/.bin/tsc", "--noEmit", "-p", "tsconfig.json"] },
+  ...Arr.map(packages, (name) => ({ id: `typecheck:${packageId(name)}`, cwd: pkg(name), cmd: ["bun", "run", "typecheck"] })),
+  { id: "typecheck:app-web", cwd: `${root}apps/web`, cmd: ["bun", "run", "typecheck"] },
+  { id: "build:app-web", cwd: `${root}apps/web`, cmd: ["bun", "run", "build"] },
+  { id: "test:app-web", cwd: `${root}apps/web`, cmd: ["bun", "test"] },
+  ...Arr.map(testedPackages, (name) => ({ id: `test:${packageId(name)}`, cwd: pkg(name), cmd: ["bun", "test"] })),
+  { id: "test:apps-cli", cwd: pkg("apps/cli"), cmd: ["bun", "run", "test"] },
+  { id: "test:platform", cwd: pkg("platform"), cmd: ["bun", "run", "test"] },
+]
 
-const run = async (task: Task) => {
-  const started = Date.now()
-  console.log(`\n> ${task.id}  ${task.cmd.join(" ")}`)
-  const cwd = realpathSync(task.cwd ?? root)
-  const proc = Bun.spawn([...task.cmd], { cwd, env: { ...process.env, PWD: cwd }, stdout: "pipe", stderr: "pipe" })
-  const drained = Promise.all([pipe(task.id, proc.stdout), pipe(task.id, proc.stderr)])
-  const code = await proc.exited
-  await drained
-  const ms = Date.now() - started
-  console.log(code === 0 ? `PASS ${task.id} ${formatMs(ms)}` : `FAIL ${task.id} exited ${code} after ${formatMs(ms)}`)
-  return { task, code, ms }
-}
+  const args = process.argv.slice(2)
+  const readArg = (name: string) => {
+    const index = args.indexOf(`--${name}`)
+    if (index !== -1) return args[index + 1]
+    const found = Option.getOrUndefined(Arr.findFirst(args, arg => Str.startsWith(`--${name}=`)(arg)))
+    return found === undefined ? undefined : Str.slice(name.length + 3)(found)
+  }
+  const onlyArg = readArg("only")
+  if ((args.includes("--only") && (onlyArg === undefined || Str.startsWith("--")(onlyArg))) || onlyArg === "") return yield* GateArgumentsRejected.make({ message: "gate --only requires a selector" })
+  const only = onlyArg === undefined ? [] : Arr.filter(Arr.map(Str.split(",")(onlyArg), Str.trim), item => item.length > 0)
+  if (onlyArg !== undefined && only.length === 0) return yield* GateArgumentsRejected.make({ message: "gate --only requires a selector" })
+  const unknown = Arr.filter(only, selector => !Arr.some(tasks, task => matches(task.id, selector)))
+  if (unknown.length > 0) return yield* GateArgumentsRejected.make({ message: `Unknown gate selectors: ${Arr.join(unknown, ", ")}` })
+  const selected = Arr.filter(tasks, task => only.length === 0 || Arr.some(only, selector => matches(task.id, selector)))
+  if (selected.length === 0) return yield* GateArgumentsRejected.make({ message: "gate selected no tasks" })
+  const jobs = Number(readArg("jobs") ?? DEFAULT_GATE_JOBS)
+  if (!Number.isSafeInteger(jobs) || jobs < 1) return yield* GateArgumentsRejected.make({ message: "gate --jobs must be a positive integer" })
+  if (args.includes("--list")) {
+    for (const task of tasks) yield* Console.log(task.id)
+    return undefined
+  }
+  yield* Console.log(`gate: ${selected.length} tasks, ${jobs} parallel jobs`)
+  const startedAt = yield* Clock.currentTimeMillis
+  const results = yield* Effect.forEach(selected, Effect.fn("Gate.runTask")(function* (task) {
+    const started = yield* Clock.currentTimeMillis
+    yield* Console.log(`\n> ${task.id}  ${Arr.join(task.cmd, " ")}`)
+    const execution = Effect.scoped(Effect.gen(function* () {
+      const cwd = yield* fs.realPath(task.cwd ?? root)
+      const [command, ...arguments_] = task.cmd
+      if (command === undefined) return yield* GateArgumentsRejected.make({ message: `Empty command: ${task.id}` })
+      const child = yield* spawner.spawn(ChildProcess.make(command, arguments_, { cwd, env: { ...process.env, PWD: cwd }, stdout: "pipe", stderr: "pipe" }))
+      const drain = (stream: typeof child.stdout) => stream.pipe(Stream.decodeText(), Stream.splitLines, Stream.runForEach(line => Console.log(`[${task.id}] ${line}`)))
+      const [code] = yield* Effect.all([child.exitCode, drain(child.stdout), drain(child.stderr)], { concurrency: "unbounded" })
+      return Number(code)
+    }))
+    const result = yield* Effect.result(execution)
+    const ended = yield* Clock.currentTimeMillis
+    const ms = ended - started
+    if (result._tag === "Failure") {
+      yield* Console.error(`FAIL ${task.id}: ${String(result.failure)}`)
+      return { task, code: 1, ms }
+    }
+    const code = result.success
+    yield* Console.log(code === 0 ? `PASS ${task.id} ${formatMs(ms)}` : `FAIL ${task.id} exited ${code} after ${formatMs(ms)}`)
+    return { task, code, ms }
+  }), { concurrency: jobs })
+  yield* Console.log("\nSummary")
+  for (const result of Arr.sortWith(results, (entry: (typeof results)[number]) => -entry.ms, Order.Number)) yield* Console.log(`  ${result.code === 0 ? "PASS" : "FAIL"} ${Str.padEnd(18)(result.task.id)} ${formatMs(result.ms)}`)
+  const endedAt = yield* Clock.currentTimeMillis
+  yield* Console.log(`  total ${formatMs(endedAt - startedAt)}`)
+  if (Arr.some(results, result => result.code !== 0)) process.exitCode = 1
+  return undefined
+})
 
-console.log(`gate: ${selected.length} tasks, ${jobs} parallel jobs`)
-const startedAt = Date.now()
-const queue = [...selected]
-const results: Array<{ task: Task; code: number; ms: number }> = []
-// Every task runs even after a failure: one gate run should surface every problem at once.
-await Promise.all(
-  Array.from({ length: Math.min(jobs, queue.length) }, async () => {
-    for (let task = queue.shift(); task !== undefined; task = queue.shift()) results.push(await run(task))
-  })
-)
-
-console.log("\nSummary")
-for (const r of results.sort((a, b) => b.ms - a.ms)) {
-  console.log(`  ${r.code === 0 ? "PASS" : "FAIL"} ${r.task.id.padEnd(18)} ${formatMs(r.ms)}`)
-}
-console.log(`  total ${formatMs(Date.now() - startedAt)}`)
-
-process.exit(results.some((r) => r.code !== 0) ? 1 : 0)
+main.pipe(Effect.provide(BunServices.layer), BunRuntime.runMain)

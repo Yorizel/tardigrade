@@ -1,4 +1,5 @@
 import { Bird, TreeView } from "@phosphor-icons/react"
+import { Array as Arr, String as Str } from "effect"
 import { useId, type ReactElement } from "react"
 
 const forms = {
@@ -8,14 +9,12 @@ const forms = {
 
 type Labels = { readonly form: string; readonly layer: string; readonly shadow: string; readonly prisoner: string }
 
-// CaveDiagram draws Plato's cave; form picks the object the carrier holds up, whose shadow the prisoner sees, labels names the form, the carrier with the flame, the shadow, and the prisoner, and looking picks whether the prisoner sits pointing at the shadow or stands turned around pointing back at the form.
 export const CaveDiagram = ({ form = "bird", labels, looking = "shadow" }: { readonly form?: keyof typeof forms; readonly labels?: Labels; readonly looking?: "shadow" | "form" }): ReactElement => {
   const outline = useId()
   const { Icon, name } = forms[form]
   return (
     <svg className="cave-diagram" viewBox="0 0 640 300" role="img" aria-label={`Plato's cave. A torch burns on a column. A carrier holds ${name} up on a stick behind a low wall, and its shadow falls on the cave wall, where a seated prisoner ${looking === "form" ? "has stood up, turned around, and points back at the form" : "points at it"}.`}>
       <defs>
-        {/* outline traces the edge of everything drawn inside it, so overlapping parts share one contour. */}
         <filter id={outline}>
           <feMorphology in="SourceAlpha" operator="erode" radius="1.5" result="inner" />
           <feComposite in="SourceAlpha" in2="inner" operator="out" result="edge" />
@@ -53,9 +52,9 @@ export const CaveDiagram = ({ form = "bird", labels, looking = "shadow" }: { rea
         </g>}
       </g>
       {labels === undefined ? null : <g className="cave-labels">
-        <text x="236" y={labels.form.includes("\n") ? 26 : 40} textAnchor="middle">{labels.form.split("\n").map((line, index) => <tspan key={index} x="236" dy={index === 0 ? 0 : 14}>{line}</tspan>)}</text>
+        <text x="236" y={Str.includes("\n")(labels.form) ? 26 : 40} textAnchor="middle">{Arr.map(Str.split(labels.form, "\n"), (line, index) => <tspan key={`${index}:${line}`} x="236" dy={index === 0 ? 0 : 14}>{line}</tspan>)}</text>
         <path d="M134 222L94 198M166 222L192 198" />
-        <text x="140" y="238" textAnchor="middle">{labels.layer.split("\n").map((line, index) => <tspan key={index} x="140" dy={index === 0 ? 0 : 14}>{line}</tspan>)}</text>
+        <text x="140" y="238" textAnchor="middle">{Arr.map(Str.split(labels.layer, "\n"), (line, index) => <tspan key={`${index}:${line}`} x="140" dy={index === 0 ? 0 : 14}>{line}</tspan>)}</text>
         <text className="cave-label-on-rock" x="596" y="192" textAnchor="middle">{labels.shadow}</text>
         <text x={looking === "form" ? 428 : 372} y={looking === "form" ? 196 : 164} textAnchor="middle">{labels.prisoner}</text>
       </g>}

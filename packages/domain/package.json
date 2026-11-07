@@ -1,0 +1,21 @@
+{
+  "name": "@clavia/tardigrade-domain",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@alchemy.run/domain": "2.0.0-beta.85",
+    "effect": "4.1.2"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@cfworker/json-schema": "4.1.1"
+  }
+}

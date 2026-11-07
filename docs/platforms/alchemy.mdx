@@ -1,0 +1,144 @@
+---
+title: Alchemy Domain
+description: Run agents with native Domain state and durable execution.
+route: /docs/platforms/alchemy
+section: Platforms
+sectionOrder: 3
+order: 1
+---
+
+The default `tdg init` template hosts agent state in Alchemy Domain and durable agent processes on Effect Cluster. `Thread` is the aggregate, `RunExecution` reacts to its facts, `ExecuteRun` is a standalone native workflow, and `ActorApi` exposes authorized commands and reads. Cloudflare hosting uses `DomainCloudflare.layerDurableObjects()`; the original Tardigrade journal, scheduler, watchdog, and raw actor Durable Objects are outside this template's call path.
+
+## Create and run
+
+```sh
+tdg init assistant
+cd assistant
+cp .env.example .env
+bun run dev
+```
+
+Generated projects copy the required dependency patches and Effect override into their Bun manifest. Keep the `patches/` directory and the manifest entries together when installing dependencies.
+
+Start `bun run dev:runner` in another terminal. The Bun runner stores native Cluster messages and Workflow checkpoints in `TARDIGRADE_RUNNER_DB`. Its model provider, tool adapter and immutable result storage live in that process; the Worker hosts the Domain model and its policies. Set `TARDIGRADE_DOMAIN_URL` to the Worker’s `/internal` endpoint and `TARDIGRADE_RUNNER_URL` to the runner endpoint reachable from that Worker. Local defaults use the memory server on port 4242 and runner on port 4243. Cloudflare production requires reachable service URLs. Set `TARDIGRADE_ARTIFACT_DB` to a separate persistent SQLite file for complete spilled values. It is distinct from the Cluster message/checkpoint database; retain both files and keep them private.
+
+Supply the model ID, provider credential, public bearer token and subject, and separate `WORKER_TO_RUNNER_TOKEN` and `RUNNER_TO_DOMAIN_TOKEN` credentials in `.env` before starting. There is no fallback model or account. Alchemy reads configuration during Worker initialization and owns its secret bindings. The reference adapter uses the native Effect AI OpenAI Responses provider with `current_time`, bounded HTTP tools `fetch_get` and `fetch_request`, durable text tools `write_text`, `read_text` and `list_texts`, native Code Mode through `execute`, and durable subagents through `delegate`. The HTTP tools preserve explicit methods, headers, text bodies, response status and bounded text; failed calls return their declared native errors to the model. `TARDIGRADE_FETCH_POLICY` overrides the exported complete `DEFAULT_FETCH_POLICY`, including request/response limits, text allowance and timeout. Returned results expose the accepted policy and truncation. A mutating HTTP request whose timeout or lost response leaves its effect uncertain blocks its run as unknown; readonly HTTP failures remain model-readable. An application supplies other models and tools by implementing the native `AgentExecution` external system.
+
+`bun run cli --help` lists the commands derived from `ActorApi`. The public commands open a thread, request a run, approve a pending step, cancel a run, and reconcile an unknown result. Owner commands also approve, cancel, and reconcile code execution, cancel delegations, reply to child requests, and acknowledge their inbox. Admission of code and child work remains internal to trusted orchestration. Reads expose Thread, CodeExecution, Delegation, Workspace and SpillCatalog state and native event streams to their owner. `ThreadDirectory` routes root and child registration facts to the immutable owner. Its native paginated list and event stream expose thread IDs and names without copying the directory into a client store; names are labels and can repeat. Command IDs provide native transport idempotency; run IDs and monotonic step IDs enforce the model's additional invariants.
+
+`bun run dev` runs Cloudflare locally through Alchemy. `bun run dev:memory` runs the state model in a Bun process with `Domain.InMemory`; its data ends with the process. Both state servers use the same separate Cluster runner. `bun run plan:cloudflare --stage prod` previews the stack and `bun run deploy:cloudflare --stage prod` deploys it. Keep the stack's `.alchemy` state between deployments. Generating this template does not transfer data from an existing Tardigrade deployment.
+
+## Fork a native thread
+
+The native chat CLI accepts `fork --source SOURCE_ID --target TARGET_ID --through SEQUENCE --name LABEL`. Retain the explicit target ID when retrying. Thread IDs are immutable coordinates; names are repeatable labels. The authenticated `/fork` endpoint captures the selected open or completed, settled context. Pending, failed, cancelled and unknown checkpoints require detachment and are refused with `CheckpointNeedsDetachment`.
+
+The receipt records the source ID, inclusive event cursor, SHA-256 prefix digest and format version 1. `DEFAULT_FORK_POLICY` exports the event, prefix byte, snapshot byte and read-time limits. Set `TARDIGRADE_FORK_POLICY` to a complete JSON `ForkPolicy` to override them; the receipt reports the applied policy. Workspace text and spilled values are not cloned. The generated `client.ts` exposes Domain commands, and `tdg fork` supplies the historical fork command.
+
+## Execution and recovery
+
+Each thread has one active run. Native commands persist admission, step preparation, approval, dispatch, usage, and terminal outcomes. Every model/tool boundary has a native Activity result. The workflow reads snapshots through the private native Domain API and reuses recorded Activity results on replay. The policy schedules a native Domain expiry command and sends authenticated native Workflow control RPCs after approval, cancellation, failure, or an uncertain outcome. The Worker declares no agent sagas and registers no duplicate agent workflow engine.
+
+A tool cannot dispatch before its prepared step is approved. The reference adapter advertises tools to the model with `disableToolCallResolution: true`; execution happens separately through the toolkit handler after the aggregate admits dispatch. Provider-executed tools are refused by the reference adapter. Application adapters are trusted code and must classify their tool effects accurately.
+
+When dispatch was recorded but the external response was not, recovery records `unknown` and blocks another run. This includes a lost model response and uncertainty in nested Code or delegated work; the parent run also becomes unknown and cannot admit another run. A native reconciliation command requires an explicit outcome and evidence; it closes the affected run as failed before admitting new work. External execution does not have an exactly-once guarantee. Cancellation prevents subsequent dispatch and successful late settlement; it cannot undo an external mutation.
+
+Turn and tool counters are precharged before dispatch. Reported token usage is accumulated once per settled step, and the model refuses subsequent work after exhaustion. The reference provider also receives the remaining token allowance as its output limit. Provider input tokens and lost responses can still incur charges beyond that output allowance; the limit is not a billing reservation. Deadlines use the native command clock and scheduled expiry.
+
+The native event log retains execution evidence. Model context retains completed runs; failed and cancelled runs do not become the next run's context. A step whose output exceeds the message allowance retains its evidence in the event log and fails the run without enlarging the context beyond its configured limit.
+
+## Boundaries
+
+The Alchemy template uses the native Domain protocol and configurable execution adapters. The `quickstart` template provides a Counter built with native Domain contracts. These are the two templates accepted by `tdg init`. This fork defines its own public contracts without compatibility with the original framework.
+
+The reference bearer adapter authenticates one explicitly configured subject. Applications with several users provide their own session middleware using `CurrentCaller`; identity must remain request-local. `Session` authenticates every public mutation and validates aggregate reads against the stored owner. `ReceiptOwnerGuard` checks the immutable owner before native command receipt lookup and again before returning the result, including an explicitly empty command ID. The second check denies a concurrent first-creation receipt belonging to another principal. `RunReceiptGuard` validates the returned admission receipt against the requested run ID, digest, prompt, output and model, including transport-level retries that bypass aggregate decisions. A reused command ID with a changed request returns `ReceiptConflict`. Applications replacing the session adapter must also provide `ReceiptOwnerGuardLive` and `RunReceiptGuardLive`. Internal execution commands are excluded from `ActorApi`. Policy RPC clients are acquired with the model Layer and closed with its scope. Service credentials configure that connection; owner and execution identity are read from each committed event.
+
+Child thread admission has a durable reservation and an irreversible fence bound to its parent, delegation, actor, and run. Root-thread commands cannot reopen or admit work into a child thread. Fencing preserves uncertain dispatched mutations for reconciliation. Native delegation workflows reserve and precharge admission, derive child limits from the accepted parent, open the bound child, and record its actual terminal receipt. Cancellation fences the child before recording absence or a terminal outcome, including after precharge. Transport failures suspend the cleanup workflow for native resume.
+
+The Cluster package exports a native Workflow proxy with approval, interruption, resume, and poll controls. Every control requires `WORKER_TO_RUNNER_TOKEN` and checks that the owner, thread, and run produce the supplied workflow key. The private Domain HTTP endpoint checks `RUNNER_TO_DOMAIN_TOKEN` for all requests, including internal commands without session middleware and WebSocket upgrades. Owner identity travels in each RPC envelope and is decoded by the native session middleware; it is never a process-global principal.
+
+Local integration tests run the production policy loop over two real HTTP servers with native Domain memory storage, Cluster, and SQLite: a requested run starts without a test calling its workflow directly, approval releases the tool, and cancellation prevents dispatch. Separate tests cover Activity reuse, immediate approval, owner isolation, missing credentials, and absence of control credentials from persisted Cluster messages and replies. A separate test kills an owned runner process with SIGKILL and restarts it against the same SQLite file: a pending approval resumes, and a committed external mutation without a recorded result becomes unknown without another invocation. Cloudflare deployment and multiple runners require separate verification.
+
+Code execution records the accepted method catalog, interpreter policy and host-call outcomes in Domain. `ExecuteCodeLive` invokes the project-owned interpreter through `CodeRuntimeLive`. The adapter drives `initial` and `update` with journal entries in settlement order; the pure interpreter returns pending capability requests without dispatching them. Native Activities execute approved calls, and native state streams wake execution while calls remain active. The Code workflow uses a durable deadline race; expiration cancels pending work and preserves dispatched mutations as unknown when their outcomes require reconciliation.
+
+The interpreter implements a bounded JavaScript profile with upfront syntax validation, lexical scopes and structured asynchronous continuations. Its accepted policy sets source, step, call, AST, JSON, depth, output, log and segment-duration budgets. The accepted ambient clock and random seed make guest replay deterministic. Invoke granted methods directly through catalog paths such as `tools.<method>`, `agents.run` and `workspace.read`. The interpreter and this production integration remain experimental; combined validation is in progress.
+
+Each evaluation runs guest interpretation and journal replay in a worker without host tools or Domain capabilities. The parent owns the segment timer and awaits worker termination when its scope closes. The segment budget includes worker startup. Protocol encoding and decoding run synchronously in the parent. The segment timer cannot interrupt native synchronous serialization, so very large consumer-configured limits can increase transport work beyond the segment duration.
+
+Native host results can carry `Prompt.ToolModelOutputPart` text and files outside the guest JSON value. Code exposes that content to the model only when the returned object retains its host-call identity and unchanged JSON. Copies, independent equal values, primitives and undefined retain ordinary JSON. Native file codecs retain bytes, and metadata counts toward the result budget. `RunCode` owns admission and top-level native compensation; `execute` in the default agent calls it as a linked native child before Code admission can commit. Parent and Code cancellation wake native state watches even during approval waits. Domain expiry and accepted cancellation facts drive scoped native controls.
+
+
+`delegate` starts another run of the configured actor with a derived lineage and its own bounded tool allowance. The accepted Domain reservation supplies actor, prompt, identity and limits; guest JavaScript cannot supply execution authority. `RunDelegation` registers native admission compensation before committing the reservation, and `ExecuteDelegation` owns the child fence and terminal receipt. A process completing cleanup does not imply the child succeeded; the Domain status and receipt determine the result.
+
+Code exposes `agents.run({ text, background: true })` when the trusted planner grants background execution. Admission freezes the child's actor, model, output contract and token/tool allowance in the Domain ledger before returning a handle. `agents.result({ handle })` waits for the settled child and checks the handle against that ledger and its reservation. Settled failed or cancelled children fail the result call; unknown outcomes require reconciliation. Stopping the result waiter leaves the child running, and a background child can finish after its parent run ends.
+
+`DEFAULT_CODE_LIMITS` and `DEFAULT_DELEGATION_LIMITS` expose the reference policy defaults. Optional JSON settings `TARDIGRADE_CODE_LIMITS` and `TARDIGRADE_DELEGATION_LIMITS` supply a complete replacement policy; accepted executions retain their policy and method catalog across replay. The default subagent uses the same configured actor. Applications exposing multiple actors provide an allowlisted planner and matching native external-system implementation.
+
+The default-agent integration tests use the real OpenAI Responses adapter over a local HTTP fixture. They exercise `RequestRun` through native policies, provider requests, Code Mode or delegation, tool execution, durable receipts and final parent completion. They do not make paid provider calls or prove Cloudflare deployment. The workspace chat CLI consumes the remote native API for admission, event cursors, directory pagination and terminal receipts.
+
+The named-text workspace is a Domain aggregate scoped to the immutable owner and thread. Tools validate the actual parent run before accessing it. Writes retain their original operation payload and receipt, so retrying an earlier write does not undo a later overwrite; reusing its operation ID with different text is refused. Native command IDs also bind the payload. Reads slice by character offset, and key listings use an exclusive lexical cursor. Empty keys and text remain valid.
+
+`DEFAULT_WORKSPACE_POLICY` exports read/list allowances, current storage limits and write-receipt limits. `TARDIGRADE_WORKSPACE_POLICY` supplies a complete JSON replacement when a workspace is first opened. Existing workspaces retain their accepted policy across runner configuration changes. New writes fail when receipt retention is full, preserving idempotency evidence. The native aggregate read currently transfers the whole bounded workspace to the trusted runner before the domain read/list policy selects the response. This context stores named text. Complete result references use SpillCatalog and the separate SQL backend described below.
+
+## Complete result references
+
+The default agent freezes `TARDIGRADE_SPILL_POLICY` with each accepted Code execution. `DEFAULT_SPILL_POLICY` exports the complete policy: the byte threshold and preview allowance, read/context/match allowances, and value/count/total-storage limits. A thread with an existing native SpillCatalog retains its accepted policy. Code requires both `workspace.read` and `workspace.grep` in its frozen catalog before spill is enabled, so a result reference names actual capabilities.
+
+A returned JSON value above the accepted threshold leaves a `{tmp,size,preview,note}` reference in the model context. The full bounded Code outcome remains available in CodeExecution; native SQL KeyValueStore persists the complete serialized value separately. The pointer reports the accepted read and search allowances. `workspace.read({ref,offset,length})` slices it by character offset, and `workspace.grep({pattern,ref})` searches complete stored values with bounded surrounding context and explicit match truncation. Direct model tools expose the same operations as `read_spill` and `grep_spills`. Owner/thread scope is supplied by trusted orchestration, and reads require the current authorized run. A later run of that thread can reuse the reference.
+
+SpillCatalog records metadata and reserves immutable reference, digest and storage allowance before the SQL write; confirmation follows the write. Pending reservations count toward the limit. An exact retry recovers an interrupted reservation or verifies an already stored value, and a conflicting reference cannot overwrite it. Reads verify the complete value against its size and digest. Missing or corrupted confirmed values fail explicitly; retry does not repair them silently. Native Schema-backed string storage preserves BOM and Unicode, and malformed text is refused before reservation. No external KV manifest is maintained.
+
+Known archive-capacity refusals produce a model-visible tool failure with the source execution ID and policy; they do not turn a known completed Code call into an uncertain external mutation. Transport or storage failures preserve their original cause and retain the run uncertainty when necessary. The Code result limit remains independent of the spill threshold: this path does not permit an unbounded result through the interpreter. Uploaded file/blob storage, workspace SQL and remaining RLM consumer contracts still need their own cutovers. SQL is not advertised by the default workspace catalog.
+
+
+## Context and structured results
+
+A thread may accept a `context` policy in its run limits. The exported `DEFAULT_CONTEXT_POLICY` declares character thresholds, retained context and summary size/output-token limits. Domain prepares and settles compaction steps; native Activities invoke the configured model. The original task, existing system messages and complete tool exchanges are preserved. Summaries remain assistant data. Actual summary usage counts against the existing budgets; cancellation or expiry prevents replacement while a returned paid result still records its usage, including after a successor run starts.
+
+`RequestRun` accepts an optional `output` declaration containing a name and a closed JSON object schema. The chat CLI exposes the same declaration through `--output`. The native OpenAI adapter carries the schema alongside tools; Domain validates the final JSON once and persists the decoded result in the run receipt. An invalid result fails with `output_validation_failed` without a correction call. The nine supported string formats are asserted through native Schema filters; time and date-time require a valid RFC 3339 offset; unknown names are rejected at admission. The dependency patch and generated project manifest carry the importer hook. The selected provider model must support strict structured responses with tools.
+
+## Inbox example
+
+`packages/examples/agents/inbox.ts` defines a separate native Domain model for ordered text messages. `OpenInbox` accepts the storage and message limits, and `PostInboxMessage` returns the accepted text. A repeated message ID returns its original reply; conflicting payloads and other callers are rejected, including transport receipt replay. This context does not need an AI provider or an agent workflow.
+
+From `packages/examples`, `bun run cloudflare` starts its Alchemy stack. Configure `TARDIGRADE_TOKEN` and `TARDIGRADE_SUBJECT` for the shared authenticated session boundary. The Worker hosts `InboxApi` through Domain Durable Objects. This stack owns the inbox's persisted state independently of the agent stack.
+
+
+## Greeter example
+
+`packages/examples/act.ts` runs a separate authenticated Domain Greeting model. Its policy starts the native Effect workflow after admission and interrupts it after cancellation. The handler is a Domain external system; settled results and failures return through Domain commands. The example provides `WorkflowEngine.layerMemory` after `Domain.InMemory` so native workflow interruption releases an active handler. This example is ephemeral and does not establish SQL or cloud recovery.
+
+Run it with `TARDIGRADE_TOKEN` and `TARDIGRADE_SUBJECT`. `TARDIGRADE_GREETING_NAME` overrides the greeting name; `TARDIGRADE_GREETER_POLL_INTERVAL_MS` and `TARDIGRADE_GREETER_MAX_POLLS` override the exported positive polling defaults.
+
+
+## Meeseeks Bun example
+
+`packages/examples/bun.ts` is an authenticated native Domain client. Its model and execution stay in the native state server and Cluster runner described above. The request carries user text and explicit run limits, with native context compaction enabled by the exported default. The runner adapter owns system instructions and applies them once per inference; this client never inserts them into conversation history. Fetch and durable text workspace tools are provided by the configured runner. The example creates no local journal, scheduler or model-service catalog.
+
+Set `TARDIGRADE_URL`, `TARDIGRADE_TOKEN`, `TARDIGRADE_THREAD_ID`, `TARDIGRADE_RUN_ID`, `TARDIGRADE_ACTOR`, `TARDIGRADE_INSTANCE`, `TARDIGRADE_THREAD_NAME` and `TARDIGRADE_MESSAGE`, then run `bun run bun` from `packages/examples`. Retry with the same thread ID, run ID and request to reuse the durable receipt. `TARDIGRADE_RUN_LIMITS` overrides the complete limit defaults. Configure `TARDIGRADE_INSTRUCTIONS` in the runner process, using the exported `DEFAULT_MEESEEKS_INSTRUCTIONS` for the concise assistant preset; restart the runner to change its instructions. The native owner commands in the generated CLI handle approval and cancellation while this client waits for a terminal receipt.
+
+
+## Counter quickstart
+
+`tdg init counter --template quickstart` creates an authenticated native Domain Counter. Increment and Decrement reply with the resulting count. A committed-event policy starts a native Effect notification workflow for positive even counts. The Cloudflare platform owns durable state and workflow checkpoints; `dev:memory` is explicitly ephemeral. The generated CLI comes directly from CounterApi. See the [introduction](/docs/welcome) for commands and execution boundaries.
+
+
+## Child output contracts
+
+Set `TARDIGRADE_CHILD_OUTPUTS` in the runner to a JSON object mapping names to native supported output schemas. Each schema must have a closed object root, list every property in `required`, and use supported keywords and formats. The runner validates this catalog before serving inference. For example:
+
+```dotenv
+TARDIGRADE_CHILD_OUTPUTS={"finding":{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false}}
+```
+
+`delegate({task, output: "finding"})` and `agents.run({text, output: "finding"})` select the named contract. The adapter advertises configured names, and the accepted capability and delegation reservation freeze the selected declaration. The child's native run persists that declaration and its decoded result; cancellation, retry identity and uncertainty retain their existing native owners. The child's schema is independent of the parent's output declaration.
+
+A completed Code child returns `text` and `result`; `result` contains decoded JSON when output was requested and is null for plain text. Direct delegation exposes that value in its native result receipt. Invalid child JSON fails the child once with its model usage retained; it causes no correction call and does not become a successful child result. An unknown name creates no child and returns a known tool refusal while retaining the parent's paid model usage. Changing the output on an admitted reservation or run ID is rejected.
+
+
+## Model selection
+
+A native run accepts an optional `model: {provider, model}` choice. The workflow resolves the configured policy and persists its grant before inference. A repeated run ID must retain its original request, and an accepted grant cannot be replaced. The native chat CLI accepts the same choice as JSON through `--model`. `list_models({})` exposes the choices permitted for the authenticated owner; it lists configuration rather than live provider capabilities or pricing.
+
+The reference runner supports OpenAI through Effect's native provider. `TARDIGRADE_MODEL` sets its required default. `TARDIGRADE_MODELS` adds allowed grants, for example `[{"provider":"openai","model":"gpt-4.1-mini","maxOutputTokens":1024}]`; omit the default model from this additional list. Duplicate choices, unsupported providers and invalid caps fail startup. Optional `TARDIGRADE_MODEL_OUTPUT_TOKENS` caps the default. Each cap is an application output-token policy, independent of the provider's advertised limits, and the request budget can tighten it further.
+
+`delegate({task, model: {provider, model}})` and `agents.run({text, model: {provider, model}})` may choose an allowed child model. Otherwise they inherit the parent's grant. The trusted planner freezes the grant in the reservation and the child run; guests cannot assign identity or bypass the configured catalog. Reusing the same model preserves the tighter inherited output cap. Choosing a different allowed model uses that model's configured policy. A forbidden model requested inside Code produces a durable failed host-call result that guest JavaScript can catch; it creates no child and makes no child provider call. Every provider call rechecks current permission, so a removed model is refused before a paid request. Existing historical runs without model metadata require an explicit migration; the runner refuses to invent a provider identity after a step has started.

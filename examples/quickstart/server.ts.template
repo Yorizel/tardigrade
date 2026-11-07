@@ -1,26 +1,28 @@
-import { Context, Effect } from "effect"
-import { createBunHost, methodHttp } from "tardie/platform/bun"
-import definition, { notifyLayer } from "./actor"
+import * as Domain from "@alchemy.run/domain"
+import { BunHttpServer, BunRuntime } from "@effect/platform-bun"
+import { ReceiptOwnerGuardLive } from "tardie/domain"
+import { SessionLive } from "tardie/platform/alchemy"
+import { Config, Effect, Layer } from "effect"
+import { HttpServer, HttpServerRequest, HttpServerResponse } from "effect/http"
+import { WorkflowEngine } from "effect/workflow"
+import { CounterApi, CounterModel, CounterNotificationsLive, NotifyCountLive, notifyLayer } from "./actor"
 
-const host = await Effect.runPromise(createBunHost({
-  actor: definition,
-  actorContext: Context.pick(),
-  storage: process.env.TARDIGRADE_ACTOR_DATA ?? ".tardigrade",
-  services: () => notifyLayer,
+const platform = Layer.merge(Domain.InMemory, WorkflowEngine.layerMemory)
+const model = Layer.merge(CounterModel.layer(CounterNotificationsLive), ReceiptOwnerGuardLive).pipe(
+  Layer.provide(NotifyCountLive.pipe(Layer.provide(notifyLayer))),
+  Layer.provide(platform),
+)
+const server = Layer.unwrap(Effect.gen(function* () {
+  const api = yield* CounterApi.pipe(Effect.provide(SessionLive))
+  return HttpServer.serve(Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest
+    if (new URL(request.url, "http://localhost").pathname === "/healthz") return HttpServerResponse.text("ok")
+    return yield* api.fetch
+  }))
 }))
-
-const server = Bun.serve({
-  hostname: "127.0.0.1",
-  port: Number(process.env.PORT ?? 4242),
-  idleTimeout: 0,
-  fetch: methodHttp(host, { ...(process.env.TARDIGRADE_TOKEN ? { token: process.env.TARDIGRADE_TOKEN } : {}) }),
-})
-console.log(`Listening on ${server.url}`)
-
-await new Promise<void>(resolve => {
-  const stop = () => { process.off("SIGINT", stop); process.off("SIGTERM", stop); resolve() }
-  process.once("SIGINT", stop)
-  process.once("SIGTERM", stop)
-})
-await server.stop(true)
-await Effect.runPromise(host.close)
+server.pipe(
+  Layer.provide(model),
+  Layer.provide(BunHttpServer.layerConfig({ port: Config.Int("PORT") })),
+  Layer.launch,
+  BunRuntime.runMain,
+)
