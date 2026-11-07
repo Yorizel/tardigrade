@@ -35,7 +35,7 @@ export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
     const headers = { "x-tardigrade-owner": owner }
     const authority = yield* commands.Thread.get(threadId, { headers }).pipe(Effect.orDie)
     if (authority === null || authority._tag !== "Open" || authority.owner !== owner) return yield* Effect.die("Unauthorized workflow scope")
-    if (authority.active === null || authority.active.runId !== runId) return
+    if (authority.active === null || authority.active.runId !== runId) return undefined
     const fail = Effect.fn("ExecuteRun.fail")(function* (reason: string) {
       const current = yield* commands.Thread.get(threadId, { headers }).pipe(Effect.orDie)
       if (current === null || current._tag !== "Open" || current.owner !== owner || current.active?.runId !== runId) return
@@ -97,14 +97,14 @@ export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
               execute: Effect.gen(function* () {
                 const params = yield* Schema.decodeUnknownEffect(CodeTool.parametersSchema, { onExcessProperty: "error" })(tool.call.params).pipe(Effect.orDie)
                 const digest = yield* digester.digestHex(Digest.sha256, new TextEncoder().encode(params.code))
-                const accepted = { threadId, runId, digest, code: params.code, catalog: capability.catalog, limits: capability.limits, ambient: { at: yield* Clock.currentTimeMillis, seed: executionId }, ...Struct.pick(capability, ["model"]) }
+                const codeInput = { threadId, runId, digest, code: params.code, catalog: capability.catalog, limits: capability.limits, ambient: { at: yield* Clock.currentTimeMillis, seed: executionId }, ...Struct.pick(capability, ["model"]) }
                 if (capability.spill !== undefined) {
                   const spillTarget = yield* workspaceKey(owner, threadId)
                   const catalog = yield* commands.SpillCatalog.get(spillTarget, { headers }).pipe(Effect.orDie)
-                  if (catalog !== null && catalog._tag === "Open") return { ...accepted, spill: catalog.policy }
-                  return { ...accepted, spill: capability.spill }
+                  if (catalog !== null && catalog._tag === "Open") return { ...codeInput, spill: catalog.policy }
+                  return { ...codeInput, spill: capability.spill }
                 }
-                return accepted
+                return codeInput
               }),
             })
             const result = yield* RunCode.execute({ key: codeExecutionKey(owner, executionId), executionId, owner, request })
@@ -213,5 +213,6 @@ export const ExecuteRunLive = Layer.unwrap(Effect.gen(function* () {
       yield* Activity.make({ name: "accept-model", execute: commands.SelectRunModel(threadId, { runId, model }, { headers, commandId: runKey(threadId, `model:${runId}`) }).pipe(Effect.orDie, Effect.asVoid) })
       yield* loop(0)
     }).pipe(Effect.catchCause(cause => fail(Cause.pretty(cause))))
+    return undefined
   }))
 }))

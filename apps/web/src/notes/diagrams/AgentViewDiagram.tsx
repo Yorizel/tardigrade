@@ -1,10 +1,10 @@
 import { Bird, Cpu, Database, HardDrive, Question } from "@phosphor-icons/react"
+import { Array as Arr } from "effect"
 import { useId, type ReactElement } from "react"
 import tardie from "../../../../../assets/mascot/tardie-curious.svg"
 
 const label = "The agent writes buy milk to /notes/todo.md, later reads the same path, and gets buy milk back. It sees a tree of paths; below a dashed line, a filesystem, an in-memory store, SQLite, a carrier pigeon, or something else can hold that tree."
 
-// Workspace draws the tree the agent sees, with todo.md holding the text written to it.
 const Workspace = ({ x, y }: { readonly x: number; readonly y: number }): ReactElement => (
   <g transform={`translate(${x} ${y})`}>
     <path className="agent-view-folder" d="M0-20h5l2 2h7v10H0Z" />
@@ -31,15 +31,14 @@ const backends = [
   { name: "", Icon: Question },
 ] as const
 
-// Backends branches from the workspace to the storage options below the line; the solid branch is the one in use, and the dashed branches could hold the same tree.
 const Backends = ({ from, centers, y }: { readonly from: readonly [number, number]; readonly centers: ReadonlyArray<number>; readonly y: number }): ReactElement => {
   const rail = from[1] + 34
   return (
     <g>
-      <path className="agent-view-branch agent-view-branch-alternate" d={centers.slice(1).map(cx => `M${from[0]} ${rail}H${cx}V${y}`).join("")} />
+      <path className="agent-view-branch agent-view-branch-alternate" d={Arr.join(Arr.map(centers.slice(1), cx => `M${from[0]} ${rail}H${cx}V${y}`), "")} />
       <path className="agent-view-branch" d={`M${from[0]} ${from[1]}V${rail}H${centers[0]}V${y}`} />
       <circle className="agent-view-joint" cx={from[0]} cy={rail} r="3" />
-      {backends.map((backend, index) => <g key={backend.name} transform={`translate(${centers[index]! - 21} ${y})`}>
+      {Arr.map(backends, (backend, index) => <g key={backend.name} transform={`translate(${centers[index] - 21} ${y})`}>
         <rect className="agent-view-tile" width="42" height="42" />
         <backend.Icon className="agent-view-glyph" x="9" y="9" size={24} weight="light" />
         <text className="agent-view-backend" x="21" y="58" textAnchor="middle">{backend.name}</text>
@@ -55,6 +54,11 @@ const Arrow = ({ id }: { readonly id: string }): ReactElement => (
     </marker>
   </defs>
 )
+
+const desktopFrom: readonly [number, number] = [510, 208]
+const desktopCenters = [358, 434, 510, 586, 662]
+const mobileFrom: readonly [number, number] = [180, 450]
+const mobileCenters = [44, 112, 180, 248, 316]
 
 export const AgentViewDiagram = (): ReactElement => {
   const desktop = useId()
@@ -76,7 +80,7 @@ export const AgentViewDiagram = (): ReactElement => {
         </g>
         <Workspace x={390} y={40} />
         <path className="agent-view-horizon" d="M0 224H700" />
-        <Backends from={[510, 208]} centers={[358, 434, 510, 586, 662]} y={262} />
+        <Backends from={desktopFrom} centers={desktopCenters} y={262} />
       </svg>
       <svg className="agent-view-mobile" viewBox="0 0 360 572" role="img" aria-label={label}>
         <Arrow id={mobile} />
@@ -91,7 +95,7 @@ export const AgentViewDiagram = (): ReactElement => {
         </g>
         <Workspace x={60} y={282} />
         <path className="agent-view-horizon" d="M0 466H360" />
-        <Backends from={[180, 450]} centers={[44, 112, 180, 248, 316]} y={504} />
+        <Backends from={mobileFrom} centers={mobileCenters} y={504} />
       </svg>
     </figure>
   )

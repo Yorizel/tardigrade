@@ -71,7 +71,7 @@ export const SpillStorageLive = SpillStorage.toLayer(Effect.gen(function* () {
       yield* api.ReserveSpill(target, command, { headers, commandId }).pipe(Effect.catchTags({ Unauthorized: Effect.die, ReceiptForbidden: Effect.die, RpcClientError: Effect.die }))
       const accepted = yield* api.SpillCatalog.get(target, { headers }).pipe(Effect.catchTags({ Unauthorized: Effect.die, RpcClientError: Effect.die }))
       if (accepted === null || accepted._tag !== "Open") return yield* SpillRejected.make({ reason: "SpillCatalogNotOpen" })
-      const record = Option.getOrUndefined(Array.findFirst(accepted.values, value => value.ref === ref))
+      const record = Option.getOrUndefined(Array.findFirst(accepted.values, item => item.ref === ref))
       if (record === undefined) return yield* SpillRejected.make({ reason: "MissingReservation" })
       if (record.status === "stored") yield* load(scope, record)
       else {

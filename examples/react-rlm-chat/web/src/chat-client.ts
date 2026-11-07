@@ -1,7 +1,0 @@
-import { makeActorClient } from "@clavia/tardigrade-deprecated-client"
-import { agentMethods } from "tardie/deprecated/agent"
-
-import { actorInstance, apiUrl } from "./config"
-
-export const actor = actorInstance()
-export const client = makeActorClient({ baseUrl: apiUrl(), methods: agentMethods })

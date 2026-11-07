@@ -1,3 +1,4 @@
+import { Array as Arr } from "effect"
 import type { ReactElement } from "react"
 
 const trajectoryPoints = [
@@ -28,7 +29,7 @@ export const TrajectoryBranchesDiagram = (): ReactElement => (
       </g>
       <g className="trajectory-branches-nodes">
         <rect className="trajectory-branches-origin" x="27.5" y="107.5" width="9" height="9" />
-        {trajectoryPoints.map(([x, y], index) => (
+        {Arr.map(trajectoryPoints, ([x, y], index) => (
           <rect key={`${x}-${y}`} x={x - (index % 3 === 2 ? 3.5 : 2.5)} y={y - (index % 3 === 2 ? 3.5 : 2.5)} width={index % 3 === 2 ? 7 : 5} height={index % 3 === 2 ? 7 : 5} />
         ))}
       </g>

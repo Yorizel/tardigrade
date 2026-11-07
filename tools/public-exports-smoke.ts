@@ -1,32 +1,20 @@
 import { createRequire } from "node:module"
-import { join } from "node:path"
+import { BunRuntime, BunServices } from "@effect/platform-bun"
+import { Console, Effect, Path, Record as Rec, Schema } from "effect"
 
-const require = createRequire(join(process.cwd(), "package.json"))
-const load = (path: string): Promise<Record<string, unknown>> => import(require.resolve(path))
-const core = await load("tardie/core")
-const agent = await load("tardie/agent")
-const services = await load("tardie/agent/services")
-const libraries = await load("tardie/libraries")
-const legacy = await load("tardie/deprecated")
-const cloudflareRetry = await load("tardie/platform/cloudflare/retry")
-for (const name of ["retryCloudflareOperation", "makeRetryingRpc", "classifyDurableObjectRpcError", "DurableObjectRpcError"]) {
-  if (typeof cloudflareRetry[name] !== "function") throw new Error(`Missing public Cloudflare retry API ${name}`)
-}
-for (const [scope, name] of [[core, "defineActor"], [core, "createEventLog"], [core, "initialiseState"], [libraries, "defineLibrary"], [legacy, "actor"]] as const) {
-  if (typeof scope[name] !== "function") throw new Error(`Missing public API ${name}`)
-}
-if (!("messages" in agent) || "conversation" in agent) throw new Error("Agent message projection exports failed")
-if (typeof agent.createActor !== "object") throw new Error("Missing agent actor definition")
-if (Object.keys(services).length === 0) throw new Error("Agent services entrypoint is empty")
-await load("tardie/platform/bun")
-await load("tardie/deprecated/bun")
-await load("tardie/deprecated/client")
-await load("tardie/model")
-await load("tardie/code")
-await load("tardie/experimental")
-for (const path of ["tardie", "tardie/core/atoms/atom", "tardie/agent/atoms", "tardie/deprecated/core/component/runtime", "tardie/deprecated/core/component/composition/parent"]) {
-  let blocked = false
-  try { require.resolve(path) } catch { blocked = true }
-  if (!blocked) throw new Error(`${path} is publicly importable`)
-}
-console.log("Public package imports and private boundaries passed")
+class SmokeFailure extends Schema.TaggedError<SmokeFailure, { readonly brand: unique symbol }>()("SmokeFailure", { reason: Schema.String, cause: Schema.optionalKey(Schema.Defect()) }) {}
+
+Effect.gen(function* () {
+  const path = yield* Path.Path
+  const require = createRequire(path.join(process.cwd(), "package.json"))
+  for (const entry of ["tardie/domain", "tardie/domain/agents-result", "tardie/platform/alchemy", "tardie/platform/cluster", "tardie/platform/codemode"]) {
+    const loaded = yield* Effect.tryPromise({ try: () => import(require.resolve(entry)), catch: cause => SmokeFailure.make({ reason: `Cannot load ${entry}`, cause }) })
+    if (Rec.keys(loaded).length === 0) return yield* SmokeFailure.make({ reason: `Empty public entrypoint: ${entry}` })
+  }
+  for (const entry of ["tardie", "tardie/core", "tardie/agent", "tardie/deprecated", "tardie/platform/bun", "tardie/deprecated/cli/init"]) {
+    const result = yield* Effect.result(Effect.try({ try: () => require.resolve(entry), catch: cause => SmokeFailure.make({ reason: `Cannot resolve ${entry}`, cause }) }))
+    if (result._tag === "Success") return yield* SmokeFailure.make({ reason: `${entry} is publicly importable` })
+  }
+  yield* Console.log("Native package imports and private boundaries passed")
+  return undefined
+}).pipe(Effect.provide(BunServices.layer), BunRuntime.runMain)

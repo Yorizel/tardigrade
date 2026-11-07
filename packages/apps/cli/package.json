@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "bin": {
-    "tardie-chat": "./src/main.ts"
+    "tdg": "./src/main.ts"
   },
   "scripts": {
     "start": "bun run src/main.ts",

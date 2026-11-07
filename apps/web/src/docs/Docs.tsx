@@ -13,7 +13,7 @@ export const DocsPage = ({ pathname }: { readonly pathname: string }): ReactElem
   return <main className="guide-page">
     <div className="guide-shell">
       <Sidebar current={doc} />
-      <article className={`guide-article${introduction ? " introduction-article" : ""}${frontmatter.articleClass === undefined ? "" : ` ${frontmatter.articleClass}`}`}>
+      <article data-doc-route={frontmatter.route} className={`guide-article${introduction ? " introduction-article" : ""}${frontmatter.articleClass === undefined ? "" : ` ${frontmatter.articleClass}`}`}>
         {introduction ? null : <div className="guide-heading"><div><h1>{frontmatter.title}</h1>{frontmatter.hideDescription === true ? null : <p className="guide-intro">{frontmatter.description}</p>}</div></div>}
         <MDXProvider components={mdxComponents}><Content /></MDXProvider>
         {introduction ? <footer className="introduction-footer">

@@ -1,0 +1,20 @@
+---
+title: Architecture
+description: State, execution, and testing boundaries for the native framework.
+route: /docs/architecture
+section: Start Here
+sectionOrder: 1
+order: 2
+---
+
+Tardigrade is moving toward a headless framework inspired by Elm and [Foldkit](https://foldkit.dev/). Foldkit's [source and testing examples](https://github.com/foldkit/foldkit) inform the design; it is inspiration, not a dependency or wrapper.
+
+## State and execution
+
+A Model describes a local state transition, a Message identifies an input, and a pure update computes the next model and typed Commands. Update performs no I/O, clock reads or randomness. Command results return as Messages. Alchemy Domain owns business decisions, events and durable state. Native Effect Workflows, Activities and Cluster own execution and recovery. No separate Elm runtime holds a second copy of domain state.
+
+Code Mode uses a project-owned interpreter inspired by OpenCode, with explicit tool grants, isolation and budgets. Its execution adapter drives pure Model/Message/update transitions from the accepted source and recorded host-call settlements. Domain owns the journal and dispatch decisions; the interpreter requests capabilities without invoking host tools directly. Authentication, authorization, tenant isolation, durable receipts and recovery remain enforced at their native boundaries. The interpreter and its production integration remain experimental. Each attempt runs in a scoped native worker on the Bun platform. The worker owns pure interpretation and journal replay; Domain owns capability dispatch, while the parent owns the segment timer and awaited worker termination. The worker entry is part of the published source closure and must resolve from the installed package.
+
+## Testing direction
+
+A Story starts the interpreter model, inspects pending requests, and explicitly settles or fails them through Messages. It rejects unhandled requests and requires synchronous assertions. A Scene exercises the interpreter's real Effect execution with controlled tools and observes requests, responses and failures. Its scoped cancellation tests check resource finalization. Use `tardie/platform/testing/story` and `tardie/platform/testing/scene` for the native testing entrypoints. Their tests live in `packages/platform/__tests__/testing`. Agent protocol scenes and durable recovery scenarios remain to be integrated; the current harness does not establish browser behavior or durable replay.

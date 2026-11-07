@@ -1,5 +1,5 @@
 import * as Domain from "@alchemy.run/domain"
-import { Effect, Schema } from "effect"
+import { Array as Arr, Effect, Option, Schema } from "effect"
 import { CurrentCaller, ReceiptOwnerGuard, Session } from "@clavia/tardigrade-domain"
 
 const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0))
@@ -19,9 +19,8 @@ export const DEFAULT_INBOX_POLICY: typeof InboxPolicy.Type = {
 const InboxId = Schema.NonEmptyString
 const Message = Schema.Struct({ id: Schema.NonEmptyString, text: Schema.String })
 const InboxState = Schema.Union([
-  Schema.Struct({ _tag: Schema.Literal("Unopened") }),
-  Schema.Struct({
-    _tag: Schema.Literal("Open"),
+  Schema.TaggedStruct("Unopened", {}),
+  Schema.TaggedStruct("Open", {
     owner: Schema.NonEmptyString,
     policy: InboxPolicy,
     messages: Schema.Array(Message),
@@ -75,10 +74,10 @@ export class Inbox extends Domain.Aggregate("ExampleInbox", {
     PostInboxMessage: Effect.fn("ExampleInbox.PostInboxMessage")(function* (state, command) {
       const current = yield* owned(state)
       if (command.id.length > current.policy.maxMessageIdChars) return yield* InboxRejected.make({ reason: "MessageIdTooLong" })
-      const previous = current.messages.find(message => message.id === command.id)
-      if (previous !== undefined) {
-        if (!Schema.toEquivalence(Message)(previous, command)) return yield* InboxRejected.make({ reason: "MessageIdConflict" })
-        return [InboxMessageAcknowledged.make({ message: previous })]
+      const previous = Arr.findFirst(current.messages, message => message.id === command.id)
+      if (Option.isSome(previous)) {
+        if (!Schema.toEquivalence(Message)(previous.value, command)) return yield* InboxRejected.make({ reason: "MessageIdConflict" })
+        return [InboxMessageAcknowledged.make({ message: previous.value })]
       }
       if (command.text.length > current.policy.maxTextChars) return yield* InboxRejected.make({ reason: "MessageTooLong" })
       if (current.messages.length >= current.policy.maxMessages) return yield* InboxRejected.make({ reason: "MessageLimitExceeded" })
@@ -95,9 +94,9 @@ export class Inbox extends Domain.Aggregate("ExampleInbox", {
   },
   reply: {
     PostInboxMessage: (_state, events) => {
-      const settled = events.find(event => event._tag === "InboxMessageReceived" || event._tag === "InboxMessageAcknowledged")
-      if (settled === undefined) return { text: null }
-      return { text: settled.message.text }
+      const settled = Arr.findFirst(events, event => event._tag === "InboxMessageReceived" || event._tag === "InboxMessageAcknowledged")
+      if (Option.isNone(settled)) return { text: null }
+      return { text: settled.value.message.text }
     },
   },
   read: {
@@ -106,6 +105,7 @@ export class Inbox extends Domain.Aggregate("ExampleInbox", {
     validate: Effect.fn("ExampleInbox.read")(function* (_request, state) {
       if (state === null) return yield* InboxNotOwner.make()
       yield* owned(state)
+      return undefined
     }),
   },
 }) {}

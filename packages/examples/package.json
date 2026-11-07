@@ -10,7 +10,8 @@
   "scripts": {
     "cloudflare": "alchemy dev",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.cloudflare.json",
-    "bun": "bun bun.ts"
+    "bun": "bun bun.ts",
+    "test": "bun test"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260804.1",

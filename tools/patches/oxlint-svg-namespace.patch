@@ -1,0 +1,137 @@
+--- a/crates/oxc_linter/src/rules/jsx_a11y/prefer_tag_over_role.rs
++++ b/crates/oxc_linter/src/rules/jsx_a11y/prefer_tag_over_role.rs
+@@ -1,6 +1,6 @@
+ use oxc_ast::{
+     AstKind,
+-    ast::{JSXAttributeItem, JSXAttributeValue},
++    ast::{JSXAttributeItem, JSXAttributeValue, JSXOpeningElement},
+ };
+ use oxc_diagnostics::OxcDiagnostic;
+ use oxc_macros::declare_oxc_lint;
+@@ -9,8 +9,9 @@
+ use crate::{
+     AstNode,
+     context::LintContext,
++    globals::HTML_TAG,
+     rule::Rule,
+-    utils::{get_element_type, get_tags_for_role, has_jsx_prop_ignore_case},
++    utils::{VUE_RESERVED_SVG_ELEMENTS, get_element_type, get_jsx_element_name, get_tags_for_role, has_jsx_prop_ignore_case},
+ };
+ 
+ fn prefer_tag_over_role_diagnostic(span: Span, tag: &str, role: &str) -> OxcDiagnostic {
+@@ -70,12 +71,53 @@
+     }
+ }
+ 
++fn is_intrinsic_name(name: &str) -> bool {
++    HTML_TAG.contains(name)
++        || VUE_RESERVED_SVG_ELEMENTS.contains(name)
++        || name.starts_with("svg:")
++        || name.starts_with("html:")
++}
++
++fn is_svg_element<'a>(node: &AstNode<'a>, element: &JSXOpeningElement<'a>, name: &str, ctx: &LintContext<'a>) -> bool {
++    let raw_name = get_jsx_element_name(&element.name);
++    let intrinsic = is_intrinsic_name(&raw_name);
++    let tag = if intrinsic { raw_name.as_ref() } else { name };
++    if tag == "svg" || tag.starts_with("svg:") {
++        return true;
++    }
++    if (!intrinsic && HTML_TAG.contains(tag)) || tag.starts_with("html:") || !is_intrinsic_name(tag) {
++        return false;
++    }
++    let ancestors: Vec<_> = ctx.nodes().ancestors(node.id()).filter_map(|ancestor| {
++        if let AstKind::JSXElement(element) = ancestor.kind() { Some(element) } else { None }
++    }).skip(1).collect();
++    let mut svg = None;
++    for ancestor in ancestors.into_iter().rev() {
++        let raw_ancestor = get_jsx_element_name(&ancestor.opening_element.name);
++        let resolved_ancestor = get_element_type(ctx, &ancestor.opening_element);
++        let ancestor_intrinsic = is_intrinsic_name(&raw_ancestor);
++        let ancestor_name = if ancestor_intrinsic { raw_ancestor.as_ref() } else { resolved_ancestor.as_ref() };
++        if ancestor_name == "foreignObject" || ancestor_name == "svg:foreignObject" || ancestor_name.starts_with("html:") {
++            svg = Some(false);
++        } else if ancestor_name == "svg" || ancestor_name.starts_with("svg:") {
++            svg = Some(true);
++        } else if (!ancestor_intrinsic && HTML_TAG.contains(ancestor_name)) || !is_intrinsic_name(ancestor_name) {
++            svg = Some(false);
++        } else if svg.is_none() {
++            svg = Some(VUE_RESERVED_SVG_ELEMENTS.contains(ancestor_name) && !HTML_TAG.contains(ancestor_name));
++        }
++    }
++    svg.unwrap_or_else(|| VUE_RESERVED_SVG_ELEMENTS.contains(tag) && !HTML_TAG.contains(tag))
++}
++
+ impl Rule for PreferTagOverRole {
+     fn run<'a>(&self, node: &AstNode<'a>, ctx: &LintContext<'a>) {
+         if let AstKind::JSXOpeningElement(jsx_el) = node.kind() {
+-            let name = get_element_type(ctx, jsx_el);
+             if let Some(role_prop) = has_jsx_prop_ignore_case(jsx_el, "role") {
+-                Self::check_roles(role_prop, &name, ctx);
++                let name = get_element_type(ctx, jsx_el);
++                if !is_svg_element(node, jsx_el, &name, ctx) {
++                    Self::check_roles(role_prop, &name, ctx);
++                }
+             }
+         }
+     }
+@@ -186,3 +228,59 @@
+     ];
+     Tester::new(PreferTagOverRole::NAME, PreferTagOverRole::PLUGIN, pass, fail).test_and_snapshot();
+ }
++
++#[test]
++fn svg_namespace() {
++    use crate::tester::Tester;
++    let pass = vec![
++        r#"<svg role="img" />"#,
++        r#"<svg><g role="img" /></svg>"#,
++        r#"<g role="img" />"#,
++        r#"<svg><foreignObject><svg><g role="img" /></svg></foreignObject></svg>"#,
++        r#"<svg:g role="img" />"#,
++        r#"<div role={1} />"#,
++        r#"<div role={true} />"#,
++        r#"<div role={"button"} />"#,
++    ];
++    let fail = vec![
++        r#"<div role="img" />"#,
++        r#"<input role="button" />"#,
++        r#"<div role="search" />"#,
++        r#"<svg><foreignObject><div role="img" /></foreignObject></svg>"#,
++        r#"<svg><foreignObject><g role="img" /></foreignObject></svg>"#,
++        r#"<svg><Unknown role="img" /></svg>"#,
++        r#"<div role="img checkbox" />"#,
++    ];
++    Tester::new(PreferTagOverRole::NAME, PreferTagOverRole::PLUGIN, pass, fail).test();
++}
++
++#[test]
++fn svg_namespace_settings() {
++    use crate::tester::Tester;
++    let settings = serde_json::json!({"settings": {"jsx-a11y": {
++        "components": {"Vector": "svg", "Group": "g", "Box": "div"},
++        "polymorphicPropName": "as"
++    }}});
++    let pass = vec![
++        (r#"<Vector role="img" />"#, None, Some(settings.clone())),
++        (r#"<Group role="img" />"#, None, Some(settings.clone())),
++        (r#"<Shape as="svg" role="img" />"#, None, Some(settings.clone())),
++    ];
++    let fail = vec![
++        (r#"<Box role="img" />"#, None, Some(settings.clone())),
++        (r#"<Vector><Box role="img" /></Vector>"#, None, Some(settings.clone())),
++        (r#"<Vector><foreignObject><Box role="img" /></foreignObject></Vector>"#, None, Some(settings)),
++    ];
++    Tester::new(PreferTagOverRole::NAME, PreferTagOverRole::PLUGIN, pass, fail).test();
++}
++
++#[test]
++fn svg_namespace_intrinsic_mapping() {
++    use crate::tester::Tester;
++    let settings = serde_json::json!({"settings": {"jsx-a11y": {
++        "components": {"div": "svg", "svg": "div"}
++    }}});
++    let pass = vec![(r#"<svg role="img" />"#, None, Some(settings.clone()))];
++    let fail = vec![(r#"<div role="img" />"#, None, Some(settings))];
++    Tester::new(PreferTagOverRole::NAME, PreferTagOverRole::PLUGIN, pass, fail).test();
++}

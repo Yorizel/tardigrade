@@ -14,11 +14,10 @@ const comparison = `USER INTERFACE                         AGENT HARNESS
   UI + effects                       view + transitions`
 
 export const InterfaceComparisonDiagram = (): ReactElement => (
-  <div
+  <figure
     className="interface-comparison"
-    role="img"
     aria-label="A user interface maps state through a component tree to UI and effects. An agent harness maps an event log through a component tree to a view and transitions."
   >
     <pre aria-hidden="true">{comparison}</pre>
-  </div>
+  </figure>
 )

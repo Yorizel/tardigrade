@@ -2,7 +2,7 @@ import * as Domain from "@alchemy.run/domain"
 import { BunHttpServer, BunRuntime } from "@effect/platform-bun"
 import { ActorApi, ActorModel } from "tardie/domain"
 import { SessionLive, ActorPoliciesLive, internalApi, forkApi } from "tardie/platform/alchemy"
-import { Config, Effect, Layer } from "effect"
+import { Config, Effect, Layer, String as Str } from "effect"
 import { Digest } from "effect/crypto"
 import { HttpServer, HttpServerRequest } from "effect/http"
 
@@ -17,7 +17,7 @@ const server = Layer.unwrap(Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest
     const path = new URL(request.url, "http://localhost").pathname
     if (path === "/fork") return yield* fork
-    if (path === "/internal" || path.startsWith("/internal/")) return yield* runtime
+    if (path === "/internal" || Str.startsWith("/internal/")(path)) return yield* runtime
     return yield* api.fetch
   }))
 }))

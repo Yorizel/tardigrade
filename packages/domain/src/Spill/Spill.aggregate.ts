@@ -96,6 +96,7 @@ export class SpillCatalog extends Domain.Aggregate("SpillCatalog", {
     validate: Effect.fn("Spill.read")(function* ({ key }, state) {
       const scope = yield* authorize(key.id)
       if (state !== null && state._tag === "Open" && state.owner !== scope.owner) return yield* SpillNotOwner.make()
+      return undefined
     }),
   },
 }) {}

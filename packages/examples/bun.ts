@@ -18,6 +18,6 @@ export const runMeeseeks = Effect.gen(function* () {
   yield* Console.log(receipt)
   if (receipt.status !== "completed") return yield* MeeseeksInterrupted.make({ reason: `${receipt.status}: ${receipt.reason}` })
   return receipt
-}).pipe(Effect.provide(services))
+})
 
-if (import.meta.main) BunRuntime.runMain(runMeeseeks)
+if (import.meta.main) runMeeseeks.pipe(Effect.provide(services), BunRuntime.runMain)

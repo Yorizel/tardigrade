@@ -2,6 +2,7 @@ import { Effect, Schema } from "effect"
 import { Tool } from "effect/ai"
 import { ModelChoice } from "../Execution/Model.schemas"
 import { OutputDeclaration, OutputName } from "../Output/Output.schemas"
+import { BackgroundReservation } from "../Thread/Thread.schemas"
 import { Handle, Reservation } from "./Delegation.schemas"
 
 export const AgentRunCapability = Schema.TaggedStruct("Delegate", {
@@ -10,6 +11,7 @@ export const AgentRunCapability = Schema.TaggedStruct("Delegate", {
   toolCalls: Reservation.fields.toolCalls,
   output: Schema.optionalKey(OutputDeclaration),
   model: Reservation.fields.model,
+  background: Schema.optionalKey(Schema.Struct({ tokens: BackgroundReservation.fields.tokens, maxChildren: BackgroundReservation.fields.maxChildren, mutation: BackgroundReservation.fields.mutation })),
 })
 export const AgentRunResult = Schema.Struct({
   ...Handle.fields,
@@ -17,10 +19,11 @@ export const AgentRunResult = Schema.Struct({
   text: Schema.String,
   result: Schema.NullOr(Schema.Json),
 })
+export const AgentRunBackgroundHandle = Schema.Struct({ ...Handle.fields, status: Schema.Literal("reserved") })
 export const AgentsRun = Tool.make("run_agent", {
-  description: "Run a child of the configured actor with a text task and wait for its durable completed result. An optional nonnegative tool-call budget may reduce the configured allowance. The result identifies the actual child and contains its completed text. An optional output names a configured child output contract; result contains its decoded JSON. A model choice must be permitted by the configured policy. Background execution is not part of this operation.",
-  parameters: Schema.Struct({ text: Schema.NonEmptyString, budget: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))), output: Schema.optionalKey(OutputName), model: Schema.optionalKey(ModelChoice) }),
-  success: AgentRunResult,
+  description: "Run a child of the configured actor with a text task and wait for its durable completed result. An optional nonnegative tool-call budget may reduce the configured allowance. The result identifies the actual child and contains its completed text. An optional output names a configured child output contract; result contains its decoded JSON. A model choice must be permitted by the configured policy. Set background to admit a detached child and receive its handle immediately.",
+  parameters: Schema.Struct({ text: Schema.NonEmptyString, budget: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))), output: Schema.optionalKey(OutputName), model: Schema.optionalKey(ModelChoice), background: Schema.optionalKey(Schema.Boolean) }),
+  success: Schema.Union([AgentRunResult, AgentRunBackgroundHandle]),
   failure: Schema.String,
   failureMode: "return",
 }).annotate(Tool.Readonly, false)

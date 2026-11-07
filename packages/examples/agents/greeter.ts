@@ -31,14 +31,14 @@ export class GreetingNotOwner extends Schema.TaggedError<GreetingNotOwner, { rea
   { httpApiStatus: 403 },
 ) {}
 
-export class GreetingRequested extends Domain.Event("GreetingRequested", {
+class GreetingRequested extends Domain.Event("GreetingRequested", {
   owner: Schema.NonEmptyString,
   name: Schema.String,
 }) {}
 
-export class GreetingFulfilled extends Domain.Event("GreetingFulfilled", { value: Schema.String }) {}
-export class GreetingFailed extends Domain.Event("GreetingFailed", { reason: Schema.NonEmptyString }) {}
-export class GreetingCancelled extends Domain.Event("GreetingCancelled", {
+class GreetingFulfilled extends Domain.Event("GreetingFulfilled", { value: Schema.String }) {}
+class GreetingFailed extends Domain.Event("GreetingFailed", { reason: Schema.NonEmptyString }) {}
+class GreetingCancelled extends Domain.Event("GreetingCancelled", {
   owner: Schema.NonEmptyString,
   name: Schema.String,
 }) {}
@@ -51,7 +51,7 @@ export class Greet extends Domain.Command("Greet", {
   rejects: [GreetingRejected, GreetingNotOwner],
 }) {}
 
-export class CompleteGreeting extends Domain.Command("CompleteGreeting", {
+class CompleteGreeting extends Domain.Command("CompleteGreeting", {
   target: Schema.NonEmptyString,
   middleware: [Session],
   input: { value: Schema.String },
@@ -59,7 +59,7 @@ export class CompleteGreeting extends Domain.Command("CompleteGreeting", {
   rejects: [GreetingRejected, GreetingNotOwner],
 }) {}
 
-export class FailGreeting extends Domain.Command("FailGreeting", {
+class FailGreeting extends Domain.Command("FailGreeting", {
   target: Schema.NonEmptyString,
   middleware: [Session],
   input: { reason: Schema.NonEmptyString },
@@ -139,6 +139,7 @@ export class Greeting extends Domain.Aggregate("Greeting", {
     validate: Effect.fn("ExampleGreeter.read")(function* (_request, state) {
       if (state === null) return yield* GreetingNotOwner.make()
       yield* owns(state)
+      return undefined
     }),
   },
 }) {}

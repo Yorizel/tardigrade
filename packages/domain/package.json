@@ -14,5 +14,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "bun test"
+  },
+  "devDependencies": {
+    "@cfworker/json-schema": "4.1.1"
   }
 }

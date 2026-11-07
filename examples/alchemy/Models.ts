@@ -22,6 +22,7 @@ export const ModelAccessLive = ModelAccess.toLayer(Effect.gen(function* () {
   const authorize = Effect.fn("ModelAccess.authorize")(function* (requestedActor: string, owner: string) {
     if (requestedActor !== actor) return yield* ModelUnavailable.make({ reason: "UnknownActor" })
     if (owner !== subject) return yield* ModelUnavailable.make({ reason: "NotOwner" })
+    return undefined
   })
   return {
     list: Effect.fn("ModelAccess.list")(function* (input) {

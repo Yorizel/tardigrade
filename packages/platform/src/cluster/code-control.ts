@@ -4,7 +4,7 @@ import { Rpc, RpcGroup, RpcMiddleware } from "effect/rpc"
 import { DurableDeferred, Workflow, WorkflowProxy, WorkflowProxyServer } from "effect/workflow"
 import { ExecuteCode, codeApproval, codeExecutionKey } from "@clavia/tardigrade-domain/Code/ExecuteCode.saga"
 
-export class CodeControlUnauthorized extends Schema.TaggedError<CodeControlUnauthorized, { readonly brand: unique symbol }>()(
+class CodeControlUnauthorized extends Schema.TaggedError<CodeControlUnauthorized, { readonly brand: unique symbol }>()(
   "CodeControlUnauthorized", {}, { httpApiStatus: 401 },
 ) {}
 
@@ -12,7 +12,7 @@ export class CodeControlSession extends RpcMiddleware.Service<CodeControlSession
   "Tardigrade/CodeControlSession", { error: CodeControlUnauthorized },
 ) {}
 
-export const CodeControlSessionLive = Layer.effect(CodeControlSession, Effect.gen(function* () {
+const CodeControlSessionLive = Layer.effect(CodeControlSession, Effect.gen(function* () {
   const credential = yield* Config.schema(Schema.Redacted(Schema.NonEmptyString), "WORKER_TO_RUNNER_TOKEN")
   return (effect, { headers, payload }) => {
     const authorization = Headers.get(headers, "authorization")
@@ -29,7 +29,7 @@ export const CodeControlSessionLive = Layer.effect(CodeControlSession, Effect.ge
   }
 }))
 
-export const CodeControl = RpcGroup.make(
+const CodeControl = RpcGroup.make(
   Rpc.make("SignalCodeApproval", {
     payload: Schema.Struct({ ...ExecuteCode.payloadSchema.fields, ordinal: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)) }),
   }),
@@ -46,7 +46,7 @@ export const CodeControl = RpcGroup.make(
 
 export const CodeRpcs = WorkflowProxy.toRpcGroup([ExecuteCode]).omit("Tardigrade/ExecuteCodeResume").merge(CodeControl).middleware(CodeControlSession)
 
-export const CodeControlLive = CodeControl.toLayer({
+const CodeControlLive = CodeControl.toLayer({
   SignalCodeApproval: payload => Effect.gen(function* () {
     const executionId = yield* ExecuteCode.executionId(payload)
     const deferred = codeApproval(payload.ordinal)

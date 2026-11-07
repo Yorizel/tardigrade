@@ -8,7 +8,7 @@ sectionOrder: 1
 order: 1
 ---
 
-The native fork uses Alchemy Domain for business state and Effect Workflows for durable execution. Aggregates decide commands and record facts; policies react to committed events. Domain APIs enforce caller ownership and expose native receipts and reads. The AI runtime uses a separate Effect Cluster runner for provider calls, tools and the OpenCode CodeMode interpreter. Code executions use the granted tool catalog and replay recorded host outcomes in settlement order. See the [native runtime guide](/docs/platforms/alchemy) for the migration boundaries.
+Tardigrade is a TypeScript framework for durable agents built on Alchemy Domain and Effect. Domain aggregates own business decisions, events and state; native Effect Workflows, Activities and Cluster run durable work. The current native implementation includes Domain APIs, a Cluster agent runner and an interpreter adapter. The target architecture applies Elm ideas to explicit messages and commands without introducing a second owner for domain state. See [Architecture](/docs/architecture) for the boundary and testing direction.
 
 ## Run Tardigrade
 
@@ -46,8 +46,8 @@ bun run plan:cloudflare --stage prod
 bun run deploy:cloudflare --stage prod
 ```
 
-Keep the stack's `.alchemy` state between deployments. Generating a native Counter does not import data from an existing atom journal; that journal needs an explicit data cutover before its old writer is removed. Local HTTP fixtures and typechecks do not prove a deployment or cloud recovery.
+Keep the stack's `.alchemy` state between deployments. Local HTTP fixtures and typechecks do not prove a deployment or cloud recovery.
 
 ## AI agents
 
-`tdg init assistant` generates the native Domain and Cluster agent stack. Configure its native provider Layer and required settings, then run the state server and runner as described in the [Alchemy guide](/docs/platforms/alchemy). The explicit `agent` template and the older actor graph remain legacy consumers while their migration is in progress. They retain their own state owners until their cutover.
+`tdg init assistant` generates the native Domain and Cluster agent stack. Configure its native provider Layer and required settings, then run the state server and runner as described in the [Alchemy guide](/docs/platforms/alchemy).

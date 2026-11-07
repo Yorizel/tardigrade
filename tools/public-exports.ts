@@ -1,81 +1,74 @@
-import { dirname, join, relative } from "node:path"
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises"
-import { fileURLToPath } from "node:url"
+import { BunRuntime, BunServices } from "@effect/platform-bun"
+import { Array as Arr, Effect, FileSystem, Option, Path, Record as Rec, Schema, String as Str } from "effect"
 import publicExports from "./public-exports.json"
 import { publishSources } from "./publish-manifest"
 
-const root = fileURLToPath(new URL("../", import.meta.url))
+class PublicExportsRejected extends Schema.TaggedError<PublicExportsRejected, { readonly brand: unique symbol }>()("PublicExportsRejected", { reason: Schema.String }) {}
 
-// workspaceExports maps the public entrypoints to facade modules generated from public-exports.json.
-export const workspaceExports = Object.fromEntries(Object.entries(publicExports).map(([key, target]) => [key,
-  target === null || key === "./package.json" ? target : target.startsWith("./src/tardie/") ? target.replace("./src/tardie/", "./src/") : `./src/generated/${key.slice(2)}.ts`
-]))
+export const workspaceExports = Rec.fromEntries(Arr.map(Rec.toEntries(publicExports), ([key, target]) => [key,
+  key === "./package.json" ? target : `./src/generated/${Str.slice(2)(key)}.ts`,
+] as const))
 
-const facadeEntries = () => {
-  const entries = new Map<string, string | null>()
-  for (const [key, target] of Object.entries(publicExports)) {
-    if (target === null || !key.includes("*")) continue
-    const source = publishSources.filter(source => target.startsWith(`./src/${source.namespace}/`)).sort((a, b) => b.namespace.length - a.namespace.length)[0]
-    if (source === undefined) throw new Error(`No publication source for ${target}`)
-    const [prefix, suffix] = target.split("*")
-    for (const file of new Bun.Glob("**/*.ts").scanSync({ cwd: join(root, source.dir, "src"), onlyFiles: true })) {
-      if (file.endsWith(".test.ts") || file.startsWith("testing/") && source.namespace === "model") continue
-      const resolved = `./src/${source.namespace}/${file}`
-      if (!resolved.startsWith(prefix!) || !resolved.endsWith(suffix!)) continue
-      const tail = resolved.slice(prefix!.length, suffix!.length === 0 ? undefined : -suffix!.length)
-      entries.set(key.replace("*", tail), resolved)
-    }
-  }
-  for (const [key, target] of Object.entries(publicExports)) if (!key.includes("*")) entries.set(key, target)
-  return entries
-}
-
-// syncPublicExports generates workspace facades or checks them against the publication contract.
-export async function syncPublicExports(check = false) {
-  const manifestPath = join(root, "packages/tardie/package.json")
-  const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { exports: typeof workspaceExports; dependencies: Record<string, string> }
+export const syncPublicExports = Effect.fn("publication.syncPublicExports")(function* (check: boolean = false) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const root = yield* path.fromFileUrl(new URL("../", import.meta.url))
+  const manifestPath = path.join(root, "packages/tardie/package.json")
+  const manifestText = yield* fs.readFileString(manifestPath)
+  const manifest = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json)))(manifestText)
+  const current = yield* Schema.decodeUnknownEffect(Schema.Struct({ exports: Schema.Record(Schema.String, Schema.String), dependencies: Schema.Record(Schema.String, Schema.String) }))(manifest)
   const dependencies = new Set<string>()
-  if (!check) await rm(join(root, "packages/tardie/src/generated"), { recursive: true, force: true })
-  for (const [key, target] of facadeEntries()) {
-    if (target === null || key === "./package.json") continue
-    if (target.startsWith("./src/tardie/")) continue
-    const source = publishSources.filter(source => target.startsWith(`./src/${source.namespace}/`)).sort((a, b) => b.namespace.length - a.namespace.length)[0]
-    if (source === undefined) throw new Error(`No publication source for ${target}`)
-    const file = join(root, "packages/tardie", workspaceExports[key] ?? `./src/generated/${key.slice(2)}.ts`)
-    const module = target.slice(`./src/${source.namespace}/`.length)
-    if (!("exports" in source.pkg)) throw new Error(`Publication source ${source.pkg.name} has no exports for ${target}`)
+  if (!check) yield* fs.remove(path.join(root, "packages/tardie/src/generated"), { recursive: true, force: true })
+  for (const [key, target] of Rec.toEntries(publicExports)) {
+    if (key === "./package.json") continue
+    const found = Arr.findFirst(publishSources, source => Str.startsWith(`./src/${source.namespace}/`)(target))
+    if (Option.isNone(found)) return yield* PublicExportsRejected.make({ reason: `No publication source for ${target}` })
+    const source = found.value
+    const facade = workspaceExports[key]
+    if (facade === undefined) return yield* PublicExportsRejected.make({ reason: `Missing facade path for ${key}` })
+    const file = path.join(root, "packages/tardie", facade)
+    const module = Str.slice(`./src/${source.namespace}/`.length)(target)
+    if (!("exports" in source.pkg)) return yield* PublicExportsRejected.make({ reason: `Publication source ${source.pkg.name} has no exports for ${target}` })
     const exports: Readonly<Record<string, string | null>> = source.pkg.exports
     const sourceTarget = `./src/${module}`
-    let subpath = Object.keys(exports).find(key => exports[key] === sourceTarget)
-    if (subpath === undefined) {
-      for (const [pattern, target] of Object.entries(exports)) {
-        if (target === null || !pattern.includes("*") || !target.includes("*")) continue
-        const [prefix, suffix] = target.split("*")
-        if (sourceTarget.startsWith(prefix!) && sourceTarget.endsWith(suffix!)) {
-          subpath = pattern.replace("*", sourceTarget.slice(prefix!.length, suffix!.length === 0 ? undefined : -suffix!.length))
-          break
-        }
-      }
-    }
-    const destination = relative(dirname(file), join(root, source.dir, "src", module)).replace(/\.ts$/, "")
-    const specifier = subpath === undefined ? destination.startsWith(".") ? destination : `./${destination}` : `${source.pkg.name}${subpath === "." ? "" : subpath.slice(1)}`
+    const direct = Arr.findFirst(Rec.toEntries(exports), ([, value]) => value === sourceTarget)
+    const pattern = Arr.findFirst(Rec.toEntries(exports), ([patternKey, value]) => {
+      if (value === null || !Str.includes("*")(patternKey) || !Str.includes("*")(value)) return false
+      const [prefix, suffix] = Str.split("*")(value)
+      if (prefix === undefined || suffix === undefined) return false
+      return Str.startsWith(prefix)(sourceTarget) && Str.endsWith(suffix)(sourceTarget)
+    })
+    const destination = Str.replace(/\.ts$/, "")(path.relative(path.dirname(file), path.join(root, source.dir, "src", module)))
+    const relativeSpecifier = Str.startsWith(".")(destination) ? destination : `./${destination}`
+    const subpath = Option.match(direct, {
+      onSome: ([entry]) => Option.some(entry),
+      onNone: () => Option.map(pattern, ([entry, value]) => {
+        if (value === null) return entry
+        const [prefix, suffix] = Str.split("*")(value)
+        return Str.replace("*", Str.slice(prefix?.length ?? 0, suffix === "" ? undefined : -(suffix?.length ?? 0))(sourceTarget))(entry)
+      }),
+    })
+    const specifier = Option.match(subpath, { onNone: () => relativeSpecifier, onSome: value => `${source.pkg.name}${value === "." ? "" : Str.slice(1)(value)}` })
     const content = `export * from "${specifier}"\n`
-    if (source.namespace !== "tardie") dependencies.add(source.pkg.name)
+    dependencies.add(source.pkg.name)
     if (check) {
-      if (await readFile(file, "utf8") !== content) throw new Error(`Run bun run exports to update ${relative(root, file)}`)
+      if ((yield* fs.readFileString(file)) !== content) return yield* PublicExportsRejected.make({ reason: `Run bun run exports to update ${path.relative(root, file)}` })
     } else {
-      await mkdir(dirname(file), { recursive: true })
-      await writeFile(file, content)
+      yield* fs.makeDirectory(path.dirname(file), { recursive: true })
+      yield* fs.writeFileString(file, content)
     }
   }
   if (check) {
-    if (JSON.stringify(manifest.exports) !== JSON.stringify(workspaceExports)) throw new Error("Run bun run exports to update the workspace export map")
-    for (const name of dependencies) if (manifest.dependencies[name] !== "workspace:*") throw new Error(`Missing facade dependency ${name}`)
+    const expected = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Record(Schema.String, Schema.String)))(workspaceExports)
+    const actual = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Record(Schema.String, Schema.String)))(current.exports)
+    if (expected !== actual) return yield* PublicExportsRejected.make({ reason: "Run bun run exports to update the workspace export map" })
+    for (const name of dependencies) if (current.dependencies[name] !== "workspace:*") return yield* PublicExportsRejected.make({ reason: `Missing facade dependency ${name}` })
   } else {
-    manifest.exports = workspaceExports
-    for (const name of dependencies) manifest.dependencies[name] = "workspace:*"
-    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+    const updated = { ...manifest, exports: workspaceExports, dependencies: Rec.fromEntries(Arr.map([...dependencies], name => [name, "workspace:*"] as const)) }
+    const json = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json, { space: 2 }))(updated)
+    yield* fs.writeFileString(manifestPath, `${json}\n`)
   }
-}
+  return undefined
+})
 
-if (import.meta.main) await syncPublicExports(process.argv.includes("--check"))
+if (import.meta.main) syncPublicExports(Arr.contains(process.argv, "--check")).pipe(Effect.provide(BunServices.layer), BunRuntime.runMain)

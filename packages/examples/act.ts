@@ -1,7 +1,8 @@
 import * as Domain from "@alchemy.run/domain"
-import { Config, Effect, Layer, Option, Redacted, Schedule, Schema } from "effect"
+import { BunRuntime } from "@effect/platform-bun"
+import { Config, Console, Effect, Layer, Option, Redacted, Schedule, Schema } from "effect"
 import { WorkflowEngine } from "effect/workflow"
-import { SessionLive } from "../platform/src/alchemy/session"
+import { SessionLive } from "@clavia/tardigrade-platform/alchemy"
 import { ReceiptOwnerGuardLive } from "@clavia/tardigrade-domain/ReceiptOwnerGuard.middleware"
 import {
   GreetWorkflow,
@@ -47,6 +48,6 @@ export const greetExample = Effect.scoped(Effect.gen(function* () {
   if (state.status === "fulfilled" && state.value !== null) return { greeting: state.value, state }
   if (state.status === "rejected" && state.reason !== null) return yield* GreetingFailure.make({ reason: state.reason })
   return yield* Effect.die(`Greeting finished in ${state.status} state`)
-})).pipe(Effect.provide(Layer.merge(api, workflow).pipe(Layer.provideMerge(model))))
+}))
 
-if (import.meta.main) Effect.runPromise(greetExample).then(console.log)
+if (import.meta.main) greetExample.pipe(Effect.tap(Console.log), Effect.provide(Layer.merge(api, workflow).pipe(Layer.provideMerge(model))), BunRuntime.runMain)

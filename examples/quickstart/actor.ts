@@ -69,6 +69,7 @@ export class Counter extends Domain.Aggregate("Counter", {
     validate: Effect.fn("Counter.read")(function* (_request, state) {
       const caller = yield* CurrentCaller
       if (state === null || state._tag === "Unopened" || state.owner !== caller.subject) return yield* CounterNotOwner.make()
+      return undefined
     }),
   },
 }) {}

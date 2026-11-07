@@ -42,7 +42,7 @@ export const meeseeks = Effect.fn("ExampleMeeseeks.message")(function* (request:
       if (active === null || active.runId !== request.runId || active.status === "pending" || active.status === "running" || active.status === "awaiting_approval") return undefined
       return active
     }),
-    Stream.filter(receipt => receipt !== undefined),
+    Stream.filter(settledReceipt => settledReceipt !== undefined),
     Stream.runHead,
   )
   if (Option.isNone(result)) return yield* MeeseeksInterrupted.make({ reason: "Domain stream ended before settlement" })

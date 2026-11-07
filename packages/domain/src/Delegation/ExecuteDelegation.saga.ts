@@ -10,6 +10,8 @@ export const ExecuteDelegation = Workflow.make("Tardigrade/ExecuteDelegation", {
   annotations: Context.make(Workflow.SuspendOnFailure, true),
 })
 
+const terminal = (status: string) => ["completed", "failed", "cancelled", "unknown"].includes(status)
+
 export const ExecuteDelegationLive = Layer.unwrap(Effect.gen(function* () {
   const api = yield* ActorInternalApi.Client
   return ExecuteDelegation.toLayer(Effect.fn("ExecuteDelegation")(function* ({ key, delegationId, owner }) {
@@ -29,9 +31,8 @@ export const ExecuteDelegationLive = Layer.unwrap(Effect.gen(function* () {
       return { delegation, parent, run: receipt }
     })
     const initial = yield* authority()
-    if (["completed", "failed", "cancelled", "unknown"].includes(initial.delegation.status)) return
+    if (terminal(initial.delegation.status)) return undefined
     const binding = childBindingOf(initial.delegation)
-    const terminal = (status: string) => ["completed", "failed", "cancelled", "unknown"].includes(status)
     const childState = Effect.fn("ExecuteDelegation.child")(function* () {
       const child = yield* api.Thread.get(initial.delegation.childThreadId, { headers }).pipe(Effect.orDie)
       if (child === null || child._tag === "Unopened" || child.owner !== owner) return yield* Effect.die("Child reservation is unavailable")
@@ -46,10 +47,11 @@ export const ExecuteDelegationLive = Layer.unwrap(Effect.gen(function* () {
       const child = yield* childState()
       if (child._tag !== "Open" || child.active?.runId !== binding.childRunId || !terminal(child.active.status)) return yield* Effect.die("Child terminal receipt is unavailable")
       yield* api.RecordChildOutcome(delegationId, { childThreadId: initial.delegation.childThreadId, receipt: Receipt.make(child.active) }, { headers, commandId: commandId("outcome") }).pipe(Effect.orDie)
+      return undefined
     })
     const cancel = Effect.fn("ExecuteDelegation.cancel")(function* (requestedReason: string) {
       const current = yield* authority()
-      if (terminal(current.delegation.status)) return
+      if (terminal(current.delegation.status)) return undefined
       if (current.delegation.status !== "cancel_requested") {
         yield* api.RequestDelegationCancellation(delegationId, { reason: requestedReason }, { headers, commandId: commandId("parent-cancel") }).pipe(Effect.orDie)
       }
@@ -61,9 +63,10 @@ export const ExecuteDelegationLive = Layer.unwrap(Effect.gen(function* () {
       const child = yield* childState()
       if (Schema.is(FencedChildAbsent)(child)) {
         yield* api.ConfirmDelegationFencedNotStarted(delegationId, { child }, { headers, commandId: commandId("confirm-fenced-absence") }).pipe(Effect.orDie)
-        return
+        return undefined
       }
       yield* record()
+      return undefined
     })
     yield* Effect.succeed(binding).pipe(ExecuteDelegation.withCompensation(() => cancel("DelegationWorkflowInterrupted")))
     const cancelling = Effect.gen(function* () {
@@ -78,12 +81,14 @@ export const ExecuteDelegationLive = Layer.unwrap(Effect.gen(function* () {
       const changed = yield* Stream.mergeAll([delegation, parent], { concurrency: 2 }).pipe(Stream.runHead, Effect.orDie)
       if (Option.isNone(changed)) return yield* Effect.die("Delegation cancellation watch ended")
       yield* cancel("ParentRunTerminal")
+      return undefined
     })
     const admitted = Effect.gen(function* () {
       const allowed = Effect.gen(function* () {
         const current = yield* authority()
         if (current.delegation.status === "cancel_requested" || terminal(current.run.status)) return yield* Effect.never
         if (terminal(current.delegation.status)) return yield* Effect.never
+        return undefined
       })
       yield* allowed
       if (initial.delegation.reservation.toolCalls > initial.parent.limits.maxToolCalls) return yield* Effect.die("Child tool allowance exceeds parent limit")
@@ -106,6 +111,7 @@ export const ExecuteDelegationLive = Layer.unwrap(Effect.gen(function* () {
       const current = yield* authority()
       if (current.delegation.status === "cancel_requested" || terminal(current.run.status)) return yield* Effect.never
       yield* record()
+      return undefined
     }).pipe(Effect.catchCause(cause => Effect.gen(function* () {
       if (Cause.hasInterrupts(cause)) return yield* Effect.failCause(cause)
       const current = yield* authority()
@@ -113,5 +119,6 @@ export const ExecuteDelegationLive = Layer.unwrap(Effect.gen(function* () {
       return yield* Effect.failCause(cause)
     })))
     yield* Effect.raceFirst(admitted, cancelling)
+    return undefined
   }))
 }))

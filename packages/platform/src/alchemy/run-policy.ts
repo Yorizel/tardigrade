@@ -19,21 +19,22 @@ export const RunExecutionLive = Layer.unwrap(Effect.gen(function* () {
       if (state._tag !== "Open") return yield* Effect.die("Run thread is unavailable")
       if (event._tag === "RunRequested") {
         yield* threads.schedule(source, ExpireRun.make({ runId: event.run.runId }), { commandId: `expire:${event.run.runId}`, at: DateTime.makeUnsafe(event.run.deadlineAt) }).pipe(Effect.catchTag("AlreadyExecuted", () => Effect.void))
-        if (state.active?.runId !== event.run.runId || ["completed", "failed", "cancelled", "unknown"].includes(state.active.status)) return
+        if (state.active?.runId !== event.run.runId || ["completed", "failed", "cancelled", "unknown"].includes(state.active.status)) return undefined
       }
       const options = { headers: { authorization: `Bearer ${Redacted.value(credential)}` } }
       if (event._tag === "RunRequested") {
         const input = { threadId: source.id, runId: event.run.runId, owner: state.owner }
         yield* client["Tardigrade/ExecuteRunDiscard"]({ ...input, key: executionKey(input) }, options)
-        return
+        return undefined
       }
       const scope = { threadId: source.id, runId: event.runId, owner: state.owner }
       const payload = { ...scope, key: executionKey(scope) }
       if (event._tag === "RunApproved") {
         yield* client.SignalRunApproval({ ...payload, stepId: event.stepId }, options)
-        return
+        return undefined
       }
       yield* client.InterruptRun(payload, options)
+      return undefined
     }, Effect.orDie)
   })).pipe(Layer.provide(protocol))
 }))

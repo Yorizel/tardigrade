@@ -13,6 +13,7 @@
     "suspicious": "error"
   },
   "rules": {
+    "jsx-a11y/prefer-tag-over-role": "error",
     "react/react-in-jsx-scope": "error",
     "eslint/no-underscore-dangle": [
       "error",

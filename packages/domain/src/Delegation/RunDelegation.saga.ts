@@ -38,6 +38,7 @@ export const RunDelegationLive = Layer.unwrap(Effect.gen(function* () {
           return yield* Effect.die("Delegation admission parent is terminal")
         }
         yield* api.ReserveDelegation(delegationId, reservation, { headers, commandId: `${key}:admit` }).pipe(Effect.orDie)
+        return undefined
       }),
     })
     const admitted = yield* api.Delegation.get(delegationId, { headers }).pipe(Effect.orDie)

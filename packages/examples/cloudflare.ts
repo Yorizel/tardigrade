@@ -8,7 +8,8 @@ export default class InboxWorker extends Cloudflare.Worker<InboxWorker>()(
   "Inbox",
   { main: import.meta.url, compatibility: { date: "2026-11-06", flags: ["nodejs_compat"] } },
   Effect.gen(function* () {
-    const api = yield* InboxApi.pipe(Effect.provide(SessionLive))
+    const context = yield* Layer.build(Layer.merge(SessionLive, InboxModel.layer(Layer.empty).pipe(Layer.provideMerge(DomainCloudflare.layerDurableObjects()))))
+    const api = yield* InboxApi.pipe(Effect.provideContext(context))
     return { fetch: api.fetch }
-  }).pipe(Effect.provide(InboxModel.layer(Layer.empty).pipe(Layer.provide(DomainCloudflare.layerDurableObjects())))),
+  }),
 ) {}

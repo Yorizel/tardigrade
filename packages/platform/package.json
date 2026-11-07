@@ -4,48 +4,25 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./bun": "./src/bun/index.ts",
-    "./cloudflare": "./src/cloudflare/index.ts",
-    "./journal": "./src/shared/sql-journal.ts",
-    "./workspace": "./src/shared/workspace/index.ts",
     "./alchemy": "./src/alchemy/index.ts",
-    "./cluster": "./src/cluster/workflow.ts"
+    "./cluster": "./src/cluster/workflow.ts",
+    "./codemode": "./src/codemode/core.ts",
+    "./testing/story": "./src/testing/story.ts",
+    "./testing/scene": "./src/testing/scene.ts"
   },
   "dependencies": {
-    "@alchemy.run/cloudflare": "2.0.0-beta.85",
-    "@clavia/tardigrade-bun": "workspace:*",
-    "@clavia/tardigrade-cloudflare": "workspace:*",
-    "@clavia/tardigrade-code": "workspace:*",
-    "@clavia/tardigrade-core": "workspace:*",
     "@clavia/tardigrade-domain": "workspace:*",
-    "@clavia/tardigrade-libraries": "workspace:*",
-    "@clavia/tardigrade-store": "workspace:*",
-    "@clavia/tardigrade-worker-loader": "workspace:*",
-    "@cloudflare/sandbox": "1.0.3",
     "@effect/platform-bun": "4.1.2",
     "@effect/sql-sqlite-bun": "4.1.2",
-    "@effect/sql-sqlite-do": "4.1.2",
-    "@opencode/codemode": "2.2.5",
-    "effect": "4.1.2",
-    "just-bash": "3.6.0"
+    "acorn": "8.15.0",
+    "effect": "4.1.2"
   },
   "devDependencies": {
-    "@cfworker/json-schema": "^4.1.1",
-    "@clavia/tardigrade-agent": "workspace:*",
-    "@cloudflare/vitest-plugin": "^1.4.1",
-    "@cloudflare/workers-types": "5.20261102.1",
-    "fast-check": "^4.9.0",
-    "vitest": "^5.0.4",
-    "workerd": "1.20261006.1",
-    "wrangler": "4.150.0",
-    "aws4fetch": "1.0.20"
+    "@alchemy.run/domain": "2.0.0-beta.85",
+    "@effect/ai-openai": "4.1.2"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "bun test test/bun test/cluster",
-    "test:workers": "vitest run --config vitest.config.ts && vitest run --config vitest.agent.config.ts",
-    "test:workers:long": "TARDIGRADE_TEST_LONG=1 vitest run --config vitest.config.ts",
-    "test:deployed": "bun run test/deployed.ts",
-    "test:workspace:heavy": "bun run test/heavy/workspace/run.ts"
+    "test": "bun test __tests__"
   }
 }

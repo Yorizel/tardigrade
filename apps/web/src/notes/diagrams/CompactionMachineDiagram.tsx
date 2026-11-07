@@ -10,12 +10,11 @@ const FlowArrow = ({ label }: { readonly label: string }): ReactElement => (
 )
 
 export const CompactionMachineDiagram = (): ReactElement => (
-  <div
+  <figure
     className="compaction-machine-diagram"
-    role="img"
     aria-label="The immutable event log contains a CompactionCompleted checkpoint. A projection converts its summary and the retained event tail into model messages, which are sent to inference. Inference appends new events to the log."
   >
-    <section className="compaction-flow-stage">
+    <section className="compaction-flow-stage" aria-hidden="true">
       <span className="compaction-flow-kind">immutable event log</span>
       <div className="docs-event-log compaction-flow-event-log">
         <ol>
@@ -41,7 +40,7 @@ export const CompactionMachineDiagram = (): ReactElement => (
 
     <FlowArrow label="project" />
 
-    <section className="compaction-flow-stage compaction-flow-context">
+    <section className="compaction-flow-stage compaction-flow-context" aria-hidden="true">
       <span className="compaction-flow-kind">model context</span>
       <div className="compaction-flow-context-value">
         <code className="compaction-flow-context-type">ReadonlyArray&lt;AgentMessage&gt;</code>
@@ -62,7 +61,7 @@ export const CompactionMachineDiagram = (): ReactElement => (
 
     <FlowArrow label="send" />
 
-    <section className="compaction-flow-inference">
+    <section className="compaction-flow-inference" aria-hidden="true">
       <span className="compaction-flow-kind">inference</span>
     </section>
 
@@ -71,5 +70,5 @@ export const CompactionMachineDiagram = (): ReactElement => (
       <path d="m110 482 5-5 5 5" />
       <text x="374" y="503">append events</text>
     </svg>
-  </div>
+  </figure>
 )

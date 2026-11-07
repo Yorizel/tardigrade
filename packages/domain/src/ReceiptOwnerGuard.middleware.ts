@@ -12,11 +12,12 @@ export const ReceiptOwnerGuardLive = Layer.succeed(ReceiptOwnerGuard, (effect, {
   const authorize = Effect.gen(function* () {
     const state = yield* client.state(request.target)
     if (!Schema.is(Ownership)(state)) {
-      if (Schema.is(Schema.Struct({ _tag: Schema.Literals(["Unopened", "Unreserved"]) }))(state)) return
+      if (Schema.is(Schema.Struct({ _tag: Schema.Literals(["Unopened", "Unreserved"]) }))(state)) return undefined
       return yield* ReceiptForbidden.make()
     }
     const caller = yield* CurrentCaller
     if (state.owner !== caller.subject) return yield* ReceiptForbidden.make()
+    return undefined
   })
   yield* authorize
   const receipt = yield* effect

@@ -44,7 +44,7 @@ export class CodeExecution extends Domain.Aggregate("CodeExecution", {
         return []
       }
       if (request.code.length > request.limits.maxCodeChars) return yield* CodeRejected.make({ reason: "CodeBudgetExceeded" })
-      if (request.spill !== undefined && (request.catalog.workspace?.includes("read") !== true || request.catalog.workspace?.includes("grep") !== true)) return yield* CodeRejected.make({ reason: "SpillReadersNotSelected" })
+      if (request.spill !== undefined && (request.catalog.workspace === undefined || !request.catalog.workspace.includes("read") || !request.catalog.workspace.includes("grep"))) return yield* CodeRejected.make({ reason: "SpillReadersNotSelected" })
       const startedAt = DateTime.toEpochMillis(now)
       return [CodeStarted.make({ owner: caller.subject, request, startedAt, deadlineAt: startedAt + request.limits.maxDurationMs })]
     }),
@@ -67,7 +67,8 @@ export class CodeExecution extends Domain.Aggregate("CodeExecution", {
       if (command.ordinal !== current.calls.length) return yield* CodeRejected.make({ reason: "CallOrderConflict" })
       if (current.calls.length >= current.request.limits.maxCalls) return yield* CodeRejected.make({ reason: "CallBudgetExceeded" })
       if (request.refusal !== undefined && (request.mutation || request.requiresApproval || request.execution !== undefined)) return yield* CodeRejected.make({ reason: "InvalidRefusalCapability" })
-      if (request.execution !== undefined && (!request.mutation || request.execution.toolCalls > request.execution.limits.maxToolCalls)) return yield* CodeRejected.make({ reason: "InvalidDelegationCapability" })
+      if (request.execution?._tag === "Delegate" && (!request.mutation || request.execution.toolCalls > request.execution.limits.maxToolCalls)) return yield* CodeRejected.make({ reason: "InvalidDelegationCapability" })
+      if (request.execution?._tag === "DelegationResult" && (request.mutation || request.requiresApproval || request.package !== "agents" || request.method !== "result")) return yield* CodeRejected.make({ reason: "InvalidDelegationResultCapability" })
       return [CodeCallPrepared.make({ call: { callId: `${id.length}:${id}:${command.ordinal}`, request, status: "prepared", approved: !command.requiresApproval, outcome: null, settlementSequence: null, reason: null } })]
     }),
     ApproveCodeCall: Effect.fn("Code.Approve")(function* (state, command) {
@@ -90,7 +91,7 @@ export class CodeExecution extends Domain.Aggregate("CodeExecution", {
       if (!call.approved) return CodeRejected.make({ reason: "ApprovalRequired" })
       return [CodeCallDispatched.make({ ordinal: command.ordinal })]
     },
-    SettleCodeCall: Effect.fn("Code.settleCall")(function* (state, command) {
+    SettleCodeCall: Effect.fn("Code.settleCall")(function* (state, command, { now }) {
       if (state._tag !== "Open") return yield* CodeRejected.make({ reason: "UnknownExecution" })
       const call = Option.getOrUndefined(EffectArray.findFirst(state.calls, entry => entry.request.ordinal === command.ordinal))
       if (call === undefined) return yield* CodeRejected.make({ reason: "UnknownCall" })
@@ -100,6 +101,7 @@ export class CodeExecution extends Domain.Aggregate("CodeExecution", {
       }
       const current = active(state)
       if (current._tag !== "Open") return yield* current
+      if (DateTime.toEpochMillis(now) >= current.deadlineAt) return interrupted(current, "DurationBudgetExceeded", false, null)
       if (call.status !== "dispatched") return yield* CodeRejected.make({ reason: "CallNotDispatched" })
       if ((yield* resultSize(command.outcome)) > current.request.limits.maxResultChars) {
         if (call.request.mutation) return interrupted(current, "CallResultBudgetExceeded", false, command.ordinal)

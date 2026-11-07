@@ -6,16 +6,8 @@
 
 No silent hardcoding. When the framework applies a policy value, such as a cap, a threshold, a timeout, or a limit, the consumer must be able to see it and set it. Export the default, accept an override at the call site or on the surface that applies it, and make the effect visible in the output when the policy changes what the model sees. A constant a consumer can read but cannot change is a leaky abstraction; be explicit instead.
 
-## Formal verification tools
 
-On this workstation, TLAPS is installed at `~/.local/opt/tlaps` and TLC at `~/.local/opt/tla2tools/tla2tools.jar`. Use these paths before searching for or downloading tools. `~/.local/opt/tlaps/bin/tlapm --version` identifies the installed proof manager. Java is available at `/opt/homebrew/opt/openjdk/bin/java`.
-
-```sh
-~/.local/opt/tlaps/bin/tlapm --strict --nofp --cache-dir /tmp/tardigrade-tlaps-proof packages/deprecated/core/tla/component/ResponseIdentity.tla
-TLA_JAVA=/opt/homebrew/opt/openjdk/bin/java TLA2TOOLS_JAR="$HOME/.local/opt/tla2tools/tla2tools.jar" bun run tla InteractionSubstitution
-```
-
-TLAPS needs process inspection to launch its backends; a sandbox error from `/bin/ps` requires running the checker with that access. Keep generated proof caches outside the repository. TLAPS checks deductive proofs; TLC explores configured finite models. Neither alone proves that TypeScript implements the specification.
+Code Mode uses pure Model, Message and update transitions with typed Commands whose results return as Messages. Story drives those transitions explicitly, and Scene exercises their scoped Effect execution. Alchemy Domain owns business state and decisions; Effect Workflows, Activities and Cluster own durable execution. Do not add a second domain-state runtime. Code Mode is project-owned. Keep tests separate from source and anchor executable fixture paths to `import.meta.url`. Preserve authentication, isolation, budgets and recovery.
 
 ## Pull requests
 

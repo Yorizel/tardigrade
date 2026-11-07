@@ -19,19 +19,20 @@ export const CodeExecutionPolicyLive = Layer.unwrap(Effect.gen(function* () {
       if (state._tag !== "Open") return yield* Effect.die("Code execution is unavailable")
       if (event._tag === "CodeStarted") {
         yield* codes.schedule(source, ExpireCode.make({}), { commandId: "expire", at: DateTime.makeUnsafe(event.deadlineAt) }).pipe(Effect.catchTag("AlreadyExecuted", () => Effect.void))
-        if (state.status !== "running") return
+        if (state.status !== "running") return undefined
       }
       const options = { headers: { authorization: `Bearer ${Redacted.value(credential)}` } }
       const payload = { executionId: source.id, owner: state.owner, key: codeExecutionKey(state.owner, source.id) }
       if (event._tag === "CodeStarted") {
         yield* client["Tardigrade/ExecuteCodeDiscard"](payload, options)
-        return
+        return undefined
       }
       if (event._tag === "CodeCallApproved") {
         yield* client.SignalCodeApproval({ ...payload, ordinal: event.ordinal }, options)
-        return
+        return undefined
       }
       yield* client.InterruptCode(payload, options)
+      return undefined
     }, Effect.orDie)
   })).pipe(Layer.provide(protocol))
 }))

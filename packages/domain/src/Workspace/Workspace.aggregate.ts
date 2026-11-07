@@ -76,6 +76,7 @@ export class Workspace extends Domain.Aggregate("Workspace", {
     validate: Effect.fn("Workspace.read")(function* ({ key }, state) {
       const scope = yield* authorize(key.id)
       if (state !== null && state._tag === "Open" && state.owner !== scope.owner) return yield* WorkspaceNotOwner.make()
+      return undefined
     }),
   },
 }) {}

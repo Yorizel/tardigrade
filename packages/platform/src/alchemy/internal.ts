@@ -8,7 +8,7 @@ import { HttpServerRequest } from "effect/http/HttpServerRequest"
 import * as HttpServerResponse from "effect/http/HttpServerResponse"
 
 const RunnerCredential = Config.schema(Schema.Redacted(Schema.NonEmptyString), "RUNNER_TO_DOMAIN_TOKEN")
-const authenticate = Effect.fn("Internal.authenticate")(function* (headers: Headers.Headers, token: Redacted.Redacted<string>) {
+const authenticate = Effect.fn("Internal.authenticate")(function* (headers: Headers.Headers, token: Redacted.Redacted) {
   const authorization = Headers.get(headers, "authorization")
   const owner = Headers.get(headers, "x-tardigrade-owner")
   if (Option.isNone(authorization) || authorization.value !== `Bearer ${Redacted.value(token)}` || Option.isNone(owner)) return yield* Unauthorized.make()

@@ -10,11 +10,13 @@ import { DEFAULT_FORK_POLICY, ForkPolicy, ForkRejected, ForkRequest } from "./Fo
 
 export const ThreadHistoryFrame = Schema.Struct({ event: Schema.Union(Thread.definition.events), envelope: Envelope })
 
-const replay = (frames: ReadonlyArray<typeof ThreadHistoryFrame.Type>) => Arr.reduce<typeof ThreadHistoryFrame.Type, typeof ThreadState.Type>(frames, Thread.definition.initial, (state, { event, envelope }) => Match.value(event).pipe(
+const replay = (frames: ReadonlyArray<typeof ThreadHistoryFrame.Type>) => Arr.reduce<typeof ThreadHistoryFrame.Type, typeof ThreadState.Type>(frames, Thread.definition.initial, (state, { event: historyEvent, envelope }) => Match.value(historyEvent).pipe(
   Match.tagsExhaustive({
+    BackgroundChildAdmissionReleased: event => Thread.definition.evolve.BackgroundChildAdmissionReleased(state, event, envelope),
     BackgroundChildReserved: event => Thread.definition.evolve.BackgroundChildReserved(state, event, envelope),
     BackgroundChildStarted: event => Thread.definition.evolve.BackgroundChildStarted(state, event, envelope),
     BackgroundChildCancellationRequested: event => Thread.definition.evolve.BackgroundChildCancellationRequested(state, event, envelope),
+    BackgroundChildFencedNotStarted: event => Thread.definition.evolve.BackgroundChildFencedNotStarted(state, event, envelope),
     BackgroundChildSettled: event => Thread.definition.evolve.BackgroundChildSettled(state, event, envelope),
     BackgroundChildReconciled: event => Thread.definition.evolve.BackgroundChildReconciled(state, event, envelope),
     ThreadForkInitialized: event => Thread.definition.evolve.ThreadForkInitialized(state, event, envelope),

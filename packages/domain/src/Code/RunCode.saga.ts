@@ -36,6 +36,7 @@ export const RunCodeLive = Layer.unwrap(Effect.gen(function* () {
           return yield* Effect.die("Code admission parent is terminal")
         }
         yield* api.RequestCode(executionId, request, { headers, commandId: `${key}:admit` }).pipe(Effect.orDie)
+        return undefined
       }),
     })
     const accepted = yield* api.CodeExecution.get(executionId, { headers }).pipe(Effect.orDie)

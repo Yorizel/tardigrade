@@ -1,9 +1,6 @@
 export { DelegationLimits, DEFAULT_DELEGATION_LIMITS, Reservation } from "../Thread/Thread.schemas"
-import { ModelGrant } from "../Execution/Model.schemas"
-import { OutputDeclaration } from "../Output/Output.schemas"
 import { Ownership } from "../Actor.context"
 import { Function, Schema } from "effect"
-import { Prompt } from "effect/ai"
 import { Receipt, ChildBinding, ChildReservedState, OpenState, ChildAdmission, Reservation } from "../Thread/Thread.schemas"
 
 export const DelegationStatus = Schema.Literals(["reserved", "running", "cancel_requested", "completed", "failed", "cancelled", "unknown"])

@@ -9,11 +9,12 @@ import { DEFAULT_RUN_LIMITS, RunLimits } from "@clavia/tardigrade-domain/Thread/
 import { stripVTControlCharacters } from "node:util"
 import { Config, Console, Effect, Layer, Option, Redacted, Schema, Stdio, Stream, String as Str } from "effect"
 import { Prompt as AiPrompt } from "effect/ai"
-import { Command, Flag, Prompt } from "effect/cli"
+import { Argument, Command, Flag, Prompt } from "effect/cli"
 import { Digest, SecureRandom } from "effect/crypto"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http"
 import { OutputDeclaration } from "@clavia/tardigrade-domain/Output/Output.schemas"
 import { sendMessage, ChatRejected } from "./chat"
+import { init } from "./init"
 
 const headers = Config.schema(Schema.Redacted(Schema.NonEmptyString), "TARDIGRADE_TOKEN").pipe(
   Effect.map(token => ({ authorization: `Bearer ${Redacted.value(token)}` })),
@@ -24,7 +25,7 @@ const thread = Flag.String("thread").pipe(Flag.optional, Flag.withDescription("R
 const limits = Config.schema(Schema.fromJsonString(RunLimits), "TARDIGRADE_RUN_LIMITS").pipe(Config.withDefault(DEFAULT_RUN_LIMITS))
 const EventLine = Schema.fromJsonString(Schema.Struct({ cursor: Envelope.fields.seq, event: Schema.Union(Thread.definition.events) }))
 
-const actor = toCli(ActorApi, { name: "actor", headers }).pipe(Command.provide(protocol))
+const actorCommand = toCli(ActorApi, { name: "actor", headers }).pipe(Command.provide(protocol))
 
 const threads = Command.make("threads", {
   take: Flag.Int("take").pipe(Flag.withDefault(100), Flag.withDescription("Maximum native directory entries in this page.")),
@@ -38,6 +39,7 @@ const threads = Command.make("threads", {
     yield* Console.log(stripVTControlCharacters(`${event.threadId}\t${event.actor}\t${event.instance}\t${event.name}\tchild=${event.child}`))
   }
   if (page.cursor !== null) yield* Console.error(`Next page: threads --after ${page.cursor} --take ${options.take}`)
+  return undefined
 })).pipe(Command.withDescription("List the authenticated owner's native thread directory."), Command.provide(client))
 
 const watch = Command.make("watch", {
@@ -53,6 +55,7 @@ const watch = Command.make("watch", {
     Stream.filter(Domain.Read.isEvent),
     Stream.runForEach(frame => Schema.encodeEffect(EventLine)({ cursor: frame.envelope.seq, event: frame.event }).pipe(Effect.flatMap(Console.log))),
   )
+  return undefined
 })).pipe(Command.withDescription("Stream authenticated native thread events as JSON Lines."), Command.provide(client))
 
 const fork = Command.make("fork", {
@@ -74,9 +77,15 @@ const fork = Command.make("fork", {
   const result = yield* HttpClientResponse.schemaBodyJson(ForkResult)(response)
   const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(ForkResult))(result)
   yield* Console.log(encoded)
+  return undefined
 })).pipe(Command.withDescription("Fork a completed native context at an immutable historical checkpoint. Pending interactions require detachment and are refused."))
 
-export const cli = Command.make("tardie-chat", {
+const initializer = Command.make("init", {
+  name: Argument.String("name"),
+  template: Flag.Literals("template", ["alchemy", "quickstart"]).pipe(Flag.withDefault("alchemy")),
+}, options => init(options.name, options.template).pipe(Effect.flatMap(directory => Console.log(`Created ${directory}`))))
+
+export const cli = Command.make("tdg", {
   thread,
   actor: Flag.String("actor").pipe(Flag.optional, Flag.withDescription("Configured runner actor for a new thread; otherwise TARDIGRADE_ACTOR is required.")),
   instance: Flag.String("instance").pipe(Flag.withDefault("cli"), Flag.withDescription("Native actor instance for a new thread.")),
@@ -120,6 +129,7 @@ export const cli = Command.make("tardie-chat", {
     })
     if (receipt.status !== "completed") return yield* ChatRejected.make({ reason: `${receipt.status}: ${receipt.reason}` })
     yield* Console.log(stripVTControlCharacters(receipt.text))
+    return undefined
   })
   if (Option.isSome(options.message)) return yield* submit(options.message.value)
   yield* Console.error("/exit closes the client. The runner owns execution; use actor commands in another terminal for approval and cancellation.")
@@ -130,8 +140,9 @@ export const cli = Command.make("tardie-chat", {
     yield* submit(text)
     return true
   }).pipe(Effect.repeat({ while: value => value }))
+  return undefined
 })).pipe(Effect.catchTag("QuitError", () => Effect.void))).pipe(
   Command.withDescription("Chat through authenticated native Alchemy Domain and Effect Workflows."),
   Command.provide(Layer.mergeAll(client, Digest.layerWebCrypto, SecureRandom.layerWebCrypto)),
-  Command.withSubcommands([fork, watch, threads, actor]),
+  Command.withSubcommands([initializer, fork, watch, threads, actorCommand]),
 )

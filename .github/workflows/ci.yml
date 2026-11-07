@@ -20,7 +20,7 @@ permissions:
 jobs:
   gate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v7
         with:
@@ -46,6 +46,23 @@ jobs:
       # --frozen-lockfile: a PR that changes deps without committing bun.lock fails here instead of
       # silently resolving something different from what everyone else installed.
       - run: bun install --frozen-lockfile
+      - uses: pnpm/action-setup@v6
+        if: steps.changes.outputs.docs_only != 'true'
+        with:
+          version: 12.7.0
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.changes.outputs.docs_only != 'true'
+        with:
+          toolchain: "1.99.1"
+      - uses: actions/cache@v5
+        if: steps.changes.outputs.docs_only != 'true'
+        with:
+          path: |
+            .cache/native-oxlint/artifacts
+            .cache/native-svg-source/oxc/target
+          key: native-oxlint-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/native-oxlint-policy.ts', 'tools/native-oxlint-build.ts', 'tools/patches/oxlint-svg-namespace.patch', 'tools/patches/oxlint-node-postmessage.patch', 'bun.lock') }}
+      - run: bun run tools/native-oxlint-build.ts
+        if: steps.changes.outputs.docs_only != 'true'
       - run: bun run gate --only=lint:docs,build:app-web
         if: steps.changes.outputs.docs_only == 'true'
       - run: bun run gate

@@ -1,5 +1,5 @@
-import { readFile } from "node:fs/promises"
-import { join } from "node:path"
+import { BunRuntime, BunServices } from "@effect/platform-bun"
+import { Array as Arr, Console, Effect, FileSystem, Order, Path, String as Str } from "effect"
 
 // The markdown gate. The house rules for prose are as mechanical as the ones for code, so they are
 // checked the same way rather than left to review.
@@ -11,18 +11,6 @@ import { join } from "node:path"
 // The second rule: a document states what is true now. Words that narrate the repository's history
 // belong in commits and pull requests, where the reader is asking what changed.
 
-const root = join(import.meta.dir, "..")
-
-const pages = ["docs", "notes"].flatMap(directory => [...new Bun.Glob("**/*.{md,mdx}").scanSync({ cwd: join(root, directory), onlyFiles: true })].map(name => `${directory}/${name}`))
-const files = [
-  "README.md",
-  "AGENTS.md",
-  "CLAUDE.md",
-  "CONTRIBUTING.md",
-  ".github/PULL_REQUEST_TEMPLATE.md",
-  ...pages.sort()
-]
-
 interface Problem {
   readonly file: string
   readonly line: number
@@ -33,7 +21,7 @@ interface Problem {
 // A line that opens its own block rather than continuing the line above it.
 const OPENS_BLOCK = /^(#{1,6} |[-*+] |\d+[.)] |> |\||```|~~~|<|\[[^\]]+\]:|---$|===)/
 
-const isBlank = (line: string) => line.trim() === ""
+const isBlank = (line: string) => Str.trim(line) === ""
 
 // Prose that narrates the repository's own past or future instead of its present.
 const HISTORY = [
@@ -57,14 +45,14 @@ const NOT_BUT = /\bnot\s+[^.,;:]{1,60},\s*but\b/i
 
 // Text that names a rule or a symbol rather than using it. A document is allowed to quote the
 // phrasing it forbids, so quoted spans and inline code drop out before the prose rules run.
-const used = (line: string) => line.replace(/\[([^\]]*)\]\([^)]+\)/g, "$1").replace(/`[^`]*`/g, "").replace(/"[^"]*"/g, "")
+const used = (line: string) => Str.replace(/"[^"]*"/g, "")(Str.replace(/`[^`]*`/g, "")(Str.replace(/\[([^\]]*)\]\([^)]+\)/g, "$1")(line)))
 
-const check = (file: string, text: string): ReadonlyArray<Problem> => {
+export const check = (file: string) => (text: string): ReadonlyArray<Problem> => {
   const problems: Array<Problem> = []
-  const lines = text.split("\n")
+  const lines = Str.split("\n")(text)
   let fenced = false
   let frontmatter = false
-  lines.forEach((line, index) => {
+  Arr.forEach(lines, (line, index) => {
     const number = index + 1
     const add = (rule: string, detail: string) => problems.push({ file, line: number, rule, detail })
     if ((index === 0 || frontmatter) && line === "---") {
@@ -72,15 +60,15 @@ const check = (file: string, text: string): ReadonlyArray<Problem> => {
       return
     }
     if (frontmatter) return
-    if (/^\s*(?:```|~~~)/.test(line) || line.trim() === "$$") {
+    if (/^\s*(?:```|~~~)/.test(line) || Str.trim(line) === "$$") {
       fenced = !fenced
       return
     }
     if (fenced) return
     const prose = used(line)
     if (EMOJI.test(line)) add("emoji", "documentation carries no emoji")
-    if (line.includes("—") || line.includes("–")) add("dash", "use a comma, a colon, or a full stop")
-    if (NOT_BUT.test(prose)) add("framing", `"not X, but Y" framing: ${line.trim().slice(0, 60)}`)
+    if (Str.includes("—")(line) || Str.includes("–")(line)) add("dash", "use a comma, a colon, or a full stop")
+    if (NOT_BUT.test(prose)) add("framing", `"not X, but Y" framing: ${Str.slice(0, 60)(Str.trim(line))}`)
     if (/\s$/.test(line)) add("trailing-space", "the line ends in whitespace")
     for (const pattern of HISTORY) {
       if (pattern.test(prose)) {
@@ -95,7 +83,7 @@ const check = (file: string, text: string): ReadonlyArray<Problem> => {
       !isBlank(line) &&
       !isBlank(previous) &&
       !OPENS_BLOCK.test(line) &&
-      !OPENS_BLOCK.test(previous.trimStart()) &&
+      !OPENS_BLOCK.test(Str.trimStart(previous)) &&
       !/^\s{2,}/.test(previous)
     ) {
       add("wrapped", "a paragraph is one line, so editors own the wrapping")
@@ -103,7 +91,7 @@ const check = (file: string, text: string): ReadonlyArray<Problem> => {
       previous !== undefined &&
       !isBlank(line) &&
       /^\s{2,}\S/.test(line) &&
-      !OPENS_BLOCK.test(line.trimStart())
+      !OPENS_BLOCK.test(Str.trimStart(line))
     ) {
       add("wrapped", "a list item is one line, so editors own the wrapping")
     }
@@ -111,18 +99,26 @@ const check = (file: string, text: string): ReadonlyArray<Problem> => {
   return problems
 }
 
-const found: Array<Problem> = []
-for (const file of files) {
-  const text = await readFile(join(root, file), "utf8").catch(() => undefined)
-  if (text === undefined) continue
-  found.push(...check(file, text))
-}
+const main = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const root = path.resolve(import.meta.dir, "..")
+  const pages = yield* Effect.forEach(["docs", "notes"], directory => fs.glob("**/*.{md,mdx}", { root: path.join(root, directory) }).pipe(
+    Effect.map(names => Arr.map(names, name => `${directory}/${name}`))
+  ))
+  const files = ["README.md", "AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md", ".github/PULL_REQUEST_TEMPLATE.md", ...Arr.sort(pages.flat(), Order.String)]
+  const found: Array<Problem> = []
+  for (const file of files) {
+    const fullPath = path.join(root, file)
+    if (!(yield* fs.exists(fullPath))) continue
+    const text = yield* fs.readFileString(fullPath)
+    found.push(...check(file)(text))
+  }
+  for (const problem of found) yield* Console.log(`${problem.file}:${problem.line}: ${problem.rule}: ${problem.detail}`)
+  if (found.length > 0) {
+    yield* Console.log(`\n${found.length} markdown problems`)
+    process.exitCode = 1
+  } else yield* Console.log(`${files.length} markdown files pass`)
+})
 
-for (const problem of found) {
-  console.log(`${problem.file}:${problem.line}: ${problem.rule}: ${problem.detail}`)
-}
-if (found.length > 0) {
-  console.log(`\n${found.length} markdown problems`)
-  process.exit(1)
-}
-console.log(`${files.length} markdown files pass`)
+if (import.meta.main) main.pipe(Effect.provide(BunServices.layer), BunRuntime.runMain)

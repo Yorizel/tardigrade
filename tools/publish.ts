@@ -1,266 +1,206 @@
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { dirname, isAbsolute, join, relative, resolve } from "node:path"
-import { fileURLToPath } from "node:url"
-import { rewriteComponentRuntimeImports, stageInitTemplates } from "./publish-paths"
-import { copyProjectPatches, projectPatchesFrom } from "../apps/cli/src/version"
+import { BunRuntime, BunServices } from "@effect/platform-bun"
+import { Array as Arr, Config, Console, Effect, FileSystem, Layer, Option, Order, Path, Record as Rec, Schema, Stream, String as Str } from "effect"
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http"
+import { ChildProcess, ChildProcessSpawner } from "effect/process"
+import { copyProjectPatches, projectPatchesFrom, stageInitTemplates } from "./publish-paths"
 import publicExports from "./public-exports.json"
 import { syncPublicExports } from "./public-exports"
-import { publishDependencies, publishSources } from "./publish-manifest"
+import { pruneToSourceClosure } from "./publish-closure"
+import { publishDependencies, publishSources, validatePublishImports } from "./publish-manifest"
 
-type PkgJson = {
-  readonly name: string
-  readonly version: string
-  readonly dependencies?: Readonly<Record<string, string>>
-  readonly peerDependencies?: Readonly<Record<string, string>>
-  readonly peerDependenciesMeta?: Readonly<Record<string, { readonly optional?: boolean }>>
-  readonly [key: string]: unknown
-}
+class PublicationRejected extends Schema.TaggedError<PublicationRejected, { readonly brand: unique symbol }>()("PublicationRejected", { reason: Schema.String }) {}
 
-const root = fileURLToPath(new URL("../", import.meta.url))
-const dryRun = process.argv.includes("--dry-run")
-const packOnly = process.argv.includes("--pack-only")
-export const DEFAULT_STABLE_NPM_TAG = "latest"
-export const DEFAULT_PRERELEASE_NPM_TAG = "next"
+const Manifest = Schema.Struct({ version: Schema.String })
+const PackedManifest = Schema.Struct({
+  dependencies: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  peerDependencies: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  peerDependenciesMeta: Schema.optionalKey(Schema.Record(Schema.String, Schema.Struct({ optional: Schema.Boolean }))),
+  patchedDependencies: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  overrides: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+})
 
-const option = (name: string) => {
-  const index = process.argv.indexOf(name)
-  if (index === -1) return undefined
-  const value = process.argv[index + 1]
-  if (value === undefined || value.startsWith("--")) throw new Error(`${name} needs a value`)
-  return value
-}
+const output = Effect.fn("publication.output")(function* (command: string, args: ReadonlyArray<string>, cwd: string) {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  return yield* Effect.scoped(Effect.gen(function* () {
+    const child = yield* spawner.spawn(ChildProcess.make(command, args, { cwd, stdout: "pipe", stderr: "pipe" }))
+    const [code, stdout, stderr] = yield* Effect.all([child.exitCode, child.stdout.pipe(Stream.decodeText(), Stream.runCollect), child.stderr.pipe(Stream.decodeText(), Stream.runCollect)], { concurrency: "unbounded" })
+    if (Number(code) !== 0) return yield* PublicationRejected.make({ reason: `${command} exited ${code}\n${Arr.join(stderr, "")}` })
+    return Str.trim(Arr.join(stdout, ""))
+  }))
+})
 
-// The command the package installs, and the module it points at. One install gives the library, the
-// server, the UI, and the command (sdk-and-cli-spec.md, "Phase 3").
-const BIN_NAME = "tdg"
+const run = Effect.fn("publication.run")(function* (command: string, args: ReadonlyArray<string>, cwd: string) {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  yield* Effect.scoped(Effect.gen(function* () {
+    const child = yield* spawner.spawn(ChildProcess.make(command, args, { cwd, stdin: "inherit", stdout: "inherit", stderr: "inherit" }))
+    const code = yield* child.exitCode
+    if (Number(code) !== 0) return yield* PublicationRejected.make({ reason: `${command} exited ${code}` })
+    return undefined
+  }))
+})
 
-const BIN_ENTRY = "./src/deprecated/cli/main.ts"
-
-const STAGED_EXAMPLES = "examples"
-
-
-const npmMin = { maj: 11, min: 5, patch: 1 } as const
-
-const readPkg = async (dir: string): Promise<PkgJson> => {
-  const raw: unknown = await Bun.file(join(root, dir, "package.json")).json()
-  if (typeof raw !== "object" || raw === null) throw new Error(`${dir}/package.json is not an object`)
-  if (!("name" in raw) || !("version" in raw)) throw new Error(`${dir}/package.json is missing name or version`)
-  if (typeof raw.name !== "string" || typeof raw.version !== "string") {
-    throw new Error(`${dir}/package.json is missing name or version`)
-  }
-  return raw as PkgJson
-}
-
-const output = async (cmd: string[], cwd: string) => {
-  const proc = Bun.spawn(cmd, { cwd, stdout: "pipe", stderr: "pipe" })
-  const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
-  if (code !== 0) throw new Error(`${cmd.join(" ")} exited ${code}\n${stderr}`)
-  return stdout.trim()
-}
-
-const run = async (cmd: string[], cwd: string) => {
-  const proc = Bun.spawn(cmd, { cwd, stdin: "inherit", stdout: "inherit", stderr: "inherit" })
-  const code = await proc.exited
-  if (code !== 0) throw new Error(`${cmd.join(" ")} exited ${code}`)
-}
-
-const verifyPackedManifest = async (tarball: string, expected: {
-  readonly dependencies: Readonly<Record<string, string>>
-  readonly peerDependencies: Readonly<Record<string, string>>
-  readonly peerDependenciesMeta: Readonly<Record<string, { readonly optional?: boolean }>>
-  readonly patchedDependencies: Readonly<Record<string, string>>
-  readonly overrides: Readonly<Record<string, string>>
-}) => {
-  const packed = JSON.parse(await output(["tar", "-xOf", tarball, "package/package.json"], root)) as {
-    readonly dependencies?: Readonly<Record<string, string>>
-    readonly peerDependencies?: Readonly<Record<string, string>>
-    readonly peerDependenciesMeta?: Readonly<Record<string, { readonly optional?: boolean }>>
-    readonly patchedDependencies?: Readonly<Record<string, string>>
-    readonly overrides?: Readonly<Record<string, string>>
-  }
-  for (const [name, expectedDependencies] of [["dependencies", expected.dependencies], ["peerDependencies", expected.peerDependencies], ["peerDependenciesMeta", expected.peerDependenciesMeta], ["patchedDependencies", expected.patchedDependencies], ["overrides", expected.overrides]] as const) {
-    if (JSON.stringify(packed[name] ?? {}) !== JSON.stringify(expectedDependencies)) {
-      throw new Error(`packed manifest ${name} differs from the publication manifest`)
-    }
-  }
-}
-
-const parseNpm = (version: string) => {
-  const [maj, min, patch] = version.trim().split(".").map((part) => Number(part))
-  if (maj === undefined || min === undefined || patch === undefined || [maj, min, patch].some((part) => !Number.isFinite(part))) {
-    throw new Error(`unreadable npm version: ${version}`)
-  }
-  return { maj, min, patch }
-}
-
-const npmAtLeast = (version: string, min: typeof npmMin) => {
-  const found = parseNpm(version)
-  if (found.maj !== min.maj) return found.maj > min.maj
-  if (found.min !== min.min) return found.min > min.min
-  return found.patch >= min.patch
-}
-
-const published = async (name: string, version: string) => {
-  const url = `https://registry.npmjs.org/${encodeURIComponent(name)}/${version}`
-  const response = await fetch(url, { headers: { accept: "application/json" } })
-  if (response.status === 404) return false
-  if (!response.ok) throw new Error(`registry ${url} -> ${response.status}`)
-  return true
-}
-
-const rewriteSources = async (dir: string, sourceRoot = dir): Promise<void> => {
-  for (const entry of await readdir(dir, { withFileTypes: true })) {
-    const path = join(dir, entry.name)
-    if (entry.isDirectory()) {
-      await rewriteSources(path, sourceRoot)
-      continue
-    }
-    if (!entry.isFile() || !entry.name.endsWith(".ts")) continue
-    let source = await readFile(path, "utf8")
-    source = source.replace(/(["'])(@clavia\/[^"']+)\1/g, (match, quote: string, specifier: string) => {
-      for (const source of publishSources) {
-        if (specifier !== source.pkg.name && !specifier.startsWith(`${source.pkg.name}/`)) continue
-        const key = specifier === source.pkg.name ? "." : `.${specifier.slice(source.pkg.name.length)}`
-        if (!("exports" in source.pkg)) throw new Error(`No workspace export for ${specifier} in ${path}`)
-        const exports: Readonly<Record<string, string | null>> = source.pkg.exports
-        let target = exports[key]
-        if (target === undefined) {
-          const pattern = Object.keys(exports).filter(key => key.includes("*")).sort((a, b) => b.length - a.length).find(pattern => {
-            const [prefix, suffix] = pattern.split("*")
-            return key.startsWith(prefix!) && key.endsWith(suffix!)
-          })
-          if (pattern !== undefined) {
-            const [prefix, suffix] = pattern.split("*")
-            target = exports[pattern]?.replace("*", key.slice(prefix!.length, suffix!.length === 0 ? undefined : -suffix!.length))
-          }
-        }
-        if (target == null) throw new Error(`No workspace export for ${specifier} in ${path}`)
-        const destination = relative(dirname(path), join(sourceRoot, source.namespace, target.replace(/^\.\/src\//, "").replace(/\.ts$/, "")))
-        return `${quote}${destination.startsWith(".") ? destination : `./${destination}`}${quote}`
-      }
-      return match
-    })
-    await writeFile(path, rewriteComponentRuntimeImports(source, path, sourceRoot))
-  }
-}
-
-await syncPublicExports(true)
-
-const packages = publishSources
-const publicSource = packages.find((source) => source.namespace === "tardie")!
-const dependencies = publishDependencies(packages.map((source) => source.pkg))
-const version = option("--version") ?? (await readPkg(".")).version
-const sourceTree = option("--source-tree")
-const prerelease = version.includes("-")
-const distTag = option("--tag") ?? (prerelease ? DEFAULT_PRERELEASE_NPM_TAG : DEFAULT_STABLE_NPM_TAG)
-if (prerelease && distTag === DEFAULT_STABLE_NPM_TAG) {
-  throw new Error(`prerelease ${version} cannot use npm tag ${DEFAULT_STABLE_NPM_TAG}`)
-}
-
-const releaseTag = process.env.GITHUB_REF?.startsWith("refs/tags/v") ? process.env.GITHUB_REF.slice("refs/tags/v".length) : undefined
-if (releaseTag !== undefined && releaseTag !== version) {
-  throw new Error(`tag v${releaseTag} does not match package version ${version}`)
-}
-
-if (process.env.GITHUB_ACTIONS === "true" && !dryRun && !packOnly) {
-  const npmVersion = await output(["npm", "--version"], root)
-  if (!npmAtLeast(npmVersion, npmMin)) {
-    throw new Error(`trusted publishing needs npm >= ${npmMin.maj}.${npmMin.min}.${npmMin.patch}; this runner has ${npmVersion}`)
-  }
-}
-
-const alreadyPublished = packOnly ? false : await published(publicSource.pkg.name, version)
-if (!packOnly && !dryRun && alreadyPublished) {
-  console.log(`skip ${publicSource.pkg.name}@${version} (already on the registry)`)
-  process.exit(0)
-}
-
-const requestedOutput = option("--output")
-const destination = requestedOutput === undefined ? await mkdtemp(join(tmpdir(), "tardigrade-pack-")) : resolve(root, requestedOutput)
-const temporary = requestedOutput === undefined
-const stage = join(destination, "package")
-const projectPatches = await projectPatchesFrom(new URL("../apps/cli/src/init.ts", import.meta.url).href)
-const patchedDependencies = projectPatches.patchedDependencies
-
-try {
-  await mkdir(stage, { recursive: true })
-  for (const source of packages) await mkdir(join(stage, "src", source.namespace), { recursive: true })
-  await rm(join(stage, "patches"), { recursive: true, force: true })
-  await copyProjectPatches(projectPatches, stage)
-  await Promise.all([
-    cp(join(root, "LICENSE"), join(stage, "LICENSE")),
-    cp(join(root, "THIRD_PARTY_NOTICES.md"), join(stage, "THIRD_PARTY_NOTICES.md")),
-    cp(join(root, "README.md"), join(stage, "README.md")),
-    stageInitTemplates(root, stage),
-    ...packages.map(async (source) => {
-      await cp(join(root, source.dir, "src"), join(stage, "src", source.namespace), {
-        recursive: true,
-        filter: (path) => !path.endsWith(".test.ts") && path !== join(root, "packages/model/src/testing") && path !== join(root, "packages/tardie/src/generated")
+const rewriteSources = Effect.fn("publication.rewriteSources")(function* (sourceRoot: string) {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const files = yield* fs.glob("**/*.ts", { root: sourceRoot, dot: true })
+  for (const file of files) {
+    const absolute = path.resolve(sourceRoot, file)
+    const original = yield* fs.readFileString(absolute)
+    let rewritten = original
+    for (const match of Str.matchAll(/(["'])(@clavia\/[^"']+)\1/g)(original)) {
+      const [whole, quote, specifier] = match
+      if (quote === undefined || specifier === undefined) continue
+      const found = Arr.findFirst(publishSources, source => specifier === source.pkg.name || Str.startsWith(`${source.pkg.name}/`)(specifier))
+      if (Option.isNone(found)) return yield* PublicationRejected.make({ reason: `Unresolved workspace import ${specifier} in ${absolute}` })
+      const source = found.value
+      const key = specifier === source.pkg.name ? "." : `.${Str.slice(source.pkg.name.length)(specifier)}`
+      if (!("exports" in source.pkg)) return yield* PublicationRejected.make({ reason: `No workspace export for ${specifier} in ${absolute}` })
+      const exports: Readonly<Record<string, string | null>> = source.pkg.exports
+      const pattern = Arr.findFirst(Rec.toEntries(exports), ([entry, target]) => {
+        if (!Str.includes("*")(entry) || target === null) return false
+        const [prefix, suffix] = Str.split("*")(entry)
+        return prefix !== undefined && suffix !== undefined && Str.startsWith(prefix)(key) && Str.endsWith(suffix)(key)
       })
-    })
-  ])
-
-  await rewriteSources(join(stage, "src"))
-
-  const repository = publicSource.pkg.repository
-  const publishManifest = {
-    name: publicSource.pkg.name,
-    version,
-    license: publicSource.pkg.license,
-    author: publicSource.pkg.author,
-    description: publicSource.pkg.description,
-    homepage: publicSource.pkg.homepage,
-    repository:
-      typeof repository === "object" && repository !== null && "type" in repository && "url" in repository
-        ? { type: repository.type, url: repository.url }
-        : repository,
-    bugs: publicSource.pkg.bugs,
-    publishConfig: publicSource.pkg.publishConfig,
-    ...(sourceTree === undefined ? {} : { tardigrade: { sourceTree } }),
-    files: ["src", STAGED_EXAMPLES, "patches", "THIRD_PARTY_NOTICES.md"],
-    engines: publicSource.pkg.engines,
-    type: "module",
-    bin: { [BIN_NAME]: BIN_ENTRY, "tardie-chat": "./src/cli/main.ts" },
-    exports: publicExports,
-    ...dependencies,
-    patchedDependencies,
-    overrides: projectPatches.overrides
+      const target = exports[key] ?? Option.match(pattern, { onNone: () => undefined, onSome: ([entry, value]) => {
+        if (value === null) return undefined
+        const [prefix, suffix] = Str.split("*")(entry)
+        if (prefix === undefined || suffix === undefined) return undefined
+        return Str.replace("*", Str.slice(prefix.length, suffix === "" ? undefined : -suffix.length)(key))(value)
+      } })
+      if (target === undefined) return yield* PublicationRejected.make({ reason: `No workspace export for ${specifier} in ${absolute}` })
+      const relativeTarget = Str.replace(/\.ts$/, "")(Str.replace(/^\.\/src\//, "")(target))
+      const destination = path.relative(path.dirname(absolute), path.join(sourceRoot, source.namespace, relativeTarget))
+      const resolved = Str.startsWith(".")(destination) ? destination : `./${destination}`
+      rewritten = Str.replace(whole, `${quote}${resolved}${quote}`)(rewritten)
+    }
+    if (Str.includes("@clavia/")(rewritten)) return yield* PublicationRejected.make({ reason: `Unresolved workspace import in ${absolute}` })
+    yield* fs.writeFileString(absolute, rewritten)
   }
-  await writeFile(join(stage, "package.json"), `${JSON.stringify(publishManifest, null, 2)}\n`)
+  return undefined
+})
 
-  // The staged package validates public imports before packing (public-exports-smoke.ts).
-  const stagedModules = join(stage, "node_modules")
-  await symlink(join(root, "node_modules"), stagedModules, "dir")
-  try {
-    await run([process.execPath, join(root, "tools/public-exports-smoke.ts")], stage)
-  } finally {
-    await rm(stagedModules)
+const main = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const http = yield* HttpClient.HttpClient
+  const root = yield* path.fromFileUrl(new URL("../", import.meta.url))
+  const args = process.argv
+  const option = (name: string) => {
+    const index = Arr.findFirstIndex(args, value => value === name)
+    if (Option.isNone(index)) return undefined
+    return args[index.value + 1]
   }
-
-  const filename = await output(["bun", "pm", "pack", "--destination", destination, "--quiet", "--ignore-scripts"], stage)
-  const tarball = isAbsolute(filename) ? filename : join(destination, filename)
-  await verifyPackedManifest(tarball, { ...dependencies, patchedDependencies, overrides: projectPatches.overrides })
-  const packedFiles = (await output(["tar", "-tzf", tarball], root)).split("\n")
-  for (const source of Object.values(patchedDependencies)) {
-    if (!packedFiles.includes(`package/${source}`)) throw new Error(`packed artifact is missing patch resource ${source}`)
+  for (const name of ["--version", "--tag", "--output", "--source-tree"]) {
+    if (!Arr.contains(args, name)) continue
+    const value = option(name)
+    if (value === undefined || Str.startsWith("--")(value)) return yield* PublicationRejected.make({ reason: `${name} needs a value` })
   }
-  const packedPatchFiles = packedFiles.filter((path) => path.startsWith("package/patches/") && !path.endsWith("/")).sort()
-  const expectedPatchFiles = Object.values(patchedDependencies).map((path) => `package/${path}`).sort()
-  if (JSON.stringify(packedPatchFiles) !== JSON.stringify(expectedPatchFiles)) throw new Error("packed artifact contains unreferenced patch resources")
-  if (!packedFiles.includes("package/THIRD_PARTY_NOTICES.md")) throw new Error("packed artifact is missing THIRD_PARTY_NOTICES.md")
-  if (packOnly) {
-    console.log(`pack ${publicSource.pkg.name}@${version}`)
-  } else {
-    const publish = ["npm", "publish", tarball, "--access", "public", "--tag", distTag, ...(dryRun ? ["--dry-run"] : [])]
-    console.log(`${dryRun ? "dry-run" : "publish"} ${publicSource.pkg.name}@${version} with npm tag ${distTag}`)
-    if (dryRun && alreadyPublished) {
-      console.log(`skip npm dry-run validation (version already on the registry)`)
-    } else {
-      await run(publish, root)
+  yield* syncPublicExports(true)
+  const rootText = yield* fs.readFileString(path.join(root, "package.json"))
+  const rootManifest = yield* Schema.decodeEffect(Schema.fromJsonString(Manifest))(rootText)
+  const version = option("--version") ?? rootManifest.version
+  const prerelease = Str.includes("-")(version)
+  const tag = option("--tag") ?? (prerelease ? "next" : "latest")
+  if (prerelease && tag === "latest") return yield* PublicationRejected.make({ reason: `prerelease ${version} cannot use npm tag latest` })
+  const releaseRef = yield* Config.option(Config.String("GITHUB_REF"))
+  if (Option.isSome(releaseRef) && Str.startsWith("refs/tags/v")(releaseRef.value) && Str.slice("refs/tags/v".length)(releaseRef.value) !== version) return yield* PublicationRejected.make({ reason: `tag does not match package version ${version}` })
+  const dryRun = Arr.contains(args, "--dry-run")
+  const packOnly = Arr.contains(args, "--pack-only")
+  const ci = yield* Config.option(Config.String("GITHUB_ACTIONS"))
+  if (Option.contains(ci, "true") && !dryRun && !packOnly) {
+    const npm = yield* output("npm", ["--version"], root)
+    const parts = Arr.map(Str.split(".")(npm), Number)
+    if (parts.length < 3 || Arr.some(parts, part => !Number.isFinite(part))) return yield* PublicationRejected.make({ reason: `unreadable npm version: ${npm}` })
+    const major = parts[0] ?? 0
+    const minor = parts[1] ?? 0
+    const patch = parts[2] ?? 0
+    if (major < 11 || major === 11 && (minor < 5 || minor === 5 && patch < 1)) return yield* PublicationRejected.make({ reason: `trusted publishing needs npm >= 11.5.1; this runner has ${npm}` })
+  }
+  const sourceOption = Arr.findFirst(publishSources, source => source.namespace === "tardie")
+  if (Option.isNone(sourceOption)) return yield* PublicationRejected.make({ reason: "Missing facade metadata" })
+  const source = sourceOption.value
+  const dependencies = publishDependencies(Arr.map(publishSources, item => item.pkg))
+  const registry = `https://registry.npmjs.org/${encodeURIComponent(source.pkg.name)}/${version}`
+  let alreadyPublished = false
+  if (!packOnly) {
+    const response = yield* http.execute(HttpClientRequest.get(registry).pipe(HttpClientRequest.setHeader("accept", "application/json")))
+    if (response.status !== 404 && (response.status < 200 || response.status >= 300)) return yield* PublicationRejected.make({ reason: `registry ${registry} -> ${response.status}` })
+    alreadyPublished = response.status !== 404
+  }
+  if (!packOnly && !dryRun && alreadyPublished) {
+    yield* Console.log(`skip ${source.pkg.name}@${version} (already on the registry)`)
+    return undefined
+  }
+  const patches = yield* projectPatchesFrom(new URL("../packages/apps/cli/src/init.ts", import.meta.url).href)
+  const requested = option("--output")
+  const destination = requested === undefined ? yield* fs.makeTempDirectoryScoped({ prefix: "tardigrade-pack-" }) : path.resolve(root, requested)
+  yield* fs.makeDirectory(destination, { recursive: true })
+  const existing = yield* fs.readDirectory(destination)
+  if (existing.length !== 0) return yield* PublicationRejected.make({ reason: `Output directory is not empty: ${destination}. Choose an empty directory.` })
+  const stage = path.join(destination, "package")
+  yield* fs.makeDirectory(stage)
+  const sourceRoot = path.join(stage, "src")
+  yield* fs.makeDirectory(sourceRoot)
+  yield* copyProjectPatches(patches, stage)
+  yield* stageInitTemplates(root, stage)
+  for (const file of ["LICENSE", "THIRD_PARTY_NOTICES.md", "README.md"]) yield* fs.copyFile(path.join(root, file), path.join(stage, file))
+  for (const item of publishSources) {
+    if (item.namespace === "tardie") continue
+    const from = path.join(root, item.dir, "src")
+    const files = yield* fs.glob("**/*.ts", { root: from, dot: true })
+    for (const file of files) {
+      if (Str.endsWith(".test.ts")(file)) continue
+      if (item.namespace === "platform" && !Arr.some(["alchemy/", "cluster/", "codemode/", "testing/"], prefix => Str.startsWith(prefix)(file))) continue
+      const target = path.join(sourceRoot, item.namespace, file)
+      yield* fs.makeDirectory(path.dirname(target), { recursive: true })
+      yield* fs.copyFile(path.join(from, file), target)
     }
   }
-  if (requestedOutput !== undefined) console.log(`tarball ${tarball}`)
-} finally {
-  if (temporary) await rm(destination, { recursive: true, force: true })
-}
+  yield* rewriteSources(sourceRoot)
+  const entries = Arr.map(Arr.filter(["./src/cli/main.ts", ...Rec.values(publicExports)], entry => Str.startsWith("./src/")(entry)), entry => Str.slice("./src/".length)(entry))
+  const imports = yield* pruneToSourceClosure(sourceRoot, entries)
+  validatePublishImports(imports, dependencies.dependencies)
+  const sourceTree = option("--source-tree")
+  const repository = { type: source.pkg.repository.type, url: source.pkg.repository.url }
+  const publishManifest = {
+    name: source.pkg.name, version, license: source.pkg.license, author: source.pkg.author, description: source.pkg.description,
+    homepage: source.pkg.homepage, repository, bugs: source.pkg.bugs, publishConfig: source.pkg.publishConfig,
+    ...(sourceTree === undefined ? {} : { tardigrade: { sourceTree } }), files: ["src", "examples", "patches", "THIRD_PARTY_NOTICES.md"],
+    engines: source.pkg.engines, type: "module", bin: { tdg: "./src/cli/main.ts" }, exports: publicExports,
+    ...dependencies, patchedDependencies: patches.patchedDependencies, overrides: patches.overrides,
+  }
+  const json = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json, { space: 2 }))(publishManifest)
+  yield* fs.writeFileString(path.join(stage, "package.json"), `${json}\n`)
+  yield* Effect.scoped(Effect.gen(function* () {
+    const modules = path.join(stage, "node_modules")
+    yield* Effect.acquireRelease(fs.symlink(path.join(root, "node_modules"), modules), () => fs.remove(modules).pipe(Effect.orDie))
+    yield* run(process.execPath, [path.join(root, "tools/public-exports-smoke.ts")], stage)
+  }))
+  const filename = yield* output("bun", ["pm", "pack", "--destination", destination, "--quiet", "--ignore-scripts"], stage)
+  const tarball = path.isAbsolute(filename) ? filename : path.join(destination, filename)
+  const packedText = yield* output("tar", ["-xOf", tarball, "package/package.json"], root)
+  const packed = yield* Schema.decodeEffect(Schema.fromJsonString(PackedManifest))(packedText)
+  for (const [name, expected, actual] of [["dependencies", dependencies.dependencies, packed.dependencies], ["peerDependencies", dependencies.peerDependencies, packed.peerDependencies], ["peerDependenciesMeta", dependencies.peerDependenciesMeta, packed.peerDependenciesMeta], ["patchedDependencies", patches.patchedDependencies, packed.patchedDependencies], ["overrides", patches.overrides, packed.overrides]] as const) {
+    const expectedJson = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))(expected)
+    const actualJson = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))(actual ?? {})
+    if (expectedJson !== actualJson) return yield* PublicationRejected.make({ reason: `packed manifest ${name} differs from the publication manifest` })
+  }
+  const listing = yield* output("tar", ["-tzf", tarball], root)
+  const files = Str.split("\n")(listing)
+  for (const patch of Rec.values(patches.patchedDependencies)) if (!Arr.contains(files, `package/${patch}`)) return yield* PublicationRejected.make({ reason: `packed artifact is missing patch resource ${patch}` })
+  const packedPatches = Arr.sort(Arr.filter(files, file => Str.startsWith("package/patches/")(file) && !Str.endsWith("/")(file)), Order.String)
+  const expectedPatches = Arr.sort(Arr.map(Rec.values(patches.patchedDependencies), patch => `package/${patch}`), Order.String)
+  if (Arr.join(packedPatches, "\n") !== Arr.join(expectedPatches, "\n")) return yield* PublicationRejected.make({ reason: "packed artifact contains unreferenced patch resources" })
+  if (!Arr.contains(files, "package/THIRD_PARTY_NOTICES.md")) return yield* PublicationRejected.make({ reason: "packed artifact is missing THIRD_PARTY_NOTICES.md" })
+  if (packOnly) {
+    yield* Console.log(`pack ${source.pkg.name}@${version}`)
+  } else {
+    yield* Console.log(`${dryRun ? "dry-run" : "publish"} ${source.pkg.name}@${version} with npm tag ${tag}`)
+    if (dryRun && alreadyPublished) yield* Console.log("skip npm dry-run validation (version already on the registry)")
+    else yield* run("npm", ["publish", tarball, "--access", "public", "--tag", tag, ...(dryRun ? ["--dry-run"] : [])], root)
+  }
+  if (requested !== undefined) yield* Console.log(`tarball ${tarball}`)
+  return undefined
+})
+
+Effect.scoped(main).pipe(Effect.tapErrorTag("PublicationRejected", error => Console.error(error.reason)), Effect.provide(Layer.merge(BunServices.layer, FetchHttpClient.layer)), BunRuntime.runMain)

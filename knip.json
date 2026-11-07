@@ -1,116 +1,51 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignoreDependencies": [
-    "cloudflare",
     "@clavia/tardigrade-ui"
   ],
   "workspaces": {
     "packages/tardie": {
-      "entry": ["src/generated/**/*.ts!", "src/deprecated/*.ts!"],
-      "project": ["src/**/*.ts"]
+      "entry": [
+        "src/generated/**/*.ts!",
+        "__tests__/**/*.test.ts"
+      ],
+      "project": [
+        "__tests__/**/*.ts"
+      ]
     },
     "packages/platform": {
-      "entry": ["test/fixtures/workerd/fixture.worker.ts", "test/fixtures/workerd/agent-fixture.worker.ts", "test/workerd/**/*.workers.ts", "bench/image-memory.mjs", "bench/image-memory.worker.ts", "test/heavy/workspace/lifecycle.ts", "test/fixtures/workspace/container/worker.ts"],
-      "project": ["src/**/*.ts!", "test/**/*.ts", "bench/image-memory*"],
-      "ignoreIssues": {
-        "src/cloudflare/index.ts": ["duplicates"]
-      }
-    },
-    "packages/deprecated/agent": {
-      "entry": ["fixtures/binding.ts"],
-      "project": ["src/**/*.ts", "fixtures/**/*.ts"]
+      "project": [
+        "src/**/*.ts",
+        "__tests__/**/*.ts"
+      ]
     },
     "packages/examples": {
-      "entry": ["*.ts!"],
-      "project": ["**/*.ts"]
+      "entry": [
+        "*.ts!",
+        "__tests__/**/*.test.ts"
+      ],
+      "project": [
+        "**/*.ts"
+      ]
     },
     ".": {
       "ignoreDependencies": [
-        "@effect/tsgo",
         "@effect/language-service"
       ],
       "entry": [
-        "tools/*.ts", "tools/bundle-size/*.ts",
-        "tools/**/*.test.ts",
-        "examples/*/*.ts"
+        "tools/*.ts",
+        "tools/__tests__/*.ts",
+        "examples/alchemy/*.ts",
+        "examples/quickstart/*.ts"
       ],
       "project": [
         "tools/**/*.ts",
         "examples/**/*.ts"
       ]
     },
-    "examples/react-rlm-chat/server": {
-      "entry": ["*.test.ts", "*.workers.ts"],
-      "project": [
-        "*.ts"
-      ]
-    },
-    "examples/react-rlm-chat/web": {
-      "project": [
-        "src/**/*.{ts,tsx}!"
-      ],
-      "ignoreIssues": {
-        "src/config.ts": [
-          "exports"
-        ]
-      }
-    },
-    "platform/*": {
-      "project": [
-        "src/**/*.ts"
-      ]
-    },
-    "platform/cloudflare": {
-      "entry": [
-        "test/fixture.worker.ts"
-      ],
-      "project": [
-        "src/**/*.ts",
-        "test/**/*.ts",
-        "*.config.ts"
-      ]
-    },
-    "packages/model": {
-      "ignoreDependencies": [
-        "@smithy/node-http-handler!"
-      ]
-    },
-    "platform/worker-loader": {
-      "entry": [
-        "test/fixture.worker.ts",
-        "test/celld/worker.ts"
-      ],
-      "project": [
-        "src/**/*.ts",
-        "test/**/*.ts",
-        "*.config.ts"
-      ]
-    },
-    "apps/*": {
-      "project": [
-        "src/**/*.{ts,tsx}"
-      ]
-    },
-    "apps/cli": {
-      "project": ["src/**/*.ts"],
-      "ignoreDependencies": [
-        "@effect/platform-node-shared"
-      ]
-    },
-    "apps/voyager": {
-      "entry": [
-        "src/client.ts",
-        "src/nav.ts",
-        "src/policy.ts"
-      ],
-      "project": [
-        "src/**/*.{ts,tsx}!",
-        "dev/**/*.ts"
-      ]
-    },
     "apps/web": {
       "entry": [
-        "src/**/*.test.ts",
+        "src/**/*.{test,spec}.{ts,tsx}",
         "../../docs/**/*.mdx",
         "../../notes/**/*.mdx"
       ],

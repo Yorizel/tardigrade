@@ -1,4 +1,13 @@
-import { useEffect, useState, type ReactElement } from "react"
+import { useCallback, useSyncExternalStore, type ReactElement } from "react"
+
+const subscribe = (notify: () => void): (() => void) => {
+  const observer = new MutationObserver(notify)
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] })
+  return () => observer.disconnect()
+}
+
+const readTheme = (): boolean => document.documentElement.dataset.theme === "dark"
+const serverTheme = (): boolean => false
 
 const MoonIcon = (): ReactElement => (
   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15.2A8.5 8.5 0 0 1 8.8 4 8.5 8.5 0 1 0 20 15.2Z" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" /></svg>
@@ -9,15 +18,13 @@ const SunIcon = (): ReactElement => (
 )
 
 export const ThemeToggle = (): ReactElement => {
-  const [dark, setDark] = useState(false)
-  useEffect(() => setDark(document.documentElement.dataset.theme === "dark"), [])
-  const toggle = (): void => {
+  const dark = useSyncExternalStore(subscribe, readTheme, serverTheme)
+  const toggle = useCallback((): void => {
     const nextDark = !dark
     const theme = nextDark ? "dark" : "light"
     document.documentElement.dataset.theme = theme
     window.localStorage.setItem("tardigrade-theme", theme)
-    setDark(nextDark)
-  }
+  }, [dark])
   return (
     <button className="theme-toggle" type="button" aria-label={`Use ${dark ? "light" : "dark"} mode`} title={`Use ${dark ? "light" : "dark"} mode`} aria-pressed={dark} onClick={toggle}>
       {dark ? <SunIcon /> : <MoonIcon />}

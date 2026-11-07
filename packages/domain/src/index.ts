@@ -14,7 +14,7 @@ export { ExecuteRunLive } from "./Execution/ExecuteRun.saga"
 export { ActorInternalApi } from "./ActorInternal.api"
 
 export { CodeExecution } from "./Code/Code.aggregate"
-export { CodeLimits, DEFAULT_CODE_LIMITS } from "./Code/Code.schemas"
+export { CodeLimits, DEFAULT_CODE_LIMITS, MAX_CODE_DEPTH } from "./Code/Code.schemas"
 export { Delegation } from "./Delegation/Delegation.aggregate"
 export { DelegationLimits, DEFAULT_DELEGATION_LIMITS } from "./Delegation/Delegation.schemas"
 
@@ -45,3 +45,6 @@ export { ListModels } from "./Execution/ListModels"
 
 export { ForkSnapshot, ForkOrigin } from "./Thread/Thread.schemas"
 export { ForkRequest, ForkResult, ForkPolicy, DEFAULT_FORK_POLICY, ForkRejected } from "./Fork/Fork.schemas"
+
+export { RunBackgroundDelegation, RunBackgroundDelegationLive, ExecuteBackgroundDelegation } from "./Delegation/RunBackgroundDelegation.saga"
+export { ExecuteBackgroundDelegationLive } from "./Delegation/ExecuteBackgroundDelegation.live"
