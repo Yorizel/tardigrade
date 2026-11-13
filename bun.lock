@@ -3,7 +3,7 @@
   "configVersion": 0,
   "workspaces": {
     "": {
-      "name": "tardigrade",
+      "name": "erg",
       "dependencies": {
         "@types/node": "^24",
         "typescript": "7.0.2",
@@ -30,10 +30,10 @@
       },
     },
     "apps/web": {
-      "name": "@clavia/tardigrade-web",
+      "name": "@erg/web",
       "version": "0.0.1",
       "dependencies": {
-        "@clavia/tardigrade-ui": "workspace:*",
+        "@erg/ui": "workspace:*",
         "@mdx-js/react": "^3.1.1",
         "@phosphor-icons/react": "^2.1.10",
         "@tanstack/react-router": "1.170.32",
@@ -59,20 +59,20 @@
       },
     },
     "packages/apps/cli": {
-      "name": "@clavia/tardigrade-cli",
+      "name": "@erg/cli",
       "version": "0.0.1",
       "bin": {
-        "tdg": "./src/main.ts",
+        "erg": "./src/main.ts",
       },
       "dependencies": {
         "@alchemy.run/domain": "2.0.0-beta.85",
-        "@clavia/tardigrade-domain": "workspace:*",
+        "@erg/domain": "workspace:*",
         "@effect/platform-bun": "4.1.2",
         "effect": "4.1.2",
       },
     },
     "packages/domain": {
-      "name": "@clavia/tardigrade-domain",
+      "name": "@erg/domain",
       "version": "0.0.1",
       "dependencies": {
         "@alchemy.run/domain": "2.0.0-beta.85",
@@ -83,12 +83,12 @@
       },
     },
     "packages/examples": {
-      "name": "@clavia/tardigrade-examples",
+      "name": "@erg/examples",
       "version": "0.0.1",
       "dependencies": {
         "@alchemy.run/domain": "2.0.0-beta.85",
-        "@clavia/tardigrade-domain": "workspace:*",
-        "@clavia/tardigrade-platform": "workspace:*",
+        "@erg/domain": "workspace:*",
+        "@erg/platform": "workspace:*",
         "@effect/platform-bun": "4.1.2",
         "effect": "4.1.2",
       },
@@ -99,10 +99,10 @@
       },
     },
     "packages/platform": {
-      "name": "@clavia/tardigrade-platform",
+      "name": "@erg/platform",
       "version": "0.0.1",
       "dependencies": {
-        "@clavia/tardigrade-domain": "workspace:*",
+        "@erg/domain": "workspace:*",
         "@effect/platform-bun": "4.1.2",
         "@effect/sql-sqlite-bun": "4.1.2",
         "acorn": "8.15.0",
@@ -113,19 +113,19 @@
         "@effect/ai-openai": "4.1.2",
       },
     },
-    "packages/tardie": {
-      "name": "tardie",
+    "packages/erg": {
+      "name": "@erg/sdk",
       "version": "0.0.1",
       "dependencies": {
-        "@clavia/tardigrade-domain": "workspace:*",
-        "@clavia/tardigrade-platform": "workspace:*",
+        "@erg/domain": "workspace:*",
+        "@erg/platform": "workspace:*",
       },
       "devDependencies": {
         "@cloudflare/workers-types": "^5.20260804.1",
       },
     },
     "packages/ui": {
-      "name": "@clavia/tardigrade-ui",
+      "name": "@erg/ui",
       "version": "0.0.1",
     },
   },
@@ -188,17 +188,17 @@
 
     "@cfworker/json-schema": ["@cfworker/json-schema@4.1.1", "", {}, "sha512-gAmrUZSGtKc3AiBL71iNWxDsyUC5uMaKKGdvzYsBoTW/xi42JQHl7eKV2OYzCUqvc+D2RCcf7EXY2iCyFIk6og=="],
 
-    "@clavia/tardigrade-cli": ["@clavia/tardigrade-cli@workspace:packages/apps/cli"],
+    "@erg/cli": ["@erg/cli@workspace:packages/apps/cli"],
 
-    "@clavia/tardigrade-domain": ["@clavia/tardigrade-domain@workspace:packages/domain"],
+    "@erg/domain": ["@erg/domain@workspace:packages/domain"],
 
-    "@clavia/tardigrade-examples": ["@clavia/tardigrade-examples@workspace:packages/examples"],
+    "@erg/examples": ["@erg/examples@workspace:packages/examples"],
 
-    "@clavia/tardigrade-platform": ["@clavia/tardigrade-platform@workspace:packages/platform"],
+    "@erg/platform": ["@erg/platform@workspace:packages/platform"],
 
-    "@clavia/tardigrade-ui": ["@clavia/tardigrade-ui@workspace:packages/ui"],
+    "@erg/ui": ["@erg/ui@workspace:packages/ui"],
 
-    "@clavia/tardigrade-web": ["@clavia/tardigrade-web@workspace:apps/web"],
+    "@erg/web": ["@erg/web@workspace:apps/web"],
 
     "@cloudflare/unenv-preset": ["@cloudflare/unenv-preset@2.16.2", "", { "peerDependencies": { "unenv": "2.0.0-rc.24", "workerd": ">1.20260305.0 <2.0.0-0" }, "optionalPeers": ["workerd"] }, "sha512-JBP1+Z7ZSNG/d4mRP+y8VC5dka3tZVMLEZRvS+rzQ4DGV1EoxRFQckcJTTkXbHSQiTj0DtNI01Zwb/V2fX0mvQ=="],
 
@@ -1124,7 +1124,7 @@
 
     "style-to-object": ["style-to-object@1.0.14", "", { "dependencies": { "inline-style-parser": "0.2.7" } }, "sha512-LIN7rULI0jBscWQYaSswptyderlarFkjQ+t79nzty8tcIAceVomEVlLzH5VP4Cmsv6MtKhs7qaAiwlcp+Mgaxw=="],
 
-    "tardie": ["tardie@workspace:packages/tardie"],
+    "@erg/sdk": ["@erg/sdk@workspace:packages/erg"],
 
     "tinyglobby": ["tinyglobby@0.2.17", "", { "dependencies": { "fdir": "^6.5.0", "picomatch": "^4.0.4" } }, "sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g=="],
 

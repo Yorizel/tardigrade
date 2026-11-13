@@ -1,10 +1,10 @@
 {
-  "name": "@clavia/tardigrade-cli",
+  "name": "@erg/cli",
   "version": "0.0.1",
   "private": true,
   "type": "module",
   "bin": {
-    "tdg": "./src/main.ts"
+    "erg": "./src/main.ts"
   },
   "scripts": {
     "start": "bun run src/main.ts",
@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@alchemy.run/domain": "2.0.0-beta.85",
-    "@clavia/tardigrade-domain": "workspace:*",
+    "@erg/domain": "workspace:*",
     "@effect/platform-bun": "4.1.2",
     "effect": "4.1.2"
   }

@@ -1,7 +1,7 @@
 import * as Domain from "@alchemy.run/domain"
 import { Effect, Schedule, Schema } from "effect"
 import { Activity, Workflow, WorkflowEngine } from "effect/workflow"
-import { CurrentCaller, ReceiptOwnerGuard, Session } from "@clavia/tardigrade-domain/Actor.context"
+import { CurrentCaller, ReceiptOwnerGuard, Session } from "@erg/domain/Actor.context"
 
 export const GreetingState = Schema.Union([
   Schema.TaggedStruct("Unopened", {}),

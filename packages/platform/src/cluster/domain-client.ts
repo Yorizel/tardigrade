@@ -1,4 +1,4 @@
-import { ActorInternalApi } from "@clavia/tardigrade-domain/ActorInternal.api"
+import { ActorInternalApi } from "@erg/domain/ActorInternal.api"
 import { Config, Effect, Layer, Schema } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http"
 

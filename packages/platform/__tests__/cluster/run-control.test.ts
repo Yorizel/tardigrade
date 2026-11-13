@@ -7,7 +7,7 @@ import { Digest } from "effect/crypto"
 import { RpcTest } from "effect/rpc"
 import { SqlClient } from "effect/sql"
 import { Activity, DurableDeferred } from "effect/workflow"
-import { ExecuteRun, approval, executionKey } from "@clavia/tardigrade-domain/Execution/Run.workflow"
+import { ExecuteRun, approval, executionKey } from "@erg/domain/Execution/Run.workflow"
 import { RunRpcHandlers, RunRpcs } from "../../src/cluster/run-control"
 
 test("native run RPC authenticates, signals, replays and interrupts without persisting credentials", () => Effect.runPromise(Effect.scoped(Effect.gen(function* () {

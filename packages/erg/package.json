@@ -1,17 +1,17 @@
 {
-  "name": "tardie",
+  "name": "@erg/sdk",
   "version": "0.0.1",
   "license": "MIT",
   "author": "Clavia, Inc.",
-  "description": "Actor, agent, client, and host APIs for Tardigrade.",
-  "homepage": "https://github.com/clavia-labs/tardigrade#readme",
+  "description": "Actor, agent, client, and host APIs for Erg.",
+  "homepage": "https://github.com/Yorizel/tardigrade#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/clavia-labs/tardigrade.git",
-    "directory": "packages/tardie"
+    "url": "git+https://github.com/Yorizel/tardigrade.git",
+    "directory": "packages/erg"
   },
   "bugs": {
-    "url": "https://github.com/clavia-labs/tardigrade/issues"
+    "url": "https://github.com/Yorizel/tardigrade/issues"
   },
   "publishConfig": {
     "access": "public"
@@ -35,8 +35,8 @@
     "./platform/testing/scene": "./src/generated/platform/testing/scene.ts"
   },
   "dependencies": {
-    "@clavia/tardigrade-domain": "workspace:*",
-    "@clavia/tardigrade-platform": "workspace:*"
+    "@erg/domain": "workspace:*",
+    "@erg/platform": "workspace:*"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

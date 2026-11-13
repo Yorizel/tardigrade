@@ -2,9 +2,9 @@ import { Config, Effect, Layer, Option, Redacted, Schema } from "effect"
 import { Headers } from "effect/http"
 import { Rpc, RpcGroup, RpcMiddleware } from "effect/rpc"
 import { Workflow, WorkflowProxy, WorkflowProxyServer } from "effect/workflow"
-import { ExecuteDelegation } from "@clavia/tardigrade-domain/Delegation/ExecuteDelegation.saga"
-import { ExecuteBackgroundDelegation, RunBackgroundDelegation } from "@clavia/tardigrade-domain/Delegation/RunBackgroundDelegation.saga"
-import { delegationExecutionKey, delegationKey } from "@clavia/tardigrade-domain/Delegation/Delegation.schemas"
+import { ExecuteDelegation } from "@erg/domain/Delegation/ExecuteDelegation.saga"
+import { ExecuteBackgroundDelegation, RunBackgroundDelegation } from "@erg/domain/Delegation/RunBackgroundDelegation.saga"
+import { delegationExecutionKey, delegationKey } from "@erg/domain/Delegation/Delegation.schemas"
 
 class DelegationControlUnauthorized extends Schema.TaggedError<DelegationControlUnauthorized, { readonly brand: unique symbol }>()(
   "DelegationControlUnauthorized", {}, { httpApiStatus: 401 },

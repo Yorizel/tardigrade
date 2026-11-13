@@ -13,12 +13,12 @@ export const syncPublicExports = Effect.fn("publication.syncPublicExports")(func
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const root = yield* path.fromFileUrl(new URL("../", import.meta.url))
-  const manifestPath = path.join(root, "packages/tardie/package.json")
+  const manifestPath = path.join(root, "packages/erg/package.json")
   const manifestText = yield* fs.readFileString(manifestPath)
   const manifest = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json)))(manifestText)
   const current = yield* Schema.decodeUnknownEffect(Schema.Struct({ exports: Schema.Record(Schema.String, Schema.String), dependencies: Schema.Record(Schema.String, Schema.String) }))(manifest)
   const dependencies = new Set<string>()
-  if (!check) yield* fs.remove(path.join(root, "packages/tardie/src/generated"), { recursive: true, force: true })
+  if (!check) yield* fs.remove(path.join(root, "packages/erg/src/generated"), { recursive: true, force: true })
   for (const [key, target] of Rec.toEntries(publicExports)) {
     if (key === "./package.json") continue
     const found = Arr.findFirst(publishSources, source => Str.startsWith(`./src/${source.namespace}/`)(target))
@@ -26,7 +26,7 @@ export const syncPublicExports = Effect.fn("publication.syncPublicExports")(func
     const source = found.value
     const facade = workspaceExports[key]
     if (facade === undefined) return yield* PublicExportsRejected.make({ reason: `Missing facade path for ${key}` })
-    const file = path.join(root, "packages/tardie", facade)
+    const file = path.join(root, "packages/erg", facade)
     const module = Str.slice(`./src/${source.namespace}/`.length)(target)
     if (!("exports" in source.pkg)) return yield* PublicExportsRejected.make({ reason: `Publication source ${source.pkg.name} has no exports for ${target}` })
     const exports: Readonly<Record<string, string | null>> = source.pkg.exports

@@ -1,5 +1,5 @@
 import { Worker } from "node:worker_threads"
-import { CodeEvaluation, CodeEvaluationResult, CodeEvaluationStarted, CodeEvaluationWorker, CodeRuntime, CodeRuntimeRejected } from "@clavia/tardigrade-domain/Code/CodeRuntime.external"
+import { CodeEvaluation, CodeEvaluationResult, CodeEvaluationStarted, CodeEvaluationWorker, CodeRuntime, CodeRuntimeRejected } from "@erg/domain/Code/CodeRuntime.external"
 import { Clock, Deferred, Effect, Schema } from "effect"
 import { codeWorkerUrl } from "./code-runtime-worker"
 

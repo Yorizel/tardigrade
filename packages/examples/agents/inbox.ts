@@ -1,6 +1,6 @@
 import * as Domain from "@alchemy.run/domain"
 import { Array as Arr, Effect, Option, Schema } from "effect"
-import { CurrentCaller, ReceiptOwnerGuard, Session } from "@clavia/tardigrade-domain"
+import { CurrentCaller, ReceiptOwnerGuard, Session } from "@erg/domain"
 
 const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0))
 

@@ -8,14 +8,14 @@ sectionOrder: 1
 order: 1
 ---
 
-Tardigrade is a TypeScript framework for durable agents built on Alchemy Domain and Effect. Domain aggregates own business decisions, events and state; native Effect Workflows, Activities and Cluster run durable work. The current native implementation includes Domain APIs, a Cluster agent runner and an interpreter adapter. The target architecture applies Elm ideas to explicit messages and commands without introducing a second owner for domain state. See [Architecture](/docs/architecture) for the boundary and testing direction.
+Erg is a TypeScript framework for durable agents built on Alchemy Domain and Effect. Domain aggregates own business decisions, events and state; native Effect Workflows, Activities and Cluster run durable work. The current native implementation includes Domain APIs, a Cluster agent runner and an interpreter adapter. The target architecture applies Elm ideas to explicit messages and commands without introducing a second owner for domain state. See [Architecture](/docs/architecture) for the boundary and testing direction.
 
-## Run Tardigrade
+## Run Erg
 
 Create the non-AI Counter example:
 
 ```sh
-tdg init counter --template quickstart
+erg init counter --template quickstart
 cd counter
 cp .env.example .env
 ```
@@ -50,4 +50,4 @@ Keep the stack's `.alchemy` state between deployments. Local HTTP fixtures and t
 
 ## AI agents
 
-`tdg init assistant` generates the native Domain and Cluster agent stack. Configure its native provider Layer and required settings, then run the state server and runner as described in the [Alchemy guide](/docs/platforms/alchemy).
+`erg init assistant` generates the native Domain and Cluster agent stack. Configure its native provider Layer and required settings, then run the state server and runner as described in the [Alchemy guide](/docs/platforms/alchemy).

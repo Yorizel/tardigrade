@@ -1,5 +1,5 @@
 import { Array as Arr, Function as Fn } from "effect"
-import { PackageCatalog } from "@clavia/tardigrade-domain/Code/Code.schemas"
+import { PackageCatalog } from "@erg/domain/Code/Code.schemas"
 import { initial, update, type Input, type Model, type Outcome, type Request } from "../codemode/core"
 
 function createStory(input: Input, catalog: typeof PackageCatalog.Type) {

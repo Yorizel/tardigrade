@@ -7,7 +7,7 @@ sectionOrder: 1
 order: 2
 ---
 
-Tardigrade is moving toward a headless framework inspired by Elm and [Foldkit](https://foldkit.dev/). Foldkit's [source and testing examples](https://github.com/foldkit/foldkit) inform the design; it is inspiration, not a dependency or wrapper.
+Erg is moving toward a headless framework inspired by Elm and [Foldkit](https://foldkit.dev/). Foldkit's [source and testing examples](https://github.com/foldkit/foldkit) inform the design; it is inspiration, not a dependency or wrapper.
 
 ## State and execution
 
@@ -17,4 +17,4 @@ Code Mode uses a project-owned interpreter inspired by OpenCode, with explicit t
 
 ## Testing direction
 
-A Story starts the interpreter model, inspects pending requests, and explicitly settles or fails them through Messages. It rejects unhandled requests and requires synchronous assertions. A Scene exercises the interpreter's real Effect execution with controlled tools and observes requests, responses and failures. Its scoped cancellation tests check resource finalization. Use `tardie/platform/testing/story` and `tardie/platform/testing/scene` for the native testing entrypoints. Their tests live in `packages/platform/__tests__/testing`. Agent protocol scenes and durable recovery scenarios remain to be integrated; the current harness does not establish browser behavior or durable replay.
+A Story starts the interpreter model, inspects pending requests, and explicitly settles or fails them through Messages. It rejects unhandled requests and requires synchronous assertions. A Scene exercises the interpreter's real Effect execution with controlled tools and observes requests, responses and failures. Its scoped cancellation tests check resource finalization. Use `@erg/sdk/platform/testing/story` and `@erg/sdk/platform/testing/scene` for the native testing entrypoints. Their tests live in `packages/platform/__tests__/testing`. Agent protocol scenes and durable recovery scenarios remain to be integrated; the current harness does not establish browser behavior or durable replay.

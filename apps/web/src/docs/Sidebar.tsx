@@ -68,9 +68,9 @@ export const Sidebar = ({ current }: { readonly current: Doc }): ReactElement =>
     return <a key={hash} href={`#${hash}`} data-depth={level.length} aria-current={activeSection === hash ? "location" : undefined} onClick={selectSection}>{Str.replace(/[`~*_]/g, "")(title)}</a>
   }) : []
   return <aside className="guide-sidebar" data-open={open}>
-    <div className="docs-sidebar-brand"><Link to="/" className="brand" aria-label="Tardigrade introduction"><span>Tardigrade</span></Link><button className="docs-menu-toggle" type="button" aria-label={open ? "Close navigation" : "Open navigation"} aria-expanded={open} aria-controls="docs-navigation" onClick={toggleNavigation}>{open ? <X /> : <List />}</button></div>
+    <div className="docs-sidebar-brand"><Link to="/" className="brand" aria-label="Erg introduction"><span>Erg</span></Link><button className="docs-menu-toggle" type="button" aria-label={open ? "Close navigation" : "Open navigation"} aria-expanded={open} aria-controls="docs-navigation" onClick={toggleNavigation}>{open ? <X /> : <List />}</button></div>
     <div className="docs-sidebar-tools">
-      <a href="https://github.com/clavia-labs/tardigrade" target="_blank" rel="noreferrer" aria-label="GitHub" title="GitHub"><GithubLogo aria-hidden="true" /></a>
+      <a href="https://github.com/Yorizel/tardigrade" target="_blank" rel="noreferrer" aria-label="GitHub" title="GitHub"><GithubLogo aria-hidden="true" /></a>
       <Link to="/notes" aria-label="Field notes" title="Field notes"><Notebook aria-hidden="true" /></Link>
       <ThemeToggle />
     </div>
@@ -83,9 +83,9 @@ export const Sidebar = ({ current }: { readonly current: Doc }): ReactElement =>
         <Link to="/" className="docs-introduction-title" aria-current={current.frontmatter.route === DEFAULT_DOC_ROUTE ? "page" : undefined}>Introduction</Link>
         {current.frontmatter.route === DEFAULT_DOC_ROUTE && <div className="docs-introduction-outline">
           <a href="#how-it-works" aria-current={activeSection === "how-it-works" ? "location" : undefined} onClick={selectSection}>How it works</a>
-          <a href="#why-tardigrade" aria-current={activeSection === "why-tardigrade" ? "location" : undefined} onClick={selectSection}>Why Tardigrade?</a>
-          <a href="#use-tardigrade" aria-current={activeSection === "use-tardigrade" ? "location" : undefined} onClick={selectSection}>Use Tardigrade</a>
-          <a href="#run-tardigrade" aria-current={activeSection === "run-tardigrade" ? "location" : undefined} onClick={selectSection}>Run Tardigrade</a>
+          <a href="#why-tardigrade" aria-current={activeSection === "why-tardigrade" ? "location" : undefined} onClick={selectSection}>Why Erg?</a>
+          <a href="#use-tardigrade" aria-current={activeSection === "use-tardigrade" ? "location" : undefined} onClick={selectSection}>Use Erg</a>
+          <a href="#run-tardigrade" aria-current={activeSection === "run-tardigrade" ? "location" : undefined} onClick={selectSection}>Run Erg</a>
           <a href="#explore" aria-current={activeSection === "explore" ? "location" : undefined} onClick={selectSection}>Explore</a>
         </div>}
         {Arr.map(Arr.filter(pages, page => page.frontmatter.route !== DEFAULT_DOC_ROUTE), page => <DocLink key={page.frontmatter.route} doc={page} current={current} className="docs-nav-section" onClick={closeNavigation} />)}
@@ -94,7 +94,7 @@ export const Sidebar = ({ current }: { readonly current: Doc }): ReactElement =>
         {current.frontmatter.section === section && section !== "Notes" && pages.length === 1 && sectionLinks.length > 0 && <div className="docs-group-outline">{sectionLinks}</div>}
         {current.frontmatter.section === section && section !== "Notes" && pages.length > 1 && <div className="docs-group-outline">{Arr.map(Arr.filter(pages, page => page.frontmatter.route !== "/docs/verifying-actors"), page => <div className="docs-nav-page" key={page.frontmatter.route}><DocLink doc={page} current={current} onClick={closeNavigation}>{page.frontmatter.title}{page.frontmatter.deprecated === true ? <span className="guide-deprecated">Deprecated</span> : null}</DocLink>{page === current && section !== "Concepts" && <div className="docs-page-outline">{sectionLinks}</div>}</div>)}</div>}
       </div>)}
-      {!note && <div className="docs-nav-group"><a className="docs-nav-section" href="https://github.com/clavia-labs/tardigrade" target="_blank" rel="noreferrer" onClick={closeNavigation}>GitHub</a></div>}
+      {!note && <div className="docs-nav-group"><a className="docs-nav-section" href="https://github.com/Yorizel/tardigrade" target="_blank" rel="noreferrer" onClick={closeNavigation}>GitHub</a></div>}
     </nav>
 
   </aside>

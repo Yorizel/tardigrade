@@ -1,5 +1,5 @@
 {
-  "name": "@clavia/tardigrade-platform",
+  "name": "@erg/platform",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -11,7 +11,7 @@
     "./testing/scene": "./src/testing/scene.ts"
   },
   "dependencies": {
-    "@clavia/tardigrade-domain": "workspace:*",
+    "@erg/domain": "workspace:*",
     "@effect/platform-bun": "4.1.2",
     "@effect/sql-sqlite-bun": "4.1.2",
     "acorn": "8.15.0",

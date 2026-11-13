@@ -1,10 +1,10 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignoreDependencies": [
-    "@clavia/tardigrade-ui"
+    "@erg/ui"
   ],
   "workspaces": {
-    "packages/tardie": {
+    "packages/erg": {
       "entry": [
         "src/generated/**/*.ts!",
         "__tests__/**/*.test.ts"

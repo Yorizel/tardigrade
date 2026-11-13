@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  PUBLISHED_PACKAGE: tardie
+  PUBLISHED_PACKAGE: "@erg/sdk"
   RC_TYPE: rc
   RC_NPM_TAG: next
   RELEASE_PR_AUTHOR: github-actions[bot]
@@ -154,7 +154,7 @@ jobs:
         env:
           STABLE_TREE: ${{ steps.stable-tree.outputs.sha }}
         run: |
-          candidate_tree=$(npm view "${PUBLISHED_PACKAGE}@${RC_NPM_TAG}" tardigrade.sourceTree)
+          candidate_tree=$(npm view "${PUBLISHED_PACKAGE}@${RC_NPM_TAG}" erg.sourceTree)
           if [ "$candidate_tree" != "$STABLE_TREE" ]; then
             echo "::error::npm ${RC_NPM_TAG} was built from ${candidate_tree:-no recorded tree}; stable is ${STABLE_TREE}."
             exit 1

@@ -1,18 +1,18 @@
-import { ForkRejected, ForkRequest, ForkResult } from "@clavia/tardigrade-domain/Fork/Fork.schemas"
-import { ModelChoice } from "@clavia/tardigrade-domain/Execution/Model.schemas"
+import { ForkRejected, ForkRequest, ForkResult } from "@erg/domain/Fork/Fork.schemas"
+import { ModelChoice } from "@erg/domain/Execution/Model.schemas"
 import * as Domain from "@alchemy.run/domain"
 import { toCli } from "@alchemy.run/domain/Cli"
 import { Envelope } from "@alchemy.run/domain/Aggregate"
-import { ActorApi } from "@clavia/tardigrade-domain/Actor.api"
-import { Thread } from "@clavia/tardigrade-domain/Thread/Thread.aggregate"
-import { DEFAULT_RUN_LIMITS, RunLimits } from "@clavia/tardigrade-domain/Thread/Thread.schemas"
+import { ActorApi } from "@erg/domain/Actor.api"
+import { Thread } from "@erg/domain/Thread/Thread.aggregate"
+import { DEFAULT_RUN_LIMITS, RunLimits } from "@erg/domain/Thread/Thread.schemas"
 import { stripVTControlCharacters } from "node:util"
 import { Config, Console, Effect, Layer, Option, Redacted, Schema, Stdio, Stream, String as Str } from "effect"
 import { Prompt as AiPrompt } from "effect/ai"
 import { Argument, Command, Flag, Prompt } from "effect/cli"
 import { Digest, SecureRandom } from "effect/crypto"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http"
-import { OutputDeclaration } from "@clavia/tardigrade-domain/Output/Output.schemas"
+import { OutputDeclaration } from "@erg/domain/Output/Output.schemas"
 import { sendMessage, ChatRejected } from "./chat"
 import { init } from "./init"
 
@@ -85,7 +85,7 @@ const initializer = Command.make("init", {
   template: Flag.Literals("template", ["alchemy", "quickstart"]).pipe(Flag.withDefault("alchemy")),
 }, options => init(options.name, options.template).pipe(Effect.flatMap(directory => Console.log(`Created ${directory}`))))
 
-export const cli = Command.make("tdg", {
+export const cli = Command.make("erg", {
   thread,
   actor: Flag.String("actor").pipe(Flag.optional, Flag.withDescription("Configured runner actor for a new thread; otherwise TARDIGRADE_ACTOR is required.")),
   instance: Flag.String("instance").pipe(Flag.withDefault("cli"), Flag.withDescription("Native actor instance for a new thread.")),

@@ -17,10 +17,10 @@ export const DocsPage = ({ pathname }: { readonly pathname: string }): ReactElem
         {introduction ? null : <div className="guide-heading"><div><h1>{frontmatter.title}</h1>{frontmatter.hideDescription === true ? null : <p className="guide-intro">{frontmatter.description}</p>}</div></div>}
         <MDXProvider components={mdxComponents}><Content /></MDXProvider>
         {introduction ? <footer className="introduction-footer">
-          <p>Tardigrade is <a href="https://github.com/clavia-labs/tardigrade" target="_blank" rel="noreferrer">open source</a> under the <a href="https://github.com/clavia-labs/tardigrade/blob/main/LICENSE" target="_blank" rel="noreferrer">MIT license</a>.</p>
+          <p>Erg is <a href="https://github.com/Yorizel/tardigrade" target="_blank" rel="noreferrer">open source</a> under the <a href="https://github.com/Yorizel/tardigrade/blob/main/LICENSE" target="_blank" rel="noreferrer">MIT license</a>.</p>
           <a className="introduction-credit" href="https://github.com/clavia-labs" target="_blank" rel="noreferrer"><span>by</span> Clavia Labs</a>
           <p className="introduction-layout-credit">Website design and layout inspired by <a href="https://pele.run/" target="_blank" rel="noreferrer">pele.run</a> by <a href="https://stephango.com/" target="_blank" rel="noreferrer">kepano</a>.</p>
-        </footer> : <div className="docs-page-footer"><a href={`https://github.com/clavia-labs/tardigrade/blob/main/docs/${doc.source}`} target="_blank" rel="noreferrer">Edit this page <ArrowUpRight aria-hidden="true" /></a></div>}
+        </footer> : <div className="docs-page-footer"><a href={`https://github.com/Yorizel/tardigrade/blob/main/docs/${doc.source}`} target="_blank" rel="noreferrer">Edit this page <ArrowUpRight aria-hidden="true" /></a></div>}
       </article>
     </div>
   </main>

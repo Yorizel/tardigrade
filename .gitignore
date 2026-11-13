@@ -46,7 +46,7 @@ artifacts.sqlite*
 .obsidian/
 
 # Workspace public facade, generated from tools/public-exports.json on install
-packages/tardie/src/generated/
+packages/erg/src/generated/
 
 # Local experiment reports
 .experiments/

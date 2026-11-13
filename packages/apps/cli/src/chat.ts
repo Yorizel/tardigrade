@@ -1,5 +1,5 @@
-import { ActorApi } from "@clavia/tardigrade-domain/Actor.api"
-import type { RunRequest, ThreadId } from "@clavia/tardigrade-domain/Thread/Thread.schemas"
+import { ActorApi } from "@erg/domain/Actor.api"
+import type { RunRequest, ThreadId } from "@erg/domain/Thread/Thread.schemas"
 import { Array as Arr, Effect, Option, Schema, Stream } from "effect"
 import type { Headers } from "effect/http"
 

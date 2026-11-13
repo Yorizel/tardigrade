@@ -1,5 +1,5 @@
 import { isMainThread, parentPort, workerData } from "node:worker_threads"
-import { CodeEvaluation, CodeEvaluationResult, CodeEvaluationWorker, CodeRuntimeRejected } from "@clavia/tardigrade-domain/Code/CodeRuntime.external"
+import { CodeEvaluation, CodeEvaluationResult, CodeEvaluationWorker, CodeRuntimeRejected } from "@erg/domain/Code/CodeRuntime.external"
 import { Array as Arr, Clock, Effect, Record as Rec, Schema } from "effect"
 import { initial, update } from "../codemode/core"
 

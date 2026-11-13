@@ -128,7 +128,7 @@ Declare the tool contract using Tardigrade's `defineLibrary`:
 ```ts highlight="3,5,10,19,24"
 import { Schema } from "effect"
 import { Rpc } from "effect/rpc"
-import { defineLibrary, MethodDescription } from "tardie/libraries"
+import { defineLibrary, MethodDescription } from "@erg/sdk/libraries"
 
 export const storageContract = defineLibrary({
   name: "storage",
@@ -211,7 +211,7 @@ In Effect, the recipes we use to project our typed program into the world is cal
 
 ```ts highlight="4,5,6,9,13,17"
 import { Layer } from "effect"
-import { toolActs } from "tardie/agent/services"
+import { toolActs } from "@erg/sdk/agent/services"
 import { storage } from "./services/workspace"
 import { memoryWorkspace } from "./services/workspace-memory"
 import { sqliteWorkspace } from "./services/workspace-sqlite"
@@ -238,9 +238,9 @@ In Tardigrade, that capability is the `Model` service. `dummyInference` is a lay
 
 ```ts highlight="7,8,11,15,20"
 import { Effect, Layer } from "effect"
-import { Model, modelActs } from "tardie/agent/services"
-import { actorContext } from "tardie/agent"
-import { createBunHost } from "tardie/platform/bun"
+import { Model, modelActs } from "@erg/sdk/agent/services"
+import { actorContext } from "@erg/sdk/agent"
+import { createBunHost } from "@erg/sdk/platform/bun"
 import { agent } from "./agent"
 
 const dummyInference = Layer.succeed(Model, {

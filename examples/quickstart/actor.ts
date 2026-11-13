@@ -1,5 +1,5 @@
 import * as Domain from "@alchemy.run/domain"
-import { CurrentCaller, ReceiptOwnerGuard, Session } from "tardie/domain"
+import { CurrentCaller, ReceiptOwnerGuard, Session } from "@erg/sdk/domain"
 import { Effect, Schema } from "effect"
 import { Activity, Workflow, WorkflowEngine } from "effect/workflow"
 

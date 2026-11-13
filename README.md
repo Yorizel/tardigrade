@@ -1,10 +1,10 @@
-# Tardigrade
+# Erg
 
 An experimental headless agent framework built with Alchemy Domain and Effect, inspired by Elm's Model, Message and update architecture and Foldkit's Story and Scene testing.
 
 Domain owns business decisions, events and durable state. Native Effect Workflows, Activities and Cluster own execution and recovery. Authentication, owner isolation, tool grants, approvals and uncertain outcomes remain enforced at their execution boundaries.
 
-This fork defines a new framework without compatibility with the original Tardigrade APIs or templates. Its Code execution adapter uses the project-owned interpreter and pure Model/Message/update transitions. The interpreter, its production integration and Story/Scene testing remain experimental.
+Erg is derived from [Tardigrade](https://github.com/clavia-labs/tardigrade) and exposes its native Alchemy Domain and Effect APIs and templates. Its Code execution adapter uses the project-owned interpreter and pure Model/Message/update transitions. The interpreter, its production integration and Story/Scene testing remain experimental.
 
 ## Native projects
 
@@ -12,13 +12,15 @@ The native CLI provides Alchemy agent and Counter templates:
 
 ```sh
 bun install
-bun run tdg init my-agent --template alchemy
-bun run tdg init my-counter --template quickstart
+bun run erg init my-agent --template alchemy
+bun run erg init my-counter --template quickstart
 ```
 
 The Alchemy template includes a Domain server, a separate Effect Cluster runner, native model configuration and an authenticated client. The Counter template demonstrates commands, owner-scoped reads and an Effect workflow without model credentials. Copy the generated `.env.example` to `.env` and configure its required values before running the project.
 
-Use an artifact built from this fork for the generated project's `tardie` dependency. A registry installation does not select an unpublished fork. The installed-package test packs this checkout, installs its `tdg` executable, generates both templates and typechecks the installed projects.
+The workspace packages are `@erg/domain` and `@erg/platform`. The published SDK is `@erg/sdk` and provides the `erg` executable.
+
+Use an artifact built from this fork for the generated project's `@erg/sdk` dependency. A registry installation does not select an unpublished fork. The installed-package test packs this checkout, installs its `erg` executable, generates both templates and typechecks the installed projects.
 
 ```sh
 cd my-counter

@@ -5,7 +5,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { publishDependencies, publishSources, validatePublishImports } from "../publish-manifest"
 
 class TestCommandRejected extends Schema.TaggedError<TestCommandRejected, { readonly brand: unique symbol }>()("TestCommandRejected", { reason: Schema.String }) {}
-const RootManifest = Schema.Struct({ version: Schema.String, bin: Schema.Record(Schema.String, Schema.String), exports: Schema.Record(Schema.String, Schema.String), dependencies: Schema.Record(Schema.String, Schema.String) })
+const RootManifest = Schema.Struct({ name: Schema.String, version: Schema.String, bin: Schema.Record(Schema.String, Schema.String), exports: Schema.Record(Schema.String, Schema.String), dependencies: Schema.Record(Schema.String, Schema.String) })
 const GeneratedManifest = Schema.Record(Schema.String, Schema.Json)
 
 const execute = Effect.fn("PublicationTest.execute")(function* (command: string, args: ReadonlyArray<string>, cwd: string, env: Readonly<Record<string, string>> = {}) {
@@ -39,7 +39,8 @@ test("native tarball installs its CLI and initializes typechecked projects", () 
   expect(files).toContain("package/src/domain/Thread/Thread.commands.ts")
   const manifestText = yield* successful("tar", ["-xOf", tarball, "package/package.json"], root)
   const manifest = yield* Schema.decodeEffect(Schema.fromJsonString(RootManifest))(manifestText)
-  expect(manifest.bin).toEqual({ tdg: "./src/cli/main.ts" })
+  expect(manifest.name).toBe("@erg/sdk")
+  expect(manifest.bin).toEqual({ erg: "./src/cli/main.ts" })
   expect(Arr.sort(Rec.keys(manifest.exports), Order.String)).toEqual(Arr.sort(["./domain", "./domain/agents-result", "./package.json", "./platform/alchemy", "./platform/cluster", "./platform/codemode", "./platform/testing/story", "./platform/testing/scene"], Order.String))
   expect(manifest.dependencies).toEqual(publishDependencies(Arr.map(publishSources, source => source.pkg)).dependencies)
   yield* successful("tar", ["-xzf", tarball, "-C", output], root)
@@ -48,11 +49,12 @@ test("native tarball installs its CLI and initializes typechecked projects", () 
   for (const file of sources) {
     const content = yield* fs.readFileString(path.resolve(sourceRoot, file))
     expect(content).not.toContain("@clavia/")
+    expect(content).not.toMatch(/@erg\/(?:domain|platform|cli)(?:[/"'])/)
   }
-  const hostJson = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))({ private: true, type: "module", dependencies: { tardie: `file:${tarball}` } })
+  const hostJson = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))({ private: true, type: "module", dependencies: { "@erg/sdk": `file:${tarball}` } })
   yield* fs.writeFileString(path.join(output, "package.json"), hostJson)
   yield* successful("bun", ["install"], output)
-  const bin = path.join(output, "node_modules/.bin/tdg")
+  const bin = path.join(output, "node_modules/.bin/erg")
   const version = yield* successful(bin, ["--version"], output)
   expect(version).toContain(manifest.version)
   yield* Effect.scoped(Effect.gen(function* () {
@@ -75,7 +77,7 @@ test("native tarball installs its CLI and initializes typechecked projects", () 
     const generatedText = yield* fs.readFileString(path.join(project, "package.json"))
     const generated = yield* Schema.decodeEffect(Schema.fromJsonString(GeneratedManifest))(generatedText)
     const projectDependencies = yield* Schema.decodeUnknownEffect(Schema.Record(Schema.String, Schema.String))(generated.dependencies)
-    const projectJson = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))({ ...generated, dependencies: { ...projectDependencies, tardie: `file:${tarball}` }, devDependencies: { typescript: "7.0.2", "@types/bun": "^1.3.4", "@cloudflare/workers-types": "5.20261102.1" } })
+    const projectJson = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))({ ...generated, dependencies: { ...projectDependencies, "@erg/sdk": `file:${tarball}` }, devDependencies: { typescript: "7.0.2", "@types/bun": "^1.3.4", "@cloudflare/workers-types": "5.20261102.1" } })
     yield* fs.writeFileString(path.join(project, "package.json"), projectJson)
     const config = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))({ compilerOptions: { target: "ESNext", module: "ESNext", moduleResolution: "Bundler", strict: true, skipLibCheck: true, noEmit: true, types: ["bun", "@cloudflare/workers-types"] }, include: ["*.ts"] })
     yield* fs.writeFileString(path.join(project, "tsconfig.json"), config)

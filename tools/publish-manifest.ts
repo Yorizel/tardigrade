@@ -1,6 +1,6 @@
 import { Array as Arr, Order, Record as Rec, String as Str } from "effect"
 import { dual } from "effect/Function"
-import facade from "../packages/tardie/package.json"
+import facade from "../packages/erg/package.json"
 import platform from "../packages/platform/package.json"
 import domain from "../packages/domain/package.json"
 import nativeCli from "../packages/apps/cli/package.json"
@@ -17,7 +17,7 @@ export const publishSources = [
   { dir: "packages/apps/cli", namespace: "cli", pkg: nativeCli },
   { dir: "packages/domain", namespace: "domain", pkg: domain },
   { dir: "packages/platform", namespace: "platform", pkg: platform },
-  { dir: "packages/tardie", namespace: "tardie", pkg: facade },
+  { dir: "packages/erg", namespace: "erg", pkg: facade },
 ] as const
 
 export const REQUIRED_PUBLISH_DEPENDENCIES = [

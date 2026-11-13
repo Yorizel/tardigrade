@@ -1,5 +1,5 @@
 import { parse, tokenizer, type AnyNode, type ArrowFunctionExpression, type FunctionExpression, type CallExpression, type Program } from "acorn"
-import { CodeInput, CodeLimits, CodeSettlementSequence, DEFAULT_CODE_LIMITS, HostCallInput, MAX_CODE_DEPTH, PackageCatalog } from "@clavia/tardigrade-domain/Code/Code.schemas"
+import { CodeInput, CodeLimits, CodeSettlementSequence, DEFAULT_CODE_LIMITS, HostCallInput, MAX_CODE_DEPTH, PackageCatalog } from "@erg/domain/Code/Code.schemas"
 import { Array as Arr, Cause, Clock, Effect, Function as Fn, Option, Queue, Record as Rec, Result as EffectResult, Schema, Scope, String as Str } from "effect"
 
 export const maxGuestDepth = MAX_CODE_DEPTH

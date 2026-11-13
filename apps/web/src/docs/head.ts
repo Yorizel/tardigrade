@@ -5,12 +5,12 @@ export const docHead = (pathname: string) => {
   if (doc === undefined) return {}
   const { title, description, route, socialImage, socialImageAlt } = doc.frontmatter
   return { meta: [
-    { title: `${title} | Tardigrade` },
+    { title: `${title} | Erg` },
     { name: "description", content: description },
-    { property: "og:title", content: `${title} | Tardigrade` },
+    { property: "og:title", content: `${title} | Erg` },
     { property: "og:description", content: description },
     { property: "og:url", content: `https://tardigrade.sh${route}` },
-    { name: "twitter:title", content: `${title} | Tardigrade` },
+    { name: "twitter:title", content: `${title} | Erg` },
     { name: "twitter:description", content: description },
     ...(socialImage === undefined ? [] : [
       { property: "og:image", content: new URL(socialImage, "https://tardigrade.sh").href },

@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test"
-import { ActorApi, ActorModel } from "tardie/domain"
-import { AgentsResult } from "tardie/domain/agents-result"
-import { SessionLive } from "tardie/platform/alchemy"
-import { LocalClusterWorkflowLive } from "tardie/platform/cluster"
-import { Budgets, defaultBudgets } from "tardie/platform/codemode"
-import { story } from "tardie/platform/testing/story"
-import { scene } from "tardie/platform/testing/scene"
+import { ActorApi, ActorModel } from "@erg/sdk/domain"
+import { AgentsResult } from "@erg/sdk/domain/agents-result"
+import { SessionLive } from "@erg/sdk/platform/alchemy"
+import { LocalClusterWorkflowLive } from "@erg/sdk/platform/cluster"
+import { Budgets, defaultBudgets } from "@erg/sdk/platform/codemode"
+import { story } from "@erg/sdk/platform/testing/story"
+import { scene } from "@erg/sdk/platform/testing/scene"
 import { Effect, Schema } from "effect"
 
 test("native public entrypoints expose their owned contracts", () => {
@@ -18,7 +18,7 @@ test("native public entrypoints expose their owned contracts", () => {
 })
 
 test("legacy entrypoints are not public", () => {
-  for (const path of ["tardie/core", "tardie/agent", "tardie/deprecated", "tardie/platform/bun", "tardie/platform/cloudflare"]) {
+  for (const path of ["@erg/sdk/core", "@erg/sdk/agent", "@erg/sdk/deprecated", "@erg/sdk/platform/bun", "@erg/sdk/platform/cloudflare"]) {
     expect(() => import.meta.resolve(path)).toThrow()
   }
 })

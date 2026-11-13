@@ -1,4 +1,4 @@
-import { ModelAccess, ModelChoice, ModelGrant, ModelUnavailable } from "tardie/domain"
+import { ModelAccess, ModelChoice, ModelGrant, ModelUnavailable } from "@erg/sdk/domain"
 import { Array as Arr, Config, Effect, Option, Schema, Struct } from "effect"
 
 const OpenAiGrants = Schema.Array(ModelGrant).check(Schema.makeFilter(models => {

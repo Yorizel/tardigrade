@@ -5,7 +5,7 @@ import { DEFAULT_DOC_CACHE_CONTROL } from "../docs/cache"
 import { docPages } from "../docs/load"
 
 const llmsText = (origin: string): string => Arr.join([
-  "# Tardigrade",
+  "# Erg",
   "",
   "> A TypeScript framework for durable, modular agents built around an immutable event log.",
   "",

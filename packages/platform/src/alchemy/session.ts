@@ -1,6 +1,6 @@
-import { RunReceiptGuardLive } from "@clavia/tardigrade-domain/RunReceiptGuard.middleware"
-import { ReceiptOwnerGuardLive } from "@clavia/tardigrade-domain/ReceiptOwnerGuard.middleware"
-import { CurrentCaller, Session, Unauthorized } from "@clavia/tardigrade-domain/Actor.context"
+import { RunReceiptGuardLive } from "@erg/domain/RunReceiptGuard.middleware"
+import { ReceiptOwnerGuardLive } from "@erg/domain/ReceiptOwnerGuard.middleware"
+import { CurrentCaller, Session, Unauthorized } from "@erg/domain/Actor.context"
 import { Config, Effect, Layer, Option, Redacted, Schema } from "effect"
 import { Headers } from "effect/http"
 

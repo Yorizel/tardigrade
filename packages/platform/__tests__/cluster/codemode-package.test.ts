@@ -6,7 +6,7 @@ import { projectPatchesFrom } from "../../../../tools/publish-paths"
 import { publishDependencies, publishSources } from "../../../../tools/publish-manifest"
 import { defaultBudgets, run } from "../../src/codemode/core"
 
-class Greeting extends Context.Service<Greeting, { readonly prefix: string }>()("@clavia/tardigrade-platform/__tests__/cluster/codemode-package.test/Greeting") {}
+class Greeting extends Context.Service<Greeting, { readonly prefix: string }>()("@erg/platform/__tests__/cluster/codemode-package.test/Greeting") {}
 
 test("native guest tool can use an Effect service", () => Effect.runPromise(Effect.gen(function* () {
   const greet = Effect.fn("CodePackage.greet")(function* () {

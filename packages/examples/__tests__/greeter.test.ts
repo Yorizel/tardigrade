@@ -3,7 +3,7 @@ import { expect, test } from "bun:test"
 import { Cause, ConfigProvider, Context, Deferred, Effect, Exit, Layer, Option, Ref, Result, Schedule } from "effect"
 import { WorkflowEngine } from "effect/workflow"
 import { SessionLive } from "../../platform/src/alchemy/session"
-import { ReceiptOwnerGuardLive } from "@clavia/tardigrade-domain/ReceiptOwnerGuard.middleware"
+import { ReceiptOwnerGuardLive } from "@erg/domain/ReceiptOwnerGuard.middleware"
 import {
   GreetWorkflow,
   GreetWorkflowLive,

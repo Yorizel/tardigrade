@@ -24,7 +24,7 @@ The same workflow can support two commercial paths. An application team can use 
 
 | Build now | Build after the loop works | Separate business bet |
 | --- | --- | --- |
-| Import a Tardigrade trace | Braintrust, OpenTelemetry, and other trace adapters | A marketplace for selling data or environments |
+| Import a Erg trace | Braintrust, OpenTelemetry, and other trace adapters | A marketplace for selling data or environments |
 | Review one trace at a time | Automated trace sampling and triage queues | Revenue sharing and data valuation |
 | Assess success, known failures, and novel failures | Calibrated unattended classification | Passive screen recording for service workers |
 | Interview through chat, voice, and typed question blocks | Slack as an alert and deep-link channel | An inference gateway with customer-specific models |
@@ -56,7 +56,7 @@ A project names the agent or product being reviewed and holds its context, failu
 
 ### 2. Add a source trace
 
-The operator selects a Tardigrade actor and thread or uploads the same event log as JSON. The import records an immutable source reference, a snapshot boundary, and any existing signal such as a thumbs down, correction, support message, or reviewer note. The original trace remains unchanged.
+The operator selects a Erg actor and thread or uploads the same event log as JSON. The import records an immutable source reference, a snapshot boundary, and any existing signal such as a thumbs down, correction, support message, or reviewer note. The original trace remains unchanged.
 
 ### 3. Run the reviewer pass
 
@@ -202,9 +202,9 @@ The reviewer follows these product rules:
 9. Expose incomplete context. Missing, redacted, summarized, or unreadable trace regions appear in the assessment.
 10. Keep source data tenant-scoped. Export or lab sharing requires a separate explicit action and consent model.
 
-## Tardigrade architecture
+## Erg architecture
 
-The prototype uses Tardigrade as both the reviewer harness and its memory model.
+The prototype uses Erg as both the reviewer harness and its memory model.
 
 - `trace-reviewer` is an actor definition. One actor thread represents one review project.
 - `ReviewRequested` records the source trace, immutable snapshot boundary, optional initial signal, and effective review policy.
@@ -235,11 +235,11 @@ Confidence-based escalation has no default threshold in the first build. A proje
 
 ## Thin prototype
 
-The first end-to-end slice uses this repository and native Tardigrade traces. It proves the learning loop with two or more coding-agent traces.
+The first end-to-end slice uses this repository and native Erg traces. It proves the learning loop with two or more coding-agent traces.
 
 The prototype is complete when a user can:
 
-1. Start a review project and select one Tardigrade trace.
+1. Start a review project and select one Erg trace.
 2. Receive a plain-language assessment with cited evidence.
 3. Confirm, correct, or reject the assessment through text or voice.
 4. See the resulting failure mode, positive example, or counterexample in project memory.
@@ -272,7 +272,7 @@ The first qualitative test is whether an expert feels that the reviewer arrived 
 - Which existing signal should rank traces for review after native trace selection: explicit corrections, support reports, thumbs down, or model-detected dissatisfaction?
 - Do typed question blocks collect enough information, or does a later workflow justify safe generated interfaces?
 - How much does voice improve review speed and detail for domain experts?
-- Which judge export target should follow JSON: Tardigrade actor output, OpenEnv, Braintrust, or another eval runner?
+- Which judge export target should follow JSON: Erg actor output, OpenEnv, Braintrust, or another eval runner?
 - How many reviewed examples make a judge dependable for each failure mode? This is an empirical calibration policy rather than a universal constant.
 - Should separate projects share suggested failure-mode templates while keeping all customer evidence isolated?
 

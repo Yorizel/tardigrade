@@ -44,7 +44,7 @@ export const init = Effect.fn("cli.init")(function* (name: string, template: "al
       const sourceFile = template === "quickstart" && file !== "actor.ts" ? `${file}.template` : file
       const source = yield* fs.readFileString(path.join(root, "examples", template, sourceFile))
       const rendered = pipe(source,
-        Str.replace("../../packages/domain/src/Delegation/AgentsResult", "tardie/domain/agents-result"),
+        Str.replace("../../packages/domain/src/Delegation/AgentsResult", "@erg/sdk/domain/agents-result"),
         Str.replace('const actorName = "counter"', `const actorName = "${name}"`),
         Str.replace('"counter",', `"${name}",`),
         Str.replace('"tardigrade",', `"${name}",`),
@@ -59,7 +59,7 @@ export const init = Effect.fn("cli.init")(function* (name: string, template: "al
       yield* fs.copyFile(path.join(root, patch), path.join(destination, patch))
     }
     yield* fs.writeFileString(path.join(destination, ".gitignore"), ".env\n.env.*\n!.env.example\n.alchemy/\nnode_modules/\nrunner.sqlite*\nartifacts.sqlite*\n")
-    const project = { private: true, type: "module", scripts: { dev: "alchemy dev", "dev:cloudflare": "alchemy dev", "dev:memory": "bun --env-file=.env server.ts", ...(template === "alchemy" ? { "dev:runner": "bun --env-file=.env runner.ts" } : {}), "plan:cloudflare": "alchemy plan", "deploy:cloudflare": "alchemy deploy", "destroy:cloudflare": "alchemy destroy", cli: "bun --env-file=.env client.ts" }, dependencies: { ...validatedDependencies, tardie: manifest.version }, patchedDependencies: manifest.patchedDependencies, overrides: manifest.overrides ?? {} }
+    const project = { private: true, type: "module", scripts: { dev: "alchemy dev", "dev:cloudflare": "alchemy dev", "dev:memory": "bun --env-file=.env server.ts", ...(template === "alchemy" ? { "dev:runner": "bun --env-file=.env runner.ts" } : {}), "plan:cloudflare": "alchemy plan", "deploy:cloudflare": "alchemy deploy", "destroy:cloudflare": "alchemy destroy", cli: "bun --env-file=.env client.ts" }, dependencies: { ...validatedDependencies, "@erg/sdk": manifest.version }, patchedDependencies: manifest.patchedDependencies, overrides: manifest.overrides ?? {} }
     const json = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json))(project)
     yield* fs.writeFileString(path.join(destination, "package.json"), `${json}\n`)
     return undefined

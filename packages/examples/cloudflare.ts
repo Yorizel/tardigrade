@@ -1,6 +1,6 @@
 import * as Cloudflare from "@alchemy.run/cloudflare"
 import * as DomainCloudflare from "@alchemy.run/cloudflare/Domain"
-import { SessionLive } from "@clavia/tardigrade-platform/alchemy"
+import { SessionLive } from "@erg/platform/alchemy"
 import { Effect, Layer } from "effect"
 import { InboxApi, InboxModel } from "./agents/inbox"
 

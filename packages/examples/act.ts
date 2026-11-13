@@ -2,8 +2,8 @@ import * as Domain from "@alchemy.run/domain"
 import { BunRuntime } from "@effect/platform-bun"
 import { Config, Console, Effect, Layer, Option, Redacted, Schedule, Schema } from "effect"
 import { WorkflowEngine } from "effect/workflow"
-import { SessionLive } from "@clavia/tardigrade-platform/alchemy"
-import { ReceiptOwnerGuardLive } from "@clavia/tardigrade-domain/ReceiptOwnerGuard.middleware"
+import { SessionLive } from "@erg/platform/alchemy"
+import { ReceiptOwnerGuardLive } from "@erg/domain/ReceiptOwnerGuard.middleware"
 import {
   GreetWorkflow,
   GreetWorkflowLive,

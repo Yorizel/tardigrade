@@ -2,7 +2,7 @@ import type { ReactElement } from "react"
 import { WorldGlobe } from "./artwork/WorldGlobe"
 import { Discord, Github } from "./icons"
 
-const REPOSITORY = "https://github.com/clavia-labs/tardigrade"
+const REPOSITORY = "https://github.com/Yorizel/tardigrade"
 
 const ConsoleScene = (): ReactElement => (
   <div className="console-scene" aria-label="A tardigrade floating above Earth">

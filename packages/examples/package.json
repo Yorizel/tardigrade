@@ -1,5 +1,5 @@
 {
-  "name": "@clavia/tardigrade-examples",
+  "name": "@erg/examples",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -19,8 +19,8 @@
     "alchemy": "2.0.0-beta.85"
   },
   "dependencies": {
-    "@clavia/tardigrade-domain": "workspace:*",
-    "@clavia/tardigrade-platform": "workspace:*",
+    "@erg/domain": "workspace:*",
+    "@erg/platform": "workspace:*",
     "effect": "4.1.2",
     "@alchemy.run/domain": "2.0.0-beta.85",
     "@effect/platform-bun": "4.1.2"

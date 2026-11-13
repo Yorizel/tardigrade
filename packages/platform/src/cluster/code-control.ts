@@ -2,7 +2,7 @@ import { Config, Effect, Layer, Option, Redacted, Schema } from "effect"
 import { Headers } from "effect/http"
 import { Rpc, RpcGroup, RpcMiddleware } from "effect/rpc"
 import { DurableDeferred, Workflow, WorkflowProxy, WorkflowProxyServer } from "effect/workflow"
-import { ExecuteCode, codeApproval, codeExecutionKey } from "@clavia/tardigrade-domain/Code/ExecuteCode.saga"
+import { ExecuteCode, codeApproval, codeExecutionKey } from "@erg/domain/Code/ExecuteCode.saga"
 
 class CodeControlUnauthorized extends Schema.TaggedError<CodeControlUnauthorized, { readonly brand: unique symbol }>()(
   "CodeControlUnauthorized", {}, { httpApiStatus: 401 },

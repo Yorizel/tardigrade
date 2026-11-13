@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
-import { CodeRuntime } from "@clavia/tardigrade-domain/Code/CodeRuntime.external"
-import { DEFAULT_CODE_LIMITS } from "@clavia/tardigrade-domain/Code/Code.schemas"
+import { CodeRuntime } from "@erg/domain/Code/CodeRuntime.external"
+import { DEFAULT_CODE_LIMITS } from "@erg/domain/Code/Code.schemas"
 import { Array as Arr, Effect } from "effect"
 import { CodeRuntimeLive } from "../../src/cluster/code-runtime"
 

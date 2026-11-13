@@ -1,7 +1,7 @@
 import * as Domain from "@alchemy.run/domain"
 import { toCli } from "@alchemy.run/domain/Cli"
 import { BunRuntime, BunServices } from "@effect/platform-bun"
-import { ActorApi } from "tardie/domain"
+import { ActorApi } from "@erg/sdk/domain"
 import { Config, Effect, Layer, Redacted } from "effect"
 import { Command } from "effect/cli"
 import { FetchHttpClient } from "effect/http"

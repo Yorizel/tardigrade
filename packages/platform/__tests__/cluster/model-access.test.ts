@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { ConfigProvider, Effect, Layer, Result } from "effect"
-import { ModelAccess } from "@clavia/tardigrade-domain/Execution/ModelAccess.external"
+import { ModelAccess } from "@erg/domain/Execution/ModelAccess.external"
 import { ModelAccessLive } from "../../../../examples/alchemy/Models"
 
 const settings = {

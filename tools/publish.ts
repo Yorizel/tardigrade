@@ -47,7 +47,7 @@ const rewriteSources = Effect.fn("publication.rewriteSources")(function* (source
     const absolute = path.resolve(sourceRoot, file)
     const original = yield* fs.readFileString(absolute)
     let rewritten = original
-    for (const match of Str.matchAll(/(["'])(@clavia\/[^"']+)\1/g)(original)) {
+    for (const match of Str.matchAll(/(["'])(@erg\/(?:domain|platform|cli)(?:\/[^"']+)?)\1/g)(original)) {
       const [whole, quote, specifier] = match
       if (quote === undefined || specifier === undefined) continue
       const found = Arr.findFirst(publishSources, source => specifier === source.pkg.name || Str.startsWith(`${source.pkg.name}/`)(specifier))
@@ -73,7 +73,7 @@ const rewriteSources = Effect.fn("publication.rewriteSources")(function* (source
       const resolved = Str.startsWith(".")(destination) ? destination : `./${destination}`
       rewritten = Str.replace(whole, `${quote}${resolved}${quote}`)(rewritten)
     }
-    if (Str.includes("@clavia/")(rewritten)) return yield* PublicationRejected.make({ reason: `Unresolved workspace import in ${absolute}` })
+    if (/@erg\/(?:domain|platform|cli)(?:[/"'])/.test(rewritten)) return yield* PublicationRejected.make({ reason: `Unresolved workspace import in ${absolute}` })
     yield* fs.writeFileString(absolute, rewritten)
   }
   return undefined
@@ -116,7 +116,7 @@ const main = Effect.gen(function* () {
     const patch = parts[2] ?? 0
     if (major < 11 || major === 11 && (minor < 5 || minor === 5 && patch < 1)) return yield* PublicationRejected.make({ reason: `trusted publishing needs npm >= 11.5.1; this runner has ${npm}` })
   }
-  const sourceOption = Arr.findFirst(publishSources, source => source.namespace === "tardie")
+  const sourceOption = Arr.findFirst(publishSources, source => source.namespace === "erg")
   if (Option.isNone(sourceOption)) return yield* PublicationRejected.make({ reason: "Missing facade metadata" })
   const source = sourceOption.value
   const dependencies = publishDependencies(Arr.map(publishSources, item => item.pkg))
@@ -133,7 +133,7 @@ const main = Effect.gen(function* () {
   }
   const patches = yield* projectPatchesFrom(new URL("../packages/apps/cli/src/init.ts", import.meta.url).href)
   const requested = option("--output")
-  const destination = requested === undefined ? yield* fs.makeTempDirectoryScoped({ prefix: "tardigrade-pack-" }) : path.resolve(root, requested)
+  const destination = requested === undefined ? yield* fs.makeTempDirectoryScoped({ prefix: "erg-pack-" }) : path.resolve(root, requested)
   yield* fs.makeDirectory(destination, { recursive: true })
   const existing = yield* fs.readDirectory(destination)
   if (existing.length !== 0) return yield* PublicationRejected.make({ reason: `Output directory is not empty: ${destination}. Choose an empty directory.` })
@@ -145,7 +145,7 @@ const main = Effect.gen(function* () {
   yield* stageInitTemplates(root, stage)
   for (const file of ["LICENSE", "THIRD_PARTY_NOTICES.md", "README.md"]) yield* fs.copyFile(path.join(root, file), path.join(stage, file))
   for (const item of publishSources) {
-    if (item.namespace === "tardie") continue
+    if (item.namespace === "erg") continue
     const from = path.join(root, item.dir, "src")
     const files = yield* fs.glob("**/*.ts", { root: from, dot: true })
     for (const file of files) {
@@ -165,8 +165,8 @@ const main = Effect.gen(function* () {
   const publishManifest = {
     name: source.pkg.name, version, license: source.pkg.license, author: source.pkg.author, description: source.pkg.description,
     homepage: source.pkg.homepage, repository, bugs: source.pkg.bugs, publishConfig: source.pkg.publishConfig,
-    ...(sourceTree === undefined ? {} : { tardigrade: { sourceTree } }), files: ["src", "examples", "patches", "THIRD_PARTY_NOTICES.md"],
-    engines: source.pkg.engines, type: "module", bin: { tdg: "./src/cli/main.ts" }, exports: publicExports,
+    ...(sourceTree === undefined ? {} : { erg: { sourceTree } }), files: ["src", "examples", "patches", "THIRD_PARTY_NOTICES.md"],
+    engines: source.pkg.engines, type: "module", bin: { erg: "./src/cli/main.ts" }, exports: publicExports,
     ...dependencies, patchedDependencies: patches.patchedDependencies, overrides: patches.overrides,
   }
   const json = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Json, { space: 2 }))(publishManifest)

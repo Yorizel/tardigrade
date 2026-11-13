@@ -1,8 +1,8 @@
 import { AgentsResult } from "../../packages/domain/src/Delegation/AgentsResult"
 import { OpenAiConfig, OpenAiSchema, OpenAiLanguageModel } from "@effect/ai-openai"
-import { AgentExecution, AgentsRun, ModelAccess, ModelCatalog, ListModels, ChildOutputCatalog, OutputDeclaration, CodeMethods, CodeTool, CodeLimits, DEFAULT_CODE_LIMITS, DelegateTool, DelegationLimits, DEFAULT_DELEGATION_LIMITS, ExecutionRejected, RunScope, SpillStorage, SpillPolicy, DEFAULT_SPILL_POLICY } from "tardie/domain"
+import { AgentExecution, AgentsRun, ModelAccess, ModelCatalog, ListModels, ChildOutputCatalog, OutputDeclaration, CodeMethods, CodeTool, CodeLimits, DEFAULT_CODE_LIMITS, DelegateTool, DelegationLimits, DEFAULT_DELEGATION_LIMITS, ExecutionRejected, RunScope, SpillStorage, SpillPolicy, DEFAULT_SPILL_POLICY } from "@erg/sdk/domain"
 import { Array as Arr, Config, Context, DateTime, Effect, Layer, Option, Record, Result, Schema, Stream, String as Str, Struct } from "effect"
-import { FetchGet, FetchRequest, FetchTools, FetchToolsLive, WriteText, ReadText, ListTexts, WorkspaceTools, invokeWorkspaceTool, ReadSpill, GrepSpills, SpillTools } from "tardie/platform/cluster"
+import { FetchGet, FetchRequest, FetchTools, FetchToolsLive, WriteText, ReadText, ListTexts, WorkspaceTools, invokeWorkspaceTool, ReadSpill, GrepSpills, SpillTools } from "@erg/sdk/platform/cluster"
 import { LanguageModel, Prompt, Tool, Toolkit } from "effect/ai"
 import { HttpClient, HttpClientRequest } from "effect/http"
 

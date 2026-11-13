@@ -19,8 +19,8 @@ const main = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
   const root = `${yield* fs.realPath(fileURLToPath(new URL("../", import.meta.url)))}/`
   const pkg = (name: string) => `${root}packages/${name}`
-  const packages = ["domain", "tardie", "platform", "apps/cli", "examples"]
-  const testedPackages = ["domain", "examples", "tardie"]
+  const packages = ["domain", "erg", "platform", "apps/cli", "examples"]
+  const testedPackages = ["domain", "examples", "erg"]
   const projectGroups = yield* Effect.forEach([...Arr.map(packages, pkg), `${root}apps/web`], directory => fs.glob("tsconfig*.json", { root: directory }).pipe(Effect.map(names => Arr.sort(Arr.map(Arr.filter(names, name => name !== "tsconfig.base.json" && name !== "tsconfig.effect.json"), name => path.join(directory, name)), Order.String))))
   const effectProjects = [`${root}tsconfig.json`, ...projectGroups.flat()]
   const effectTaskId = (project: string): string => {
@@ -36,7 +36,7 @@ const tasks: ReadonlyArray<Task> = [
   { id: "exports", cmd: ["bun", "run", "tools/public-exports.ts", "--check"] },
   { id: "test:publish", cmd: ["bun", "test", "tools/__tests__/publish.test.ts"] },
   { id: "test:publish-paths", cmd: ["bun", "test", "tools/__tests__/publish-paths.test.ts"] },
-  { id: "lint", cmd: ["bun", "run", "lint", "packages/domain", "packages/platform/src/alchemy", "packages/platform/src/cluster", "packages/platform/src/codemode", "packages/platform/src/testing", "packages/platform/__tests__", "packages/apps/cli", "packages/examples", "apps/web", "packages/tardie", "tools", "examples"] },
+  { id: "lint", cmd: ["bun", "run", "lint", "packages/domain", "packages/platform/src/alchemy", "packages/platform/src/cluster", "packages/platform/src/codemode", "packages/platform/src/testing", "packages/platform/__tests__", "packages/apps/cli", "packages/examples", "apps/web", "packages/erg", "tools", "examples"] },
   { id: "lint:docs", cmd: ["bun", "run", "tools/docs-lint.ts"] },
   { id: "test:native-oxlint", cmd: ["bun", "test", "tools/__tests__/native-oxlint-svg.test.ts"] },
   { id: "test:gate", cmd: ["bun", "test", "tools/__tests__/gate.test.ts"] },

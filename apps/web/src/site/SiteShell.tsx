@@ -4,13 +4,13 @@ import { useCallback, useEffect, useRef, useState, type ReactElement, type React
 import { Discord, Github, GuideIcon, Mark, MenuIcon } from "./icons"
 import { ThemeToggle } from "./ThemeToggle"
 
-const REPOSITORY = "https://github.com/clavia-labs/tardigrade"
+const REPOSITORY = "https://github.com/Yorizel/tardigrade"
 const ALCHEMY_ROUTE = { _splat: "platforms/alchemy" }
 
 const SiteFooter = (): ReactElement => (
     <footer className="site-footer">
       <div className="footer-inner">
-        <Link className="footer-brand" to="/" aria-label="Tardigrade home"><Mark /><span>Tardigrade</span></Link>
+        <Link className="footer-brand" to="/" aria-label="Erg home"><Mark /><span>Erg</span></Link>
         <nav className="footer-links" aria-label="Footer navigation">
           <Link to="/docs/$" params={ALCHEMY_ROUTE}><GuideIcon />Alchemy</Link>
           <a href={REPOSITORY} rel="noreferrer" target="_blank"><Github />GitHub</a>
@@ -61,15 +61,15 @@ export const SiteShell = ({ children, pathname }: { readonly children: ReactNode
       <nav className="nav-inner" aria-label="Main navigation">
         <div className="nav-brand-group">
           <div className="nav-brand">
-            <Link className="brand" to="/" aria-label="Tardigrade home"><Mark /><span>Tardigrade</span></Link>
+            <Link className="brand" to="/" aria-label="Erg home"><Mark /><span>Erg</span></Link>
             <span className="brand-version" title="Current release" aria-label="Version 0.44.0">v0.44.0</span>
           </div>
           <Link className="guide-link" to="/docs" aria-current={docs ? "page" : undefined}>Docs</Link>
           <Link className="guide-link notes-link" to="/notes" aria-current={Str.startsWith("/notes")(pathname) ? "page" : undefined}>Notes</Link>
         </div>
         <div className="nav-actions">
-          <a className="github-link" href={REPOSITORY} aria-label="Tardigrade on GitHub" rel="noreferrer" target="_blank"><Github /></a>
-          <a className="discord-link" href="https://discord.gg/Z74jwRxz4k" aria-label="Tardigrade on Discord" rel="noreferrer" target="_blank"><Discord /></a>
+          <a className="github-link" href={REPOSITORY} aria-label="Erg on GitHub" rel="noreferrer" target="_blank"><Github /></a>
+          <a className="discord-link" href="https://discord.gg/Z74jwRxz4k" aria-label="Tardigrade upstream on Discord" rel="noreferrer" target="_blank"><Discord /></a>
           <div className="header-theme-toggle"><ThemeToggle /></div>
           <button className="mobile-menu-trigger" type="button" aria-controls="mobile-navigation" aria-expanded={mobileMenuOpen} ref={menuButtonRef} onClick={toggleMobileMenu}>
             <MenuIcon />

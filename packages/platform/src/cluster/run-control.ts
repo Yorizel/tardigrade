@@ -3,7 +3,7 @@ import { Headers } from "effect/http"
 import { Rpc, RpcGroup, RpcMiddleware } from "effect/rpc"
 import { WorkflowEngine } from "effect/workflow/WorkflowEngine"
 import { DurableDeferred, Workflow, WorkflowProxy, WorkflowProxyServer } from "effect/workflow"
-import { ExecuteRun, approval, executionKey } from "@clavia/tardigrade-domain/Execution/Run.workflow"
+import { ExecuteRun, approval, executionKey } from "@erg/domain/Execution/Run.workflow"
 
 export class RunControlUnauthorized extends Schema.TaggedError<RunControlUnauthorized, { readonly brand: unique symbol }>()(
   "RunControlUnauthorized", {}, { httpApiStatus: 401 },

@@ -1,5 +1,5 @@
 import { BunRuntime } from "@effect/platform-bun"
-import { RunLimits } from "@clavia/tardigrade-domain/Thread/Thread.schemas"
+import { RunLimits } from "@erg/domain/Thread/Thread.schemas"
 import { Config, Console, Effect, Redacted, Schema } from "effect"
 import { DEFAULT_MEESEEKS_LIMITS, MeeseeksInterrupted, meeseeks } from "./agents/meeseeks"
 import { services } from "./services"

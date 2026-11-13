@@ -1,5 +1,5 @@
-import { SpillNotOwner, SpillRejected } from "@clavia/tardigrade-domain/Spill/Spill.rejection"
-import { GrepSpillsInput, GrepSpillsResult, ReadSpillInput, ReadSpillResult } from "@clavia/tardigrade-domain/Spill/Spill.schemas"
+import { SpillNotOwner, SpillRejected } from "@erg/domain/Spill/Spill.rejection"
+import { GrepSpillsInput, GrepSpillsResult, ReadSpillInput, ReadSpillResult } from "@erg/domain/Spill/Spill.schemas"
 import { Schema } from "effect"
 import { Tool, Toolkit } from "effect/ai"
 
